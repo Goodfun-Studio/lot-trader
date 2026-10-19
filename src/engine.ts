@@ -26,7 +26,18 @@ export interface LotListItem {
   pyramid_level: number;
   can_sell_now: boolean;
   is_day_trading: boolean;
+  peak_price?: number | null;
+  trailing_stop_active?: boolean;
   realized_pnl: number;
+}
+
+export interface TradeAttribution {
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_realized_pnl: number;
+  profit_factor: number;
 }
 
 export interface TradingStats {
@@ -37,6 +48,12 @@ export interface TradingStats {
   total_realized_pnl: number;
   profit_factor: number;
   day_trades_count: number;
+  by_symbol: Record<string, TradeAttribution>;
+  by_trade_type: {
+    regular_swing: TradeAttribution;
+    native_t0: TradeAttribution;
+    core_substitution_t0: TradeAttribution;
+  };
 }
 
 export class TraderEngine {
@@ -45,13 +62,113 @@ export class TraderEngine {
   public arbitrator: SettlementArbitrator;
   public scanner: SignalScanner;
   public closer: LotCloser;
+  public portfolioBudget?: number;
 
-  constructor(dbConn: Database, quoteProvider?: QuoteProvider) {
+  constructor(dbConn: Database, quoteProvider?: QuoteProvider, portfolioBudget?: number) {
     this.conn = dbConn;
     this.quoteProvider = quoteProvider || new QuoteProvider();
     this.arbitrator = new SettlementArbitrator(dbConn);
     this.scanner = new SignalScanner(dbConn);
     this.closer = new LotCloser(dbConn);
+    this.portfolioBudget = portfolioBudget;
+  }
+
+  /**
+   * Risk Guard Middleware: Check 30% single-symbol position cap against total portfolio value.
+   * Total portfolio value = sum of remaining active lots market value (or buy cost) + incoming buy cost.
+   * If existing active lots exist and adding this lot causes the symbol's value to exceed 30% of total portfolio value,
+   * it throws an error.
+   */
+  public checkPositionCap(stdSymbol: string, incomingValue: number): void {
+    let budget = this.portfolioBudget;
+    if (!budget && process.env.LOT_TRADER_PORTFOLIO_BUDGET) {
+      budget = parseFloat(process.env.LOT_TRADER_PORTFOLIO_BUDGET);
+    }
+
+    const activeLots = this.conn.query<{
+      symbol: string;
+      remaining_quantity: number;
+      buy_price: number;
+      cost_basis_unit: number;
+    }>("SELECT symbol, remaining_quantity, buy_price, cost_basis_unit FROM lots WHERE status = 'ACTIVE'").all();
+
+    let existingTargetSymbolValue = 0;
+    let otherSymbolsValue = 0;
+
+    for (const l of activeLots) {
+      const val = Number(l.remaining_quantity) * Number(l.buy_price);
+      if (l.symbol === stdSymbol) {
+        existingTargetSymbolValue += val;
+      } else {
+        otherSymbolsValue += val;
+      }
+    }
+
+    const newTargetSymbolValue = existingTargetSymbolValue + incomingValue;
+
+    if (budget && budget > 0) {
+      const totalBase = Math.max(budget, otherSymbolsValue + newTargetSymbolValue);
+      const ratio = newTargetSymbolValue / totalBase;
+      if (ratio > 0.3000 + 1e-6) {
+        throw new Error(
+          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + (ratio * 100).toFixed(2) + "%，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalBase.toFixed(2) + ")！"
+        );
+      }
+    } else if (otherSymbolsValue > 0) {
+      const totalPortfolioValue = otherSymbolsValue + newTargetSymbolValue;
+      const ratio = newTargetSymbolValue / totalPortfolioValue;
+      if (ratio > 0.3000 + 1e-6) {
+        throw new Error(
+          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + (ratio * 100).toFixed(2) + "%，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalPortfolioValue.toFixed(2) + ")！"
+        );
+      }
+    }
+  }
+
+  /**
+   * Lineage Guard: Anti-shake cooldown check for pyramid dip buys.
+   * If any lot in the same parent lineage was added within 48 hours (2 trading days), block rapid dip buying.
+   */
+  public checkLineageAntiShake(parentLotId: string, now: Date): void {
+    // Find the root lot id of this lineage
+    let rootLotId = parentLotId;
+    while (true) {
+      const row = this.conn.query<{ parent_lot_id: string | null }, [string]>(
+        "SELECT parent_lot_id FROM lots WHERE lot_id = ?"
+      ).get(rootLotId);
+      if (!row) break;
+      if (row.parent_lot_id) {
+        rootLotId = row.parent_lot_id;
+      } else {
+        break;
+      }
+    }
+
+    // Query all lots belonging to this lineage (root lot or child lots referencing it)
+    const lineageLots = this.conn.query<{
+      lot_id: string;
+      buy_time: string;
+      pyramid_level: number;
+    }, [string, string]>(
+      "SELECT lot_id, buy_time, pyramid_level FROM lots WHERE lot_id = ? OR parent_lot_id = ? ORDER BY buy_time DESC"
+    ).all(rootLotId, rootLotId);
+
+    const cooldownMs = 48 * 3600 * 1000; // 48 hours (2 trading days)
+    const currentTimeMs = now.getTime();
+
+    for (const l of lineageLots) {
+      // If a non-root lot was bought recently, check cooldown
+      if (l.pyramid_level > 0) {
+        const buyTimeMs = new Date(l.buy_time).getTime();
+        const diffMs = currentTimeMs - buyTimeMs;
+        if (diffMs >= 0 && diffMs < cooldownMs) {
+          const hoursLeft = ((cooldownMs - diffMs) / (3600 * 1000)).toFixed(1);
+          throw new Error(
+            "加仓防抖冷却窗口守卫拦截：同源血缘链批次 " + l.lot_id + " (L" + l.pyramid_level + ") 于 " + l.buy_time + " 已执行加仓，尚在 48 小时 (2 个交易日) 防抖冷却窗口内 (剩余 " + hoursLeft + " 小时)，严禁急跌连续抢跑！"
+          );
+        }
+      }
+    }
   }
 
   public buyLot(
@@ -60,7 +177,8 @@ export class TraderEngine {
     quantity: number,
     fee?: number,
     buyTime?: Date,
-    parentLotId?: string
+    parentLotId?: string,
+    skipRiskCheck: boolean = false
   ): Lot {
     const [stdSymbol] = normalizeSymbol(symbolInput);
     const now = buyTime || new Date();
@@ -69,7 +187,31 @@ export class TraderEngine {
       throw new Error("买入数量必须大于 0");
     }
     if (quantity % 100 !== 0) {
-      throw new Error(`买入数量必须为 100 的整数倍 (一手单位)，当前输入: ${quantity}`);
+      throw new Error("买入数量必须为 100 的整数倍 (一手单位)，当前输入: " + quantity);
+    }
+
+    // 1. Risk Guard: Check single-symbol 30% position cap
+    if (!skipRiskCheck) {
+      const incomingValue = price * quantity;
+      this.checkPositionCap(stdSymbol, incomingValue);
+    }
+
+    // 2. Lineage Guard: Anti-shake cooldown check if adding to existing parent
+    let pyramidLevel = 0;
+    if (parentLotId) {
+      const pRow = this.conn.query<{ pyramid_level: number; symbol: string }, [string]>(
+        "SELECT pyramid_level, symbol FROM lots WHERE lot_id = ?"
+      ).get(parentLotId);
+      if (!pRow) {
+        throw new Error("指定的父批次不存在: " + parentLotId);
+      }
+      if (pRow.symbol !== stdSymbol) {
+        throw new Error("父批次标的 (" + pRow.symbol + ") 与当前买入标的 (" + stdSymbol + ") 不一致");
+      }
+      pyramidLevel = pRow.pyramid_level + 1;
+
+      // Anti-shake cooldown check
+      this.checkLineageAntiShake(parentLotId, now);
     }
 
     let symRow = this.conn.query<{
@@ -90,11 +232,10 @@ export class TraderEngine {
       const assetClass =
         stdSymbol.includes("51") || stdSymbol.includes("15") || stdSymbol.includes("58") ? "ETF" : "STOCK";
       const setMode = isGoldEtf ? "NATIVE_T0" : "STATUTORY_T1";
-      const name = symbolInput !== stdSymbol ? symbolInput : `标的${stdSymbol}`;
+      const name = symbolInput !== stdSymbol ? symbolInput : "标的" + stdSymbol;
 
       this.conn.run(
-        `INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode, lot_size)
-         VALUES (?, ?, ?, ?, 100)`,
+        "INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode, lot_size) VALUES (?, ?, ?, ?, 100)",
         [stdSymbol, name, assetClass, setMode]
       );
       symRow = this.conn.query<any, [string]>("SELECT * FROM symbols WHERE symbol = ?").get(stdSymbol);
@@ -112,24 +253,14 @@ export class TraderEngine {
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
     const day = String(now.getDate()).padStart(2, "0");
-    const dateStr = `${year}${month}${day}`;
+    const dateStr = "" + year + month + day;
 
     const countRow = this.conn.query<{ c: number }, [string]>(
       "SELECT count(*) as c FROM lots WHERE lot_id LIKE ?"
-    ).get(`LOT-${dateStr}-%`);
+    ).get("LOT-" + dateStr + "-%");
     const seq = (countRow ? countRow.c : 0) + 1;
     const seqStr = String(seq).padStart(3, "0");
-    const lotId = `LOT-${dateStr}-${seqStr}`;
-
-    let pyramidLevel = 0;
-    if (parentLotId) {
-      const pRow = this.conn.query<{ pyramid_level: number }, [string]>(
-        "SELECT pyramid_level FROM lots WHERE lot_id = ?"
-      ).get(parentLotId);
-      if (pRow) {
-        pyramidLevel = pRow.pyramid_level + 1;
-      }
-    }
+    const lotId = "LOT-" + dateStr + "-" + seqStr;
 
     const canSell = settlementMode === SettlementMode.NATIVE_T0;
 
@@ -137,16 +268,12 @@ export class TraderEngine {
     const hours = String(now.getHours()).padStart(2, "0");
     const mins = String(now.getMinutes()).padStart(2, "0");
     const secs = String(now.getSeconds()).padStart(2, "0");
-    const timeStr = `${year}${month}${day}${hours}${mins}${secs}`;
-    const tradeId = `TRD-${timeStr}-${randSuffix}`;
+    const timeStr = "" + year + month + day + hours + mins + secs;
+    const tradeId = "TRD-" + timeStr + "-" + randSuffix;
 
     const tx = this.conn.transaction(() => {
       this.conn.run(
-        `INSERT INTO lots (
-          lot_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity,
-          remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level,
-          can_sell_now, is_day_trading, max_high_price, max_low_price, realized_pnl
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        "INSERT INTO lots (lot_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level, can_sell_now, is_day_trading, max_high_price, max_low_price, peak_price, trailing_stop_active, realized_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           lotId,
           parentLotId || null,
@@ -163,13 +290,14 @@ export class TraderEngine {
           0,
           price.toString(),
           price.toString(),
+          price.toString(),
+          0,
           "0.00",
         ]
       );
 
       this.conn.run(
-        `INSERT INTO trades (trade_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        "INSERT INTO trades (trade_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
           tradeId,
           lotId,
@@ -186,6 +314,47 @@ export class TraderEngine {
     tx();
 
     return this.getLot(lotId)!;
+  }
+
+  /**
+   * Dedicated Pyramid Dip Add Operation (trade lot add).
+   * Supports base amount (default 10,000 yuan) or explicit quantity.
+   * Auto converts base amount to nearest integer multiple of 100 shares.
+   */
+  public addLot(
+    parentLotId: string,
+    price: number,
+    options?: {
+      amount?: number;
+      qty?: number;
+      fee?: number;
+      buyTime?: Date;
+      skipRiskCheck?: boolean;
+    }
+  ): Lot {
+    const parentLot = this.getLot(parentLotId);
+    if (!parentLot) {
+      throw new Error("指定的父批次不存在: " + parentLotId);
+    }
+
+    let quantity = options?.qty;
+    if (!quantity || quantity <= 0) {
+      const baseAmount = options?.amount && options.amount > 0 ? options.amount : 10000;
+      quantity = Math.floor(baseAmount / price / 100) * 100;
+      if (quantity <= 0) {
+        quantity = 100; // minimum 1 lot
+      }
+    }
+
+    return this.buyLot(
+      parentLot.symbol,
+      price,
+      quantity,
+      options?.fee,
+      options?.buyTime,
+      parentLotId,
+      options?.skipRiskCheck
+    );
   }
 
   public getLot(lotId: string): Lot | null {
@@ -209,6 +378,8 @@ export class TraderEngine {
       substituted_core_lot_id: row.substituted_core_lot_id,
       max_high_price: row.max_high_price ? Number(row.max_high_price) : null,
       max_low_price: row.max_low_price ? Number(row.max_low_price) : null,
+      peak_price: row.peak_price ? Number(row.peak_price) : null,
+      trailing_stop_active: Boolean(row.trailing_stop_active),
       close_time: row.close_time ? new Date(row.close_time) : null,
       close_avg_price: row.close_avg_price ? Number(row.close_avg_price) : null,
       realized_pnl: Number(row.realized_pnl),
@@ -292,6 +463,8 @@ export class TraderEngine {
         pyramid_level: r.pyramid_level,
         can_sell_now: dynamicCanSell,
         is_day_trading: Boolean(r.is_day_trading),
+        peak_price: r.peak_price ? Number(r.peak_price) : null,
+        trailing_stop_active: Boolean(r.trailing_stop_active),
         realized_pnl: Number(r.realized_pnl),
       });
     }
@@ -326,10 +499,7 @@ export class TraderEngine {
         signals.push(sig);
 
         this.conn.run(
-          `INSERT OR REPLACE INTO signals (
-            signal_id, lot_id, symbol, signal_type, trigger_return_rate,
-            trigger_price, suggested_action, payload_json, is_handled
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          "INSERT OR REPLACE INTO signals (signal_id, lot_id, symbol, signal_type, trigger_return_rate, trigger_price, suggested_action, payload_json, is_handled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
           [
             sig.signal_id,
             sig.lot_id,
@@ -359,23 +529,73 @@ export class TraderEngine {
   }
 
   public computeStats(days?: number, symbol?: string): TradingStats {
-    let query = "SELECT * FROM trades WHERE action IN ('SELL_REGULAR', 'SELL_DAY_TRADE')";
+    let query = "SELECT t.*, l.symbol, l.substituted_core_lot_id, s.settlement_mode FROM trades t JOIN lots l ON t.lot_id = l.lot_id LEFT JOIN symbols s ON l.symbol = s.symbol WHERE t.action IN ('SELL_REGULAR', 'SELL_DAY_TRADE')";
     const params: any[] = [];
 
     if (days !== undefined && days !== null) {
-      query += " AND datetime(executed_at) >= datetime('now', ?)";
-      params.push(`-${days} days`);
+      query += " AND datetime(t.executed_at) >= datetime('now', ?)";
+      params.push("-" + days + " days");
     }
     if (symbol) {
       const [stdS] = normalizeSymbol(symbol);
-      query += " AND lot_id IN (SELECT lot_id FROM lots WHERE symbol = ?)";
+      query += " AND l.symbol = ?";
       params.push(stdS);
     }
 
     const rows = this.conn.query<any, any[]>(query).all(...params);
-    const totalClosedTrades = rows ? rows.length : 0;
 
-    if (totalClosedTrades === 0) {
+    const calcAttr = (tradeRows: any[]): TradeAttribution => {
+      const count = tradeRows.length;
+      if (count === 0) {
+        return {
+          total_trades: 0,
+          winning_trades: 0,
+          losing_trades: 0,
+          win_rate: 0.0,
+          total_realized_pnl: 0.0,
+          profit_factor: 0.0,
+        };
+      }
+      let pnlSum = 0;
+      let winCount = 0;
+      let lossCount = 0;
+      let grossProfit = 0;
+      let grossLoss = 0;
+
+      for (const tr of tradeRows) {
+        const pnl = Number(tr.realized_pnl);
+        pnlSum += pnl;
+        if (pnl > 0) {
+          winCount += 1;
+          grossProfit += pnl;
+        } else if (pnl < 0) {
+          lossCount += 1;
+          grossLoss += Math.abs(pnl);
+        }
+      }
+
+      const winRate = count > 0 ? winCount / count : 0.0;
+      let pf = 0.0;
+      if (grossLoss > 0) {
+        pf = grossProfit / grossLoss;
+      } else if (grossProfit > 0) {
+        pf = 999.0;
+      } else {
+        pf = 1.0;
+      }
+
+      return {
+        total_trades: count,
+        winning_trades: winCount,
+        losing_trades: lossCount,
+        win_rate: Math.round(winRate * 10000) / 10000,
+        total_realized_pnl: Math.round((pnlSum + Number.EPSILON) * 100) / 100,
+        profit_factor: Math.round(pf * 100) / 100,
+      };
+    };
+
+    if (!rows || rows.length === 0) {
+      const emptyAttr = calcAttr([]);
       return {
         total_trades: 0,
         winning_trades: 0,
@@ -384,51 +604,65 @@ export class TraderEngine {
         total_realized_pnl: 0.0,
         profit_factor: 0.0,
         day_trades_count: 0,
+        by_symbol: {},
+        by_trade_type: {
+          regular_swing: emptyAttr,
+          native_t0: emptyAttr,
+          core_substitution_t0: emptyAttr,
+        },
       };
     }
 
-    let totalPnl = 0;
-    let winningCount = 0;
-    let losingCount = 0;
-    let grossProfit = 0;
-    let grossLoss = 0;
+    const overall = calcAttr(rows);
     let dayTrades = 0;
 
-    for (const r of rows) {
-      const pnl = Number(r.realized_pnl);
-      totalPnl += pnl;
-      if (pnl > 0) {
-        winningCount += 1;
-        grossProfit += pnl;
-      } else if (pnl < 0) {
-        losingCount += 1;
-        grossLoss += Math.abs(pnl);
-      }
+    // Multi-dimensional breakdown
+    const symbolMap: Record<string, any[]> = {};
+    const regSwingRows: any[] = [];
+    const nativeT0Rows: any[] = [];
+    const coreSubRows: any[] = [];
 
+    for (const r of rows) {
       if (r.action === "SELL_DAY_TRADE") {
         dayTrades += 1;
       }
+
+      // Group by symbol
+      const sym = r.symbol;
+      if (!symbolMap[sym]) {
+        symbolMap[sym] = [];
+      }
+      symbolMap[sym].push(r);
+
+      // Group by trade type:
+      if (r.substituted_core_lot_id) {
+        coreSubRows.push(r);
+      } else if (r.action === "SELL_DAY_TRADE" || r.settlement_mode === "NATIVE_T0") {
+        nativeT0Rows.push(r);
+      } else {
+        regSwingRows.push(r);
+      }
     }
 
-    const winRate = totalClosedTrades > 0 ? winningCount / totalClosedTrades : 0.0;
-    let profitFactor = 0.0;
-    if (grossLoss > 0) {
-      profitFactor = grossProfit / grossLoss;
-    } else if (grossProfit > 0) {
-      profitFactor = 999.0;
-    } else {
-      profitFactor = 1.0;
+    const bySymbol: Record<string, TradeAttribution> = {};
+    for (const [sym, trList] of Object.entries(symbolMap)) {
+      bySymbol[sym] = calcAttr(trList);
     }
 
     return {
-      total_trades: totalClosedTrades,
-      winning_trades: winningCount,
-      losing_trades: losingCount,
-      win_rate: Math.round(winRate * 10000) / 10000,
-      total_realized_pnl: Math.round((totalPnl + Number.EPSILON) * 100) / 100,
-      profit_factor: Math.round(profitFactor * 100) / 100,
+      total_trades: overall.total_trades,
+      winning_trades: overall.winning_trades,
+      losing_trades: overall.losing_trades,
+      win_rate: overall.win_rate,
+      total_realized_pnl: overall.total_realized_pnl,
+      profit_factor: overall.profit_factor,
       day_trades_count: dayTrades,
+      by_symbol: bySymbol,
+      by_trade_type: {
+        regular_swing: calcAttr(regSwingRows),
+        native_t0: calcAttr(nativeT0Rows),
+        core_substitution_t0: calcAttr(coreSubRows),
+      },
     };
   }
 }
-

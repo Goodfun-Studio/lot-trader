@@ -13,9 +13,9 @@ function formatCurrency(val: number): string {
 function formatRate(rate: number): string {
   const r = rate * 100;
   if (r > 0) {
-    return `+${r.toFixed(2)}%`;
+    return "+" + r.toFixed(2) + "%";
   }
-  return `${r.toFixed(2)}%`;
+  return r.toFixed(2) + "%";
 }
 
 function printHelp(): void {
@@ -25,9 +25,9 @@ Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
   {lot,scan,stats}  Available subcommands
-    lot             Lot operations (buy, list, close)
-    scan            Scan active lots for signals
-    stats           Performance statistics
+    lot             Lot operations (buy, add, list, close)
+    scan            Scan active lots for signals (including trailing stop)
+    stats           Performance statistics with multi-dimensional attribution
 
 options:
   -h, --help        show this help message and exit
@@ -35,12 +35,13 @@ options:
 }
 
 function printLotHelp(): void {
-  console.log(`usage: trade lot {buy,list,close} ...
+  console.log(`usage: trade lot {buy,add,list,close} ...
 
 Lot actions:
-  buy               Buy / create a new lot
+  buy               Buy / create a new initial lot
+  add               Pyramid dip add to an existing lot (with anti-shake guard)
   list              List lots
-  close             Close a lot
+  close             Close a lot (full or partial)
 `);
 }
 
@@ -54,6 +55,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
       fee: { type: "string" },
       time: { type: "string" },
       parent: { type: "string" },
+      "skip-risk": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -72,8 +74,9 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const parent = values.parent as string | undefined;
+    const skipRisk = Boolean(values["skip-risk"]);
 
-    const lot = engine.buyLot(symbol, price, qty, fee, time, parent);
+    const lot = engine.buyLot(symbol, price, qty, fee, time, parent, skipRisk);
 
     if (isJson) {
       const out = {
@@ -107,6 +110,82 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
       console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
     } else {
       console.error(`❌ 建仓失败: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
+
+async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      "parent-lot-id": { type: "string" },
+      parent: { type: "string" },
+      price: { type: "string" },
+      amount: { type: "string" },
+      qty: { type: "string" },
+      fee: { type: "string" },
+      time: { type: "string" },
+      "skip-risk": { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+    },
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  const parentId = (values["parent-lot-id"] as string) || (values.parent as string);
+
+  try {
+    if (!parentId || !values.price) {
+      throw new Error("Missing required arguments: --parent-lot-id (or --parent), --price");
+    }
+
+    const price = parseFloat(values.price as string);
+    const amount = values.amount ? parseFloat(values.amount as string) : undefined;
+    const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
+    const fee = values.fee ? parseFloat(values.fee as string) : undefined;
+    const time = values.time ? new Date(values.time as string) : undefined;
+    const skipRisk = Boolean(values["skip-risk"]);
+
+    const lot = engine.addLot(parentId, price, {
+      amount,
+      qty,
+      fee,
+      buyTime: time,
+      skipRiskCheck: skipRisk,
+    });
+
+    if (isJson) {
+      const out = {
+        code: 0,
+        msg: "success",
+        timestamp: new Date().toISOString(),
+        data: {
+          lot_id: lot.lot_id,
+          parent_lot_id: lot.parent_lot_id,
+          symbol: lot.symbol,
+          buy_time: lot.buy_time.toISOString(),
+          buy_price: lot.buy_price,
+          buy_quantity: lot.buy_quantity,
+          cost_basis_unit: lot.cost_basis_unit,
+          buy_fee: lot.buy_fee,
+          status: lot.status,
+          pyramid_level: lot.pyramid_level,
+          can_sell_now: lot.can_sell_now,
+        },
+      };
+      console.log(JSON.stringify(out, null, 2));
+    } else {
+      console.log(`✅ 成功完成梯级加仓！批次ID: ${lot.lot_id}`);
+      console.log(`父批次: ${lot.parent_lot_id} | 递增后加仓层级: L${lot.pyramid_level}`);
+      console.log(`标的代码: ${lot.symbol} | 加仓数量: ${lot.buy_quantity} 股 | 成交单价: ${lot.buy_price.toFixed(4)} 元`);
+      console.log(`加仓全成本单价: ${lot.cost_basis_unit.toFixed(4)} 元 | 规费: ${lot.buy_fee.toFixed(2)} 元`);
+    }
+  } catch (err: any) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+    } else {
+      console.error(`❌ 加仓失败: ${err.message}`);
     }
     process.exit(1);
   }
@@ -153,7 +232,9 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
       for (const l of lots) {
         const rRate = l.return_rate;
         let advice = "[持仓观察]";
-        if (rRate >= 0.10) {
+        if (l.trailing_stop_active) {
+          advice = "[跟踪止盈]";
+        } else if (rRate >= 0.10) {
           advice = "[可止盈]";
         } else if (rRate <= -0.20) {
           advice = "[深跌击球]";
@@ -239,14 +320,15 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
       };
       console.log(JSON.stringify(out, null, 2));
     } else {
-      console.log(`🎉 批次平仓操作成功！流水号: ${trade.trade_id}`);
-      console.log(`批次ID: ${updatedLot.lot_id} | 状态: ${updatedLot.status}`);
-      console.log(`平仓成交价: ${trade.price.toFixed(4)} 元 | 平仓股数: ${trade.quantity} 股 | 规费: ${trade.fee.toFixed(2)} 元`);
+      const isPartial = updatedLot.remaining_quantity > 0;
+      console.log(`🎉 批次${isPartial ? "部分" : "全额"}平仓操作成功！流水号: ${trade.trade_id}`);
+      console.log(`批次ID: ${updatedLot.lot_id} | 当前状态: ${updatedLot.status}`);
+      console.log(`平仓成交价: ${trade.price.toFixed(4)} 元 | 本次平仓股数: ${trade.quantity} 股 | 规费: ${trade.fee.toFixed(2)} 元`);
       console.log(`本次实现净利润: ${(trade.realized_pnl >= 0 ? "+" : "")}${formatCurrency(trade.realized_pnl)} 元`);
       if (updatedLot.is_day_trading) {
         console.log(`⚡ [日内等效T+0回转达成] 代冲底仓: ${updatedLot.substituted_core_lot_id || "天然T+0回转"}`);
       }
-      if (updatedLot.remaining_quantity > 0) {
+      if (isPartial) {
         console.log(`剩余持仓股数: ${updatedLot.remaining_quantity} 股 (状态保持 ACTIVE 继续监控)`);
       }
     }
@@ -361,8 +443,8 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
       };
       console.log(JSON.stringify(out, null, 2));
     } else {
-      console.log("📊 操盘战绩统计报表");
-      console.log("=".repeat(45));
+      console.log("📊 操盘战绩统计报表 (多维归因)");
+      console.log("=".repeat(50));
       console.log(`总平仓笔数: ${String(stats.total_trades).padStart(6)} 笔`);
       console.log(`盈利笔数  : ${String(stats.winning_trades).padStart(6)} 笔`);
       console.log(`亏损笔数  : ${String(stats.losing_trades).padStart(6)} 笔`);
@@ -371,7 +453,29 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
       console.log(`累计净利润: ${(pnlPrefix + formatCurrency(stats.total_realized_pnl)).padStart(12)} 元`);
       console.log(`盈亏比    : ${stats.profit_factor.toFixed(2).padStart(6)}`);
       console.log(`日内做T笔数: ${String(stats.day_trades_count).padStart(5)} 笔`);
-      console.log("=".repeat(45));
+      console.log("-".repeat(50));
+
+      console.log("📌 按操盘类型归因:");
+      const types = [
+        ["普通波段", stats.by_trade_type.regular_swing],
+        ["天然 T+0", stats.by_trade_type.native_t0],
+        ["底仓代冲做T", stats.by_trade_type.core_substitution_t0],
+      ] as const;
+
+      for (const [tName, attr] of types) {
+        const pPrefix = attr.total_realized_pnl >= 0 ? "+" : "";
+        console.log(`  [${tName.padEnd(8)}] 笔数: ${String(attr.total_trades).padStart(3)} | 胜率: ${(attr.win_rate * 100).toFixed(1).padStart(5)}% | 净利: ${(pPrefix + formatCurrency(attr.total_realized_pnl)).padStart(10)} 元 | 盈亏比: ${attr.profit_factor.toFixed(2)}`);
+      }
+
+      if (Object.keys(stats.by_symbol).length > 0) {
+        console.log("-".repeat(50));
+        console.log("📌 按标的明细归因:");
+        for (const [sym, attr] of Object.entries(stats.by_symbol)) {
+          const pPrefix = attr.total_realized_pnl >= 0 ? "+" : "";
+          console.log(`  [${sym.padEnd(10)}] 笔数: ${String(attr.total_trades).padStart(3)} | 胜率: ${(attr.win_rate * 100).toFixed(1).padStart(5)}% | 净利: ${(pPrefix + formatCurrency(attr.total_realized_pnl)).padStart(10)} 元 | 盈亏比: ${attr.profit_factor.toFixed(2)}`);
+        }
+      }
+      console.log("=".repeat(50));
     }
   } catch (err: any) {
     if (isJson) {
@@ -405,6 +509,8 @@ export async function main(): Promise<void> {
     const subArgs = restArgs.slice(1);
     if (subCmd === "buy") {
       await handleLotBuy(engine, subArgs);
+    } else if (subCmd === "add") {
+      await handleLotAdd(engine, subArgs);
     } else if (subCmd === "list") {
       await handleLotList(engine, subArgs);
     } else if (subCmd === "close") {
@@ -426,4 +532,3 @@ export async function main(): Promise<void> {
 if (import.meta.main) {
   main();
 }
-

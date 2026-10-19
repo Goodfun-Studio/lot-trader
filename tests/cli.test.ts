@@ -73,6 +73,22 @@ describe("CLI End-to-End Tests", () => {
     const p5Table = await runCli(["stats"], testDb);
     expect(p5Table.exitCode).toBe(0);
     expect(p5Table.stdout).toContain("操盘战绩统计报表");
+    // 8. Test 'trade lot add' CLI command with JSON
+    const p6 = await runCli(["lot", "add", "--parent-lot-id", lotId, "--price", "5.80", "--amount", "10000", "--skip-risk", "--json"], testDb);
+    expect(p6.exitCode).toBe(0);
+    const res6 = JSON.parse(p6.stdout);
+    expect(res6.code).toBe(0);
+    expect(res6.data.parent_lot_id).toBe(lotId);
+    expect(res6.data.pyramid_level).toBe(1);
+
+    // 9. Test multi-dimensional stats JSON
+    const p7 = await runCli(["stats", "--json"], testDb);
+    expect(p7.exitCode).toBe(0);
+    const res7 = JSON.parse(p7.stdout);
+    expect(res7.data.by_trade_type).toBeDefined();
+    expect(res7.data.by_trade_type.native_t0).toBeDefined();
+    expect(res7.data.by_symbol).toBeDefined();
+
   });
 });
 

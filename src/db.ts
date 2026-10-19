@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS lots (
     substituted_core_lot_id VARCHAR(32),
     max_high_price DECIMAL(10, 4),
     max_low_price DECIMAL(10, 4),
+    peak_price DECIMAL(10, 4),
+    trailing_stop_active BOOLEAN DEFAULT 0,
     close_time DATETIME,
     close_avg_price DECIMAL(10, 4),
     realized_pnl DECIMAL(12, 2) DEFAULT 0.00,
@@ -124,6 +126,18 @@ export class AppDatabase {
     const conn = this.getConnection();
     conn.exec(SCHEMA_SQL);
 
+    // Apply incremental migrations for existing databases
+    try {
+      conn.run("ALTER TABLE lots ADD COLUMN peak_price DECIMAL(10, 4);");
+    } catch {
+      // Column might already exist
+    }
+    try {
+      conn.run("ALTER TABLE lots ADD COLUMN trailing_stop_active BOOLEAN DEFAULT 0;");
+    } catch {
+      // Column might already exist
+    }
+
     const insertStmt = conn.prepare(`
       INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode, lot_size)
       VALUES (?, ?, ?, ?, ?)
@@ -144,4 +158,3 @@ export class AppDatabase {
     }
   }
 }
-

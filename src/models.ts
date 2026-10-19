@@ -22,6 +22,7 @@ export enum LotStatus {
 export enum SignalType {
   NONE = "NONE",
   TAKE_PROFIT_ALERT = "TAKE_PROFIT_ALERT",
+  TRAILING_STOP_ALERT = "TRAILING_STOP_ALERT",
   DAY_TRADE_PROFIT_ALERT = "DAY_TRADE_PROFIT_ALERT",
   T1_LOCKED_ALERT = "T1_LOCKED_ALERT",
   ADD_POSITION_ALERT = "ADD_POSITION_ALERT",
@@ -60,6 +61,8 @@ export interface Lot {
   substituted_core_lot_id?: string | null;
   max_high_price?: number | null;
   max_low_price?: number | null;
+  peak_price?: number | null;
+  trailing_stop_active?: boolean;
   close_time?: Date | null;
   close_avg_price?: number | null;
   realized_pnl: number;
@@ -90,4 +93,3 @@ export interface Trade {
   executed_at?: Date | null;
   created_at?: Date | null;
 }
-
