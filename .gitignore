@@ -26,3 +26,7 @@ htmlcov/
 *.db
 *.sqlite3
 
+# Node / Bun
+node_modules/
+.bun/
+
