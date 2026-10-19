@@ -126,24 +126,54 @@ describe("Position / Holding Aggregated View Tests", () => {
     expect(pGold.portfolio_weight + pSci.portfolio_weight).toBeCloseTo(1.0, 4);
   });
 
-  it("4. computes 4-level decision price lines accurately (+10%, +20%, -10%, -20%)", async () => {
+  it("4. computes dual position rates (cost position vs market position) and recommended points accurately", async () => {
     const db = new AppDatabase(":memory:");
     const mockQuotes = new QuoteProvider();
     const engine = new TraderEngine(db.getConnection(), mockQuotes);
 
-    // Buy 1000 shares @ 10.00, 0 fee -> avg cost = 10.00
-    engine.buyLot("518880.SH", 10.00, 1000, 0);
-    mockQuotes.setMockPrice("518880.SH", 10.00);
+    // Buy 1000 shares @ 10.00, fee = 2.00 -> total cost = 10002.00, unit cost = 10.002
+    engine.buyLot("518880.SH", 10.00, 1000, 2.00);
+    // Buy second lot: 1000 shares @ 12.00, fee = 2.40 -> last buy price is 12.00
+    engine.buyLot("518880.SH", 12.00, 1000, 2.40);
 
-    const positions = await engine.getPositionSummaries();
-    expect(positions.length).toBe(1);
+    // Current price is 15.00 -> total MV = 2000 * 15 = 30,000.00
+    mockQuotes.setMockPrice("518880.SH", 15.00);
 
-    const p = positions[0];
-    expect(p.avg_cost_price).toBe(10.00);
-    expect(p.target_tp_10).toBe(11.00);   // +10%
-    expect(p.target_tp_20).toBe(12.00);   // +20%
-    expect(p.target_dip_10).toBe(9.00);   // -10%
-    expect(p.target_dip_20).toBe(8.00);   // -20%
+    // Default full_position_cap = 50,000
+    const view = await engine.getHierarchicalPositionView(undefined, undefined, 50000);
+    expect(view.targets.length).toBe(1);
+
+    const target = view.targets[0];
+    expect(target.total_cost_basis).toBeCloseTo(22004.40, 1);
+    expect(target.market_value).toBe(30000.00);
+
+    // cost_position_rate = 22004.40 / 50000 = 0.4401 (44.01%)
+    expect(target.cost_position_rate).toBeCloseTo(0.4401, 2);
+    // current_position_rate = 30000 / 50000 = 0.6000 (60.00%)
+    expect(target.current_position_rate).toBe(0.6);
+
+    // last_buy_price = 12.00
+    expect(target.last_buy_price).toBe(12.00);
+    // recommended_buy_in_point = 12.00 * 0.90 = 10.80
+    expect(target.recommended_buy_in_point).toBe(10.80);
+    // recommended_sale_out_point = 12.00 * 1.10 = 13.20
+    expect(target.recommended_sale_out_point).toBe(13.20);
+
+    // Check nested lots breakdown
+    expect(target.lots.length).toBe(2);
+    expect(target.lots[0].buy_price).toBe(10.00);
+    expect(target.lots[1].buy_price).toBe(12.00);
+    expect(target.lots[0].can_sell_now).toBe(true); // Gold ETF is native T+0
+
+    // Portfolio Summary Level
+    const sum = view.portfolio_summary;
+    expect(sum.total_cost).toBeCloseTo(22004.40, 1);
+    expect(sum.total_market_value).toBe(30000.00);
+    expect(sum.total_active_lots).toBe(2);
+    expect(sum.total_symbols_count).toBe(1);
+    expect(sum.full_position_cap).toBe(50000);
+    expect(sum.total_floating_pnl).toBeGreaterThan(0);
+    expect(sum.overall_return_rate).toBeGreaterThan(0);
   });
 
   it("5. validates CLI 'trade position' and 'trade position --json' end-to-end execution", async () => {
@@ -161,26 +191,41 @@ describe("Position / Holding Aggregated View Tests", () => {
     expect(pJson.exitCode).toBe(0);
     const res = JSON.parse(pJson.stdout);
     expect(res.code).toBe(0);
-    expect(res.data.length).toBe(1);
 
-    const pos = res.data[0];
+    // Check 3-layer structure in JSON data
+    expect(res.data.portfolio_summary).toBeDefined();
+    expect(res.data.targets).toBeDefined();
+    expect(res.data.targets.length).toBe(1);
+
+    const summary = res.data.portfolio_summary;
+    expect(summary.total_active_lots).toBe(2);
+    expect(summary.total_symbols_count).toBe(1);
+    expect(summary.full_position_cap).toBe(50000);
+
+    const pos = res.data.targets[0];
     expect(pos.symbol).toBe("518880.SH");
     expect(pos.total_quantity).toBe(2000);
     expect(pos.active_lots_count).toBe(2);
     expect(pos.avg_cost_price).toBeCloseTo(6.50, 1);
     expect(pos.available_core_qty).toBe(2000);
-    expect(pos.target_tp_10).toBeDefined();
-    expect(pos.target_tp_20).toBeDefined();
-    expect(pos.target_dip_10).toBeDefined();
-    expect(pos.target_dip_20).toBeDefined();
+    expect(pos.cost_position_rate).toBeDefined();
+    expect(pos.current_position_rate).toBeDefined();
+    expect(pos.last_buy_price).toBe(7.00);
+    expect(pos.recommended_buy_in_point).toBeCloseTo(6.30, 2);
+    expect(pos.recommended_sale_out_point).toBeCloseTo(7.70, 2);
+    expect(pos.lots.length).toBe(2);
     expect(pos.portfolio_weight).toBe(1.0);
 
-    // Execute 'trade position' in ASCII table mode
+    // Execute 'trade position' in 3-layer ASCII format
     const pTable = await runCli(["position"], testDb);
     expect(pTable.exitCode).toBe(0);
-    expect(pTable.stdout).toContain("标的级聚合持仓视图");
+    expect(pTable.stdout).toContain("投资组合总览");
     expect(pTable.stdout).toContain("518880.SH");
-    expect(pTable.stdout).toContain("TargetPrices");
+    expect(pTable.stdout).toContain("成本仓位比");
+    expect(pTable.stdout).toContain("当前市值仓位");
+    expect(pTable.stdout).toContain("建议加仓区间");
+    expect(pTable.stdout).toContain("建议止盈区间");
+    expect(pTable.stdout).toContain("下属活跃批次明细");
 
     // Execute 'trade position list' alias
     const pListTable = await runCli(["position", "list"], testDb);

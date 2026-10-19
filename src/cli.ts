@@ -501,6 +501,8 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
     args: actualArgs,
     options: {
       symbol: { type: "string" },
+      cap: { type: "string" },
+      "full-position-cap": { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -508,52 +510,88 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
 
   const isJson = Boolean(values.json);
   const symbol = values.symbol as string | undefined;
+  const capStr = (values.cap as string) || (values["full-position-cap"] as string);
+  const customCap = capStr ? parseFloat(capStr) : undefined;
 
   try {
-    const positions = await engine.getPositionSummaries(symbol);
+    const view = await engine.getHierarchicalPositionView(symbol, undefined, customCap);
 
     if (isJson) {
       const out = {
         code: 0,
         msg: "success",
         timestamp: new Date().toISOString(),
-        data: positions,
+        data: view,
       };
       console.log(JSON.stringify(out, null, 2));
     } else {
-      if (positions.length === 0) {
+      if (view.targets.length === 0) {
         console.log(`暂无持仓标的数据 (symbol=${symbol || "None"})`);
         return;
       }
 
-      console.log("=".repeat(128));
-      console.log("📊 标的级聚合持仓视图 (Position / Holding View)");
-      console.log("=".repeat(128));
+      const summary = view.portfolio_summary;
+      const pnlPrefix = summary.total_floating_pnl >= 0 ? "+" : "";
 
-      const header = `${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(7)} | ${"CoreQty".padStart(7)} | ${"AvgCost".padStart(8)} | ${"Current".padStart(8)} | ${"MarketVal".padStart(10)} | ${"Return%".padStart(8)} | ${"TotalPnL".padStart(11)} | ${"Weight%".padStart(7)} | ${"Lots".padStart(4)} | ${"TargetPrices(+10%/+20%/-10%/-20%)"}`;
-      const sep = "-".repeat(header.length);
-      console.log(sep);
-      console.log(header);
-      console.log(sep);
+      console.log("=".repeat(120));
+      console.log("💼 投资组合总览 (Portfolio Summary)");
+      console.log("=".repeat(120));
+      console.log(`总持仓成本: ${formatCurrency(summary.total_cost).padStart(12)} 元 | 单标满仓额度: ${formatCurrency(summary.full_position_cap).padStart(10)} 元 | 持仓标的数: ${String(summary.total_symbols_count).padStart(3)} 个`);
+      console.log(`总持仓市值: ${formatCurrency(summary.total_market_value).padStart(12)} 元 | 组合总盈亏额: ${(pnlPrefix + formatCurrency(summary.total_floating_pnl)).padStart(10)} 元 | 组合收益率: ${formatRate(summary.overall_return_rate).padStart(8)}`);
+      console.log(`活跃买入批次: ${String(summary.total_active_lots).padStart(10)} 笔`);
+      console.log("=".repeat(120));
 
-      for (const p of positions) {
-        const symCol = p.symbol.padEnd(10);
-        const nameCol = p.name.slice(0, 6).padEnd(8);
-        const qtyCol = String(p.total_quantity).padStart(7);
-        const coreCol = String(p.available_core_qty).padStart(7);
-        const costCol = p.avg_cost_price.toFixed(3).padStart(8);
-        const currCol = p.current_price.toFixed(3).padStart(8);
-        const mvCol = formatCurrency(p.market_value).padStart(10);
-        const retCol = formatRate(p.overall_return_rate).padStart(8);
-        const pnlStr = (p.total_floating_pnl >= 0 ? "+" : "") + formatCurrency(p.total_floating_pnl);
-        const pnlCol = pnlStr.padStart(11);
-        const weightCol = (p.portfolio_weight * 100).toFixed(1).padStart(6) + "%";
-        const lotsCol = String(p.active_lots_count).padStart(4);
-        const targets = `${p.target_tp_10.toFixed(2)} / ${p.target_tp_20.toFixed(2)} / ${p.target_dip_10.toFixed(2)} / ${p.target_dip_20.toFixed(2)}`;
+      for (let idx = 0; idx < view.targets.length; idx++) {
+        const t = view.targets[idx];
+        const tPnlPrefix = t.total_floating_pnl >= 0 ? "+" : "";
 
-        console.log(`${symCol} | ${nameCol} | ${qtyCol} | ${coreCol} | ${costCol} | ${currCol} | ${mvCol} | ${retCol} | ${pnlCol} | ${weightCol} | ${lotsCol} | ${targets}`);
+        console.log(`\n[${idx + 1}] 标的: ${t.symbol} (${t.name})  |  资产类别: ${t.asset_class}  |  交易机制: ${t.settlement_mode}`);
+        console.log("-".repeat(120));
+        console.log(`  最新现价: ${t.current_price.toFixed(3)} 元  |  总持股数: ${t.total_quantity} 股  |  可用底仓: ${t.available_core_qty} 股  |  持仓成本均价: ${t.avg_cost_price.toFixed(3)} 元`);
+        console.log(`  持仓总成本: ${formatCurrency(t.total_cost_basis)} 元  |  持仓总市值: ${formatCurrency(t.market_value)} 元  |  浮动盈亏: ${tPnlPrefix}${formatCurrency(t.total_floating_pnl)} 元 (${formatRate(t.overall_return_rate)})`);
+        console.log(`  成本仓位比: ${(t.cost_position_rate * 100).toFixed(2)}%  |  当前市值仓位: ${(t.current_position_rate * 100).toFixed(2)}%  |  组合市值占比: ${(t.portfolio_weight * 100).toFixed(2)}%`);
+        console.log(`  最近买入价: ${t.last_buy_price > 0 ? t.last_buy_price.toFixed(3) + " 元" : "无"}  |  建议加仓区间: < ${t.recommended_buy_in_point.toFixed(3)} (-10%)  |  建议止盈区间: > ${t.recommended_sale_out_point.toFixed(3)} (+10%)`);
+
+        if (t.lots.length > 0) {
+          console.log(`  └─ 下属活跃批次明细 (共 ${t.lots.length} 笔):`);
+          const subHeader = `     ${"Lot ID".padEnd(19)} | ${"Buy Date".padEnd(10)} | ${"Buy Price".padStart(9)} | ${"Unit Cost".padStart(9)} | ${"Qty".padStart(6)} | ${"Return%".padStart(8)} | ${"Float PnL".padStart(10)} | ${"Can Sell".padEnd(8)} | ${"Action Advice".padEnd(12)}`;
+          const subSep = "     " + "-".repeat(subHeader.length - 5);
+          console.log(subSep);
+          console.log(subHeader);
+          console.log(subSep);
+
+          for (const l of t.lots) {
+            let advice = "[持仓观察]";
+            if (l.trailing_stop_active) {
+              advice = "[跟踪止盈]";
+            } else if (l.return_rate >= 0.10) {
+              advice = "[可止盈]";
+            } else if (l.return_rate <= -0.20) {
+              advice = "[深跌击球]";
+            } else if (l.return_rate <= -0.10) {
+              advice = `[可加仓${l.pyramid_level + 1}]`;
+            }
+
+            const lPnlStr = (l.floating_pnl >= 0 ? "+" : "") + formatCurrency(l.floating_pnl);
+            const dateStr = l.buy_time.slice(0, 10);
+            const canSellStr = l.can_sell_now ? "即刻可卖" : "T+1冻结";
+
+            const idCol = l.lot_id.padEnd(19);
+            const dateCol = dateStr.padEnd(10);
+            const bPriceCol = l.buy_price.toFixed(3).padStart(9);
+            const costCol = l.cost_basis_unit.toFixed(3).padStart(9);
+            const qtyCol = String(l.remaining_quantity).padStart(6);
+            const retCol = formatRate(l.return_rate).padStart(8);
+            const pnlCol = lPnlStr.padStart(10);
+            const sellCol = canSellStr.padEnd(8);
+            const advCol = advice.padEnd(12);
+
+            console.log(`     ${idCol} | ${dateCol} | ${bPriceCol} | ${costCol} | ${qtyCol} | ${retCol} | ${pnlCol} | ${sellCol} | ${advCol}`);
+          }
+          console.log(subSep);
+        }
       }
-      console.log(sep);
+      console.log("\n" + "=".repeat(120));
     }
   } catch (err: any) {
     if (isJson) {

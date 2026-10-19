@@ -40,17 +40,27 @@ trade lot add --parent-lot-id <父批次ID> --price <成交单价> [--amount 100
 - 自动绑定父子血缘关系并递增加仓层级（L1 ➔ L2 ➔ L3）。
 - 自动触发 48 小时防抖冷却与 30% 单标的仓位上限校验。
 
-### 查看标的级聚合持仓视图 (Position / Holding View)
+### 查看三层深层聚合持仓视图 (Position / Holding View)
 ```bash
-trade position [--symbol <代码>] --json
+trade position [--symbol <代码>] [--cap <单标满仓额, 默认50000>] --json
 ```
-- 类似 InvestmentTracker 标的宏观全景视图，聚合标的所有活跃批次：
-  - **总持仓量与可用底仓**：`total_quantity`、`available_core_qty`（昨日交收底仓或天然 T+0 全量，可用于日内代冲做 T）；
-  - **保本均价与总成本**：`avg_cost_price`（全成本加权均价）、`total_cost_basis`；
-  - **现价与总市值**：`current_price`、`market_value`；
-  - **浮动盈亏与收益率**：`total_floating_pnl`（扣减卖出规费预估）、`overall_return_rate`；
-  - **组合持仓权重**：`portfolio_weight`（占账户总持仓市值百分比，匹配 30% 风控硬顶）；
-  - **四档关键决策价格线**：`target_tp_10` (+10%)、`target_tp_20` (+20%)、`target_dip_10` (-10%)、`target_dip_20` (-20%)。
+- 深度对齐 InvestmentTracker 源码的三层全景持仓架构：
+  1. **Layer 1: 组合总览卡头 (Portfolio Summary)**：
+     - `total_cost`（组合总持仓成本）、`total_market_value`（总市值）；
+     - `full_position_cap`（单标满仓额度，默认 50,000 元）；
+     - `total_floating_pnl`（总浮动盈亏额）、`overall_return_rate`（总收益率）；
+     - `total_active_lots`（活跃批次数）、`total_symbols_count`（持仓标的数）。
+  2. **Layer 2: 标的汇总与双重仓位 (Symbol Summary)**：
+     - `cost_position_rate`：**成本仓位占比**（标的总持仓成本 / 单标满仓额）；
+     - `current_position_rate`：**当前市值仓位占比**（标的总市值 / 单标满仓额）；
+     - `portfolio_weight`：标的市值占组合总市值百分比（匹配 30% 风控硬顶）；
+     - `last_buy_price`：最近一笔买入价格；
+     - `recommended_buy_in_point`（建议加仓区间：< 最近买入价 × 0.90）；
+     - `recommended_sale_out_point`（建议止盈区间：> 最近买入价 × 1.10）；
+     - `total_quantity`、`available_core_qty`、`avg_cost_price`、`total_floating_pnl` 等。
+  3. **Layer 3: 标的下属批次逐笔内嵌展开 (Nested Lots Breakdown)**：
+     - 标的内直接嵌套 `lots` 数组，每笔包含：批次ID、买入时间、成交价、保本全成本、数量、独立盈亏比、浮动盈亏、即刻可卖权限及操作建议。
+- 直接执行 `trade position` 则输出层级分明、排版优雅的 ASCII 三层嵌套视图卡片。
 
 ### 查看所有持仓批次
 ```bash

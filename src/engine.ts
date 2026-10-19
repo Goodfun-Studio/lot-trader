@@ -531,6 +531,10 @@ export class TraderEngine {
     return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime);
   }
 
+  public async getHierarchicalPositionView(symbolFilter?: string, asOfTime?: Date, customFullPositionCap?: number): Promise<PositionHierarchicalView> {
+    return this.positionAggregator.getHierarchicalPositionView(symbolFilter, asOfTime, customFullPositionCap);
+  }
+
   public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date): Promise<PositionSummary[]> {
     return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime);
   }
