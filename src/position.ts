@@ -126,7 +126,7 @@ export class PositionAggregator {
       query += " AND symbol = ?";
       params.push(stdSymbol);
     }
-    query += " ORDER BY symbol ASC, datetime(buy_time) ASC";
+    query += " ORDER BY symbol ASC, datetime(buy_time) DESC";
 
     const activeLots = this.conn.query<any, any[]>(query).all(...params);
     if (!activeLots || activeLots.length === 0) {
