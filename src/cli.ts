@@ -19,13 +19,14 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,scan,stats} ...
+  console.log(`usage: trade [-h] {lot,position,scan,stats} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,scan,stats}  Available subcommands
+  {lot,position,scan,stats}  Available subcommands
     lot             Lot operations (buy, add, list, close)
+    position        Position / Holding aggregated view
     scan            Scan active lots for signals (including trailing stop)
     stats           Performance statistics with multi-dimensional attribution
 
@@ -279,6 +280,7 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
       qty: { type: "string" },
       "substitute-core": { type: "boolean", default: false },
       fee: { type: "string" },
+      time: { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -296,8 +298,9 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
     const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
     const substituteCore = Boolean(values["substitute-core"]);
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
+    const time = values.time ? new Date(values.time as string) : undefined;
 
-    const [updatedLot, trade] = engine.closeLot(lotId, price, qty, substituteCore, fee);
+    const [updatedLot, trade] = engine.closeLot(lotId, price, qty, substituteCore, fee, time);
 
     if (isJson) {
       const out = {
@@ -487,6 +490,81 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
   }
 }
 
+async function handlePosition(engine: TraderEngine, args: string[]): Promise<void> {
+  // Support 'trade position list' or direct 'trade position'
+  let actualArgs = args;
+  if (actualArgs.length > 0 && actualArgs[0] === "list") {
+    actualArgs = actualArgs.slice(1);
+  }
+
+  const { values } = parseArgs({
+    args: actualArgs,
+    options: {
+      symbol: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  const symbol = values.symbol as string | undefined;
+
+  try {
+    const positions = await engine.getPositionSummaries(symbol);
+
+    if (isJson) {
+      const out = {
+        code: 0,
+        msg: "success",
+        timestamp: new Date().toISOString(),
+        data: positions,
+      };
+      console.log(JSON.stringify(out, null, 2));
+    } else {
+      if (positions.length === 0) {
+        console.log(`暂无持仓标的数据 (symbol=${symbol || "None"})`);
+        return;
+      }
+
+      console.log("=".repeat(128));
+      console.log("📊 标的级聚合持仓视图 (Position / Holding View)");
+      console.log("=".repeat(128));
+
+      const header = `${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(7)} | ${"CoreQty".padStart(7)} | ${"AvgCost".padStart(8)} | ${"Current".padStart(8)} | ${"MarketVal".padStart(10)} | ${"Return%".padStart(8)} | ${"TotalPnL".padStart(11)} | ${"Weight%".padStart(7)} | ${"Lots".padStart(4)} | ${"TargetPrices(+10%/+20%/-10%/-20%)"}`;
+      const sep = "-".repeat(header.length);
+      console.log(sep);
+      console.log(header);
+      console.log(sep);
+
+      for (const p of positions) {
+        const symCol = p.symbol.padEnd(10);
+        const nameCol = p.name.slice(0, 6).padEnd(8);
+        const qtyCol = String(p.total_quantity).padStart(7);
+        const coreCol = String(p.available_core_qty).padStart(7);
+        const costCol = p.avg_cost_price.toFixed(3).padStart(8);
+        const currCol = p.current_price.toFixed(3).padStart(8);
+        const mvCol = formatCurrency(p.market_value).padStart(10);
+        const retCol = formatRate(p.overall_return_rate).padStart(8);
+        const pnlStr = (p.total_floating_pnl >= 0 ? "+" : "") + formatCurrency(p.total_floating_pnl);
+        const pnlCol = pnlStr.padStart(11);
+        const weightCol = (p.portfolio_weight * 100).toFixed(1).padStart(6) + "%";
+        const lotsCol = String(p.active_lots_count).padStart(4);
+        const targets = `${p.target_tp_10.toFixed(2)} / ${p.target_tp_20.toFixed(2)} / ${p.target_dip_10.toFixed(2)} / ${p.target_dip_20.toFixed(2)}`;
+
+        console.log(`${symCol} | ${nameCol} | ${qtyCol} | ${coreCol} | ${costCol} | ${currCol} | ${mvCol} | ${retCol} | ${pnlCol} | ${weightCol} | ${lotsCol} | ${targets}`);
+      }
+      console.log(sep);
+    }
+  } catch (err: any) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+    } else {
+      console.error(`❌ 查询持仓视图失败: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
+
 export async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   if (rawArgs.length === 0 || rawArgs[0] === "-h" || rawArgs[0] === "--help") {
@@ -519,6 +597,8 @@ export async function main(): Promise<void> {
       printLotHelp();
       process.exit(1);
     }
+  } else if (command === "position") {
+    await handlePosition(engine, restArgs);
   } else if (command === "scan") {
     await handleScan(engine, restArgs);
   } else if (command === "stats") {

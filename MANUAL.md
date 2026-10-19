@@ -1,0 +1,124 @@
+# Lot-Trader 安装与智能体（Agent）使用手册
+
+本手册用于将 `lot-trader` 单二进制操盘工具部署至 Intel (x86_64) 机器，并指导该机器上的 AI 智能体（如 Clawd、Codex、Claude Code 等）通过命令行接管操盘。
+
+---
+
+## 一、二进制选型与跨平台产物
+
+本机开发环境为 Apple Silicon (arm64)，编译出的默认 `trade` 文件无法在 Intel 机器上直接运行。工程已预先完成跨平台静态编译，产物位于 `dist/` 目录：
+
+- **Intel Mac (macOS x86_64)**：使用 `dist/trade-darwin-x64`
+- **Intel Linux (Ubuntu / Debian / CentOS x86_64)**：使用 `dist/trade-linux-x64`
+
+---
+
+## 二、Intel 机器安装步骤
+
+### 1. 复制二进制文件
+将对应的二进制文件上传或拷贝到目标 Intel 机器。例如通过 `scp`：
+
+```bash
+# 目标机为 Intel Mac
+scp dist/trade-darwin-x64 user@intel-mac:/tmp/trade
+
+# 目标机为 Intel Linux
+scp dist/trade-linux-x64 user@intel-linux:/tmp/trade
+```
+
+### 2. 赋予执行权限并加入 PATH
+在目标机器上执行以下命令，将其配置为全局命令：
+
+```bash
+chmod +x /tmp/trade
+sudo mv /tmp/trade /usr/local/bin/trade
+```
+
+*(若无 root 权限，也可放置于 `~/.local/bin/trade`，并确保该目录在 `$PATH` 中)*
+
+### 3. 验证安装
+在目标机器终端执行：
+
+```bash
+trade --help
+```
+
+若成功打印命令帮助信息，即说明安装完成。系统会在初次运行时自动在用户主目录创建并初始化 SQLite 账本：`~/.trade/trade.db`，无需手动配置数据库。
+
+---
+
+## 三、目标机智能体（Agent）接入指引
+
+在目标机器的智能体设定文件（如 `AGENTS.md`、`CLAUDE.md` 或系统提示词）中，追加以下规范片段，智能体即可完整识别并调用操盘命令。
+
+### 智能体专属系统提示词片段 (Prompt Injection)
+
+```markdown
+## 投资操盘工具 (lot-trader) 使用规范
+
+本机已安装独立操盘引擎 `trade`，数据驻留在本地 SQLite (`~/.trade/trade.db`)。当你需要执行买入、加仓、批次查询、盘中扫描或平仓时，直接通过 Bash 调用 `trade` 命令。
+
+### 核心交互铁律
+1. **优先使用 `--json` 参数**：智能体执行所有子命令时均需追加 `--json`，以接收确定性的结构化 JSON 数据流。
+2. **批次独立生命周期**：每次建仓生成独立 Lot。浮亏超 -20% 属于深跌等待加仓区，绝不冻结。
+3. **加仓防抖守卫**：梯级加仓执行 `trade lot add`，系统会自动限制 48 小时同源冷却并计算整百股数。
+4. **单标的 30% 仓位硬顶**：买入前系统会自动核算组合占比，超 30% 需向用户提示风控预警。
+
+### 命令速查字典
+- 录入买入建仓：
+  trade lot buy --symbol <代码, 如 518880.SH> --price <单价> --qty <股数, 需整百> --json
+
+- 梯级逢低加仓：
+  trade lot add --parent-lot-id <父批次ID, 如 LOT-20261019-001> --price <当前单价> [--amount 10000] --json
+
+- 查看标的聚合持仓全景（宏观仓位、保本均价、可用底仓、决策线与组合权重）：
+  trade position [--symbol <代码>] --json
+  （亦可直接 trade position 查看高可读 ASCII 报表）
+
+- 查看所有持仓批次：
+  trade lot list --status ACTIVE --json
+
+- 盘中实时扫描信号（含动态跟踪止盈）：
+  trade scan --json
+
+- 指定批次平仓止盈：
+  trade lot close --lot-id <批次ID> --price <成交单价> [--qty <平仓数量>] [--substitute-core] --json
+
+- 查看历史战绩与多维归因：
+  trade stats --json
+```
+
+---
+
+## 四、智能体常见意图响应范例
+
+1. **用户说：“我刚才以 8.55 买入了 2000 股黄金 ETF”**
+   - 智能体执行：
+     ```bash
+     trade lot buy --symbol 518880.SH --price 8.55 --qty 2000 --json
+     ```
+   - 智能体提取返回的 `lot_id` 与全成本保本单价向用户反馈。
+
+2. **用户说：“帮我看一下今天有没有需要操作的标的”**
+   - 智能体执行：
+     ```bash
+     trade scan --json
+     ```
+   - 智能体解析返回的 `signals`：
+     - 若为 `TAKE_PROFIT_ALERT`：提示用户某批次已盈利达标，建议平仓止盈。
+     - 若为 `TRAILING_STOP_ALERT`：提示用户某批次较历史高点回撤 3%，建议移动止盈锁定胜率。
+     - 若为 `ADD_POSITION_ALERT` 或 `DEEP_VALUE_ALERT`：提示用户已触及加仓区间，给出建议加仓金额与层级。
+
+3. **用户说：“看下我目前的整体持仓情况 / 某标的总仓位”**
+   - 智能体执行：
+     ```bash
+     trade position --json
+     ```
+   - 智能体获取各标的聚合指标：总持有股数、可用底仓、加权保本成本、总市值、浮动盈亏、组合仓位占比、以及四档目标决策线（+10%/+20%/-10%/-20%），向用户提供标的宏观全景分析与日内做 T 决策支持。
+
+4. **用户说：“把批次 LOT-20261019-001 平仓”**
+   - 智能体先核对最新行情或根据用户报价执行：
+     ```bash
+     trade lot close --lot-id LOT-20261019-001 --price 8.90 --json
+     ```
+   - 智能体向用户汇报实现的净利润金额与战绩。

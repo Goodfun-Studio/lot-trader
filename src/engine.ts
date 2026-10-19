@@ -8,6 +8,7 @@ import { SettlementArbitrator } from "./settlement.ts";
 import { SignalScanner } from "./scanner.ts";
 import { LotCloser } from "./closer.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { PositionAggregator, PositionSummary } from "./position.ts";
 
 export interface LotListItem {
   lot_id: string;
@@ -62,6 +63,7 @@ export class TraderEngine {
   public arbitrator: SettlementArbitrator;
   public scanner: SignalScanner;
   public closer: LotCloser;
+  public positionAggregator: PositionAggregator;
   public portfolioBudget?: number;
 
   constructor(dbConn: Database, quoteProvider?: QuoteProvider, portfolioBudget?: number) {
@@ -70,6 +72,7 @@ export class TraderEngine {
     this.arbitrator = new SettlementArbitrator(dbConn);
     this.scanner = new SignalScanner(dbConn);
     this.closer = new LotCloser(dbConn);
+    this.positionAggregator = new PositionAggregator(dbConn, this.quoteProvider);
     this.portfolioBudget = portfolioBudget;
   }
 
@@ -526,6 +529,10 @@ export class TraderEngine {
     closeTime?: Date
   ): [Lot, Trade] {
     return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime);
+  }
+
+  public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date): Promise<PositionSummary[]> {
+    return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime);
   }
 
   public computeStats(days?: number, symbol?: string): TradingStats {
