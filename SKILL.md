@@ -1,6 +1,6 @@
 ---
 name: lot-trader
-description: 投资操盘与单笔批次盈亏监控工具 (lot-trader)。当用户提到买入股票/ETF/黄金、建仓记录、查看标的持仓聚合全景视图(position/holding)、查看持仓批次、盘中扫描加仓止盈信号、梯级补仓、指定批次平仓做T、或复盘操盘战绩时使用此技能。直接通过 Bash 调用本地 trade 命令行工具执行。
+description: 投资操盘与单笔批次盈亏监控工具 (lot-trader)。当用户提到买入股票/ETF/黄金、建仓记录、查看标的持仓聚合全景视图(position/holding)、查看持仓批次、盘中扫描加仓止盈信号、梯级补仓、指定批次平仓做T、或生成/更新全局交互式监控看板、或复盘操盘战绩时使用此技能。直接通过 Bash 调用本地 trade 命令行工具执行。
 ---
 
 # 投资操盘工具 (lot-trader) 使用指南
@@ -141,3 +141,49 @@ trade stats --json
      - 严格按批次浮动盈亏率排序（支持从正收益浮盈梯队、浅度回撤梯队到深度击球梯队、山顶冰川梯队的分层透视）。
      - 核心定位：识别正收益待止盈批次、评估标的下属批次风险暴露、定向挑选最深负收益批次进行底仓代冲对冲消融。
    - **交互形态要求**：在页面中必须提供明确的独立子切换卡（Sub-tabs / View Switcher），物理隔离两个表格视图，保证每个视图拥有独立的表头说明与统计视角。
+
+---
+
+## 4. 全局交互式监控看板 (Global Dashboard)
+
+看板生成已作为 **CLI 原生原语** 集成进 `trade`，无需手工拼路径调 Python：
+
+```bash
+# 默认在当前目录生成 lot-trader-global-dashboard.html
+trade dashboard
+
+# 指定输出路径，并生成后自动用系统默认浏览器打开
+trade dashboard --out /path/to/dashboard.html --open
+
+# 智能体结构化调用口径
+trade dashboard --json
+```
+
+### CLI 参数
+- `--out, -o PATH`：输出 HTML 路径（默认 `./lot-trader-global-dashboard.html`）；
+- `--open`：生成后调用系统默认浏览器打开（macOS `open` / Linux `xdg-open` / Windows `start`）；
+- `--template, -t PATH`：前端模板路径（默认自动定位脚本同目录的 `template_base.html`）；
+- `--db PATH`：SQLite 账本路径（默认 `$LOT_TRADER_DB` → `$TRADE_DB_PATH` → `~/.trade/trade.db`）；
+- `--json`：输出 `{"code":0,"msg":"success","data":{out,script,template,db,bytes,opened}}`；失败时 `code=1` 并退出码 1。
+
+### 资源定位与架构
+- 资产固化在仓库 `scripts/` 目录：**主脚本** `scripts/generate_dashboard.py`、**前端模板** `scripts/template_base.html`；并同步到 `~/.claude`、`~/.codex`、`~/.agents` 三处 `skills/lot-trader/scripts/`。
+- 查找顺序：`--scripts-dir` → `$LOT_TRADER_SCRIPTS_DIR` → 可执行文件同级 `scripts/` → 源码树 `scripts/` → 三个 agent skill 目录；任一处脚本 + 模板齐全即命中，缺失时明确报错并列出所有探测路径。
+- 数据来源严格走 CLI 原语：`trade position --json`（含物理动量雷达）、`trade lot list --status ACTIVE --json`、`trade stats --json`，另以只读方式直连账本 SQLite 聚合历史批次与平仓流水。
+- `trade dashboard` 会把子进程 `PATH` 指向当前二进制所在目录，并注入 `LOT_TRADER_DB`/`TRADE_DB_PATH`，保证嵌套 CLI 调用读取**同一个账本**；Python 解释器可用 `$LOT_TRADER_PYTHON` 覆盖（默认 `python3`）。
+
+### 看板内容
+1. **数据聚合**：单次生成即聚合全盘持仓、活跃批次明细、物理动量雷达及历史做 T 归因战绩；
+2. **严格践行第 3 节呈现规范**：
+   - 标的全景卡片（总持仓、现价、浮动盈亏、年线与 60 日空间分位、有效合力与置信等级）；
+   - 持仓总览表（Layer 2 聚合与多空分层）；
+   - 在场批次**时间维度视图**（最新买入倒序）与**盈亏率维度视图**（浮盈/回撤/击球分层透视），子切换卡物理隔离；
+   - 历史平仓战绩表与标的穿透 Modal 弹窗；
+3. **单文件独立交付**：生成独立便携的深色拟态 HTML 报表，无外部依赖、无须服务端部署。
+
+### 直接调用脚本（备选）
+```bash
+python3 scripts/generate_dashboard.py --out /path/to/dashboard.html
+# 或 npm script 快捷方式
+bun run dashboard
+```

@@ -18,6 +18,7 @@
 - **单标的 30% 仓位硬顶组合级风控中间件 (Position Cap & Risk Guard)**：
   - 买入/加仓前置核算该标的在投资组合中的持仓占比；
   - 超过 30.00% 组合级硬顶红线时坚决触发风控拦截，阻断无序重仓。
+- **全局交互式看板原生原语**：`trade dashboard [--out <path>] [--open]` 一键生成单文件 HTML 全景看板（标的全景卡片 / 持仓总览 / 时间维度与盈亏率维度物理隔离的批次双视图 / 平仓战绩与穿透弹窗）。
 - **批次部分平仓与战绩多维归因**：
   - 支持指定数量部分平仓，状态保持 `ACTIVE` 持续监控；
   - `trade stats` 提供按标的明细、按操盘类型（普通波段、天然 T+0、底仓代冲做 T）的多维战绩归因。
@@ -26,7 +27,7 @@
 
 ### 1. 构建与测试
 ```bash
-# 运行 17 项全量核心测试（100% 通过）
+# 运行 71 项全量核心测试（100% 通过）
 bun test
 
 # 编译生成单一独立可执行文件 trade
@@ -56,4 +57,10 @@ bun run build
 # 操盘战绩多维归因统计报表
 ./trade stats
 ./trade stats --json
+
+# 全局交互式 HTML 看板（默认当前目录 lot-trader-global-dashboard.html，--open 自动打开浏览器）
+./trade dashboard
+./trade dashboard --out /tmp/dashboard.html --open --json
 ```
+
+> 看板生成器资产固化在 `scripts/`（`generate_dashboard.py` + `template_base.html`），随二进制同级部署即可被 `trade dashboard` 自动发现。

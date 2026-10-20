@@ -7,6 +7,11 @@ import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
 import { parseArgs } from "util";
+import { existsSync, statSync } from "fs";
+import { homedir } from "os";
+import { dirname, isAbsolute, join, resolve } from "path";
+
+const DASHBOARD_DEFAULT_OUT = "lot-trader-global-dashboard.html";
 
 function formatCurrency(val: number): string {
   return val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -21,21 +26,202 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,position,scan,stats,physics} ...
+  console.log(`usage: trade [-h] {lot,position,scan,stats,physics,dashboard} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,position,scan,stats,physics}  Available subcommands
+  {lot,position,scan,stats,physics,dashboard}  Available subcommands
     lot             Lot operations (buy, add, list, close)
     position        Position / Holding aggregated view
     scan            Scan active lots for signals (including trailing stop)
     stats           Performance statistics with multi-dimensional attribution
     physics         Physics momentum radar analysis (velocity, acceleration, force, damping)
+    dashboard       Render the global interactive HTML dashboard
 
 options:
   -h, --help        show this help message and exit
 `);
+}
+
+function printDashboardHelp(): void {
+  console.log(`usage: trade dashboard [-h] [--out <path>] [--open] [--template <path>] [--db <path>]
+
+Global Interactive HTML Dashboard Generator
+
+options:
+  --out, -o PATH    Output HTML file path (default: ./${DASHBOARD_DEFAULT_OUT})
+  --open            Open the generated dashboard with the system default browser
+  --template, -t    Front-end template HTML path (default: template_base.html next to the script)
+  --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  --json            Emit structured JSON result instead of human readable text
+  -h, --help        show this help message and exit
+`);
+}
+
+/**
+ * Locate the dashboard generator script + template shipped with the repo / skill bundles.
+ * Resolution order: explicit env override -> executable sibling dirs -> source tree -> agent skill dirs.
+ */
+export function resolveDashboardScripts(explicitScriptDir?: string): { scriptPath: string; templatePath: string } {
+  const candidates: string[] = [];
+
+  if (explicitScriptDir) {
+    candidates.push(explicitScriptDir);
+  }
+  if (process.env.LOT_TRADER_SCRIPTS_DIR) {
+    candidates.push(process.env.LOT_TRADER_SCRIPTS_DIR);
+  }
+
+  const execDir = dirname(process.execPath);
+  candidates.push(join(execDir, "scripts"));
+  candidates.push(join(execDir, "..", "scripts"));
+  // Source tree layout: <repo>/src/cli.ts -> <repo>/scripts
+  candidates.push(join(import.meta.dir, "..", "scripts"));
+
+  const home = homedir();
+  for (const skillRoot of [".claude", ".codex", ".agents"]) {
+    candidates.push(join(home, skillRoot, "skills", "lot-trader", "scripts"));
+  }
+
+  const seen = new Set<string>();
+  for (const dir of candidates) {
+    const absDir = isAbsolute(dir) ? dir : resolve(dir);
+    if (seen.has(absDir)) continue;
+    seen.add(absDir);
+
+    const scriptPath = join(absDir, "generate_dashboard.py");
+    const templatePath = join(absDir, "template_base.html");
+    if (existsSync(scriptPath) && existsSync(templatePath)) {
+      return { scriptPath, templatePath };
+    }
+  }
+
+  throw new Error(
+    `Dashboard generator not found. Looked for generate_dashboard.py + template_base.html in:\n  ${[...seen].join("\n  ")}\n` +
+      `Set LOT_TRADER_SCRIPTS_DIR or run from the repo / an agent skill bundle.`,
+  );
+}
+
+function pythonCommand(): string {
+  return process.env.LOT_TRADER_PYTHON || "python3";
+}
+
+/** Make sure the nested `trade ... --json` calls made by the Python generator resolve to THIS binary. */
+function resolveChildPath(): string | undefined {
+  const execBase = process.execPath.split(/[\\/]/).pop() || "";
+  const parentPath = process.env.PATH || "";
+  if (execBase.toLowerCase().startsWith("trade")) {
+    return [dirname(process.execPath), parentPath].filter(Boolean).join(":");
+  }
+  return parentPath || undefined;
+}
+
+function resolveDashboardDb(explicitDb?: string): string {
+  return (
+    explicitDb ||
+    process.env.TRADE_DB_PATH ||
+    process.env.LOT_TRADER_DB ||
+    join(homedir(), ".trade", "trade.db")
+  );
+}
+
+function openWithSystemBrowser(target: string): void {
+  const opener = process.platform === "darwin" ? ["open", target] : process.platform === "win32" ? ["cmd", "/c", "start", "", target] : ["xdg-open", target];
+  const proc = Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
+  proc.unref();
+}
+
+async function handleDashboard(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      out: { type: "string", short: "o" },
+      open: { type: "boolean", default: false },
+      template: { type: "string", short: "t" },
+      db: { type: "string" },
+      "scripts-dir": { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  const outPath = resolve((values.out as string | undefined) || DASHBOARD_DEFAULT_OUT);
+  const dbPath = resolveDashboardDb(values.db as string | undefined);
+
+  try {
+    const { scriptPath, templatePath } = resolveDashboardScripts(values["scripts-dir"] as string | undefined);
+    const template = (values.template as string | undefined) || templatePath;
+
+    if (!existsSync(template)) {
+      throw new Error(`Template not found: ${template}`);
+    }
+    // The generator reads the ledger directly via sqlite3, so make sure the schema exists first
+    // (opening a fresh path also seeds the full symbol universe).
+    const ledger = new AppDatabase(dbPath);
+    ledger.close();
+
+    const childEnv: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      TRADE_DB_PATH: dbPath,
+      LOT_TRADER_DB: dbPath,
+    };
+    const childPath = resolveChildPath();
+    if (childPath) {
+      childEnv.PATH = childPath;
+    }
+
+    const proc = Bun.spawn(
+      [pythonCommand(), scriptPath, "--out", outPath, "--template", template, "--db", dbPath],
+      { cwd: process.cwd(), env: childEnv, stdout: isJson ? "pipe" : "inherit", stderr: isJson ? "pipe" : "inherit" },
+    );
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    if (exitCode !== 0) {
+      throw new Error(`Dashboard generator failed (exit ${exitCode}):\n${(stderr || stdout).trim()}`);
+    }
+
+    if (!existsSync(outPath)) {
+      throw new Error(`Dashboard generator reported success but produced no file: ${outPath}`);
+    }
+
+    const size = statSync(outPath).size;
+
+    if (values.open) {
+      openWithSystemBrowser(outPath);
+    }
+
+    if (isJson) {
+      console.log(
+        JSON.stringify({
+          code: 0,
+          msg: "success",
+          data: { out: outPath, script: scriptPath, template, db: dbPath, bytes: size, opened: Boolean(values.open) },
+        }),
+      );
+    } else {
+      console.log(`🌐 全局看板已生成: ${outPath} (${size.toLocaleString("en-US")} bytes)`);
+      console.log(`   脚本: ${scriptPath}`);
+      console.log(`   模板: ${template}`);
+      console.log(`   数据: ${dbPath}`);
+      if (values.open) {
+        console.log(`   已在系统默认浏览器中打开。`);
+      }
+    }
+  } catch (err: any) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+    } else {
+      console.error(`❌ 生成看板失败: ${err.message}`);
+    }
+    process.exit(1);
+  }
 }
 
 function printLotHelp(): void {
@@ -774,6 +960,17 @@ export async function main(): Promise<void> {
 
   const command = rawArgs[0];
   const restArgs = rawArgs.slice(1);
+
+  // The dashboard primitive renders from the ledger directly; it needs no engine instance.
+  if (command === "dashboard") {
+    if (restArgs[0] === "-h" || restArgs[0] === "--help") {
+      printDashboardHelp();
+      process.exit(0);
+    }
+    await handleDashboard(restArgs);
+    db.close();
+    return;
+  }
 
   if (command === "lot") {
     if (restArgs.length === 0 || restArgs[0] === "-h" || restArgs[0] === "--help") {

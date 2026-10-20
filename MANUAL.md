@@ -92,6 +92,10 @@ trade --help
   trade physics <代码> [--json]
   （返回 F 与 effective_force；effective_force = F × confidence_weight，
     confidence_level 为 LOW / MEDIUM / HIGH，LOW 时警惕无量虚火，HIGH 为放量真变盘）
+
+- 生成全局交互式 HTML 看板（时间维度 / 盈亏率维度双子切换卡物理隔离）：
+  trade dashboard [--out <输出路径>] [--open] --json
+  （默认输出当前目录 lot-trader-global-dashboard.html；--open 生成后自动打开浏览器）
 ```
 
 ---
@@ -131,7 +135,38 @@ trade --help
 
 ---
 
-## 五、物理雷达「博弈参与度与合力置信度」口径说明
+## 五、全局交互式看板（Dashboard）
+
+看板生成已内置为 CLI 原语 `trade dashboard`，二进制自包含定位脚本，无需手工拼接 Python 路径。
+
+```bash
+# 默认在当前目录生成 lot-trader-global-dashboard.html
+trade dashboard
+
+# 指定输出路径，并生成后自动用系统默认浏览器打开
+trade dashboard --out ~/Desktop/dashboard.html --open
+
+# 智能体结构化调用口径
+trade dashboard --json
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `--out, -o PATH` | 输出 HTML 路径（默认 `./lot-trader-global-dashboard.html`） |
+| `--open` | 生成后调用系统默认浏览器打开（macOS `open` / Linux `xdg-open` / Windows `start`） |
+| `--template, -t PATH` | 前端模板路径（默认使用脚本同目录 `template_base.html`） |
+| `--db PATH` | SQLite 账本路径（默认 `$LOT_TRADER_DB` → `$TRADE_DB_PATH` → `~/.trade/trade.db`） |
+| `--json` | 返回 `{"code":0,"data":{out,script,template,db,bytes,opened}}`，失败 `code=1` 且退出码 1 |
+
+**部署说明（Intel 机器同样适用）**：
+1. 把 `dist/trade-*` 与仓库 `scripts/` 目录（`generate_dashboard.py` + `template_base.html`）一起部署，`scripts/` 与 `trade` 二进制同级即可被自动发现；
+2. 目标机需具备 `python3`（可用 `LOT_TRADER_PYTHON` 指定解释器）；
+3. 若 `scripts/` 放在别处，设置 `LOT_TRADER_SCRIPTS_DIR` 指向该目录，或用 `--scripts-dir` 显式指定；
+4. 看板通过嵌套 `trade position/lot list/stats --json` 取数，`trade dashboard` 会自动把子进程 `PATH` 指向当前二进制，保证嵌套调用与主进程读同一账本。
+
+---
+
+## 六、物理雷达「博弈参与度与合力置信度」口径说明
 
 `trade physics` / `trade position` 中的合力指标分为两层：
 
