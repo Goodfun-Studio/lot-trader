@@ -87,6 +87,11 @@ trade --help
 
 - 查看历史战绩与多维归因：
   trade stats [--account <账户代码>] --json
+
+- 物理运动量化雷达（速度/加速度/质量/合力/阻尼/换手率置信度）：
+  trade physics <代码> [--json]
+  （返回 F 与 effective_force；effective_force = F × confidence_weight，
+    confidence_level 为 LOW / MEDIUM / HIGH，LOW 时警惕无量虚火，HIGH 为放量真变盘）
 ```
 
 ---
@@ -123,3 +128,22 @@ trade --help
      trade lot close --lot-id LOT-20261019-001 --price 8.90 --json
      ```
    - 智能体向用户汇报实现的净利润金额与战绩。
+
+---
+
+## 五、物理雷达「博弈参与度与合力置信度」口径说明
+
+`trade physics` / `trade position` 中的合力指标分为两层：
+
+| 字段 | 含义 | 用途 |
+| --- | --- | --- |
+| `F` | 原始多空合力 F = m × a（惯性质量 × 加速度） | 客观力度，不区分真假 |
+| `turnover_rate` | 当日真实换手率 τ（%，腾讯行情第 38 项） | 判断参与博弈的筹码规模 |
+| `confidence_weight` | 置信度加权系数 W_conf = W_abs(τ) × W_rel(γ)，钳制 [0.10, 2.00] | 给力度打折 / 加成 |
+| `confidence_level` | `LOW` / `MEDIUM` / `HIGH` | 直观参与度等级 |
+| `effective_force` | 有效置信合力 F_eff = F × W_conf | 决策实际依据 |
+
+- `γ = τ / τ̄20`，无历史换手率序列时以成交量倍数 `m = Vol_today / MA20(Vol)` 等价替代（同一流通股本下二者数学等价）。
+- 等级门槛：`W_conf < 0.80` → LOW（无量虚火，强 F 只作候选）；`0.80 ≤ W_conf < 1.20` → MEDIUM（正常中枢）；`W_conf ≥ 1.20` → HIGH（天量对决，真变盘）。
+- 换手率缺失 / 0 / 负数 / 异常时安全降级：`W_abs` 取中性 1.0，`W_conf` 封顶 1.20，等级永不报 HIGH，全链路不产生 NaN。
+- 铁律：**原始 F 不被篡改**，仅新增 `effective_force` 派生字段，历史调用方（不传换手率）行为保持向后兼容。

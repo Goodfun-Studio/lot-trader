@@ -290,7 +290,7 @@ export class PositionAggregator {
         const bars60 = await this.quoteProvider.getDailyBars(sym, 60);
         if (bars60 && bars60.length >= 5) {
           const bars250 = await this.quoteProvider.getDailyBars(sym, 250);
-          physics = computePhysicsRadar(sym, name, bars60, bars250, currentPrice);
+          physics = computePhysicsRadar(sym, name, bars60, bars250, currentPrice, q?.turnover_rate);
         }
       } catch {
         // Safe fallback

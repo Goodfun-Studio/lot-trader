@@ -13,6 +13,8 @@ export interface Quote {
   volume: number;
   amount: number;
   time_str: string;
+  /** 当日换手率百分比 (单位 %)，例如 0.27 表示 0.27%；腾讯行情第 38 项。缺失/异常时为 undefined */
+  turnover_rate?: number;
 }
 
 export interface DailyBar {
@@ -76,13 +78,21 @@ export function normalizeSymbol(code: string): [string, string] {
 
 export class QuoteProvider {
   private mockQuotes: Map<string, number> = new Map();
+  private mockTurnover: Map<string, number> = new Map();
   private mockBars: Map<string, DailyBar[]> = new Map();
 
-  constructor(mockQuotes?: Record<string, number>) {
+  constructor(mockQuotes?: Record<string, number | { price: number; turnover_rate?: number }>) {
     if (mockQuotes) {
       for (const [k, v] of Object.entries(mockQuotes)) {
         const [std] = normalizeSymbol(k);
-        this.mockQuotes.set(std, v);
+        if (typeof v === "number") {
+          this.mockQuotes.set(std, v);
+        } else if (v && typeof v.price === "number") {
+          this.mockQuotes.set(std, v.price);
+          if (v.turnover_rate !== undefined) {
+            this.setMockTurnover(std, v.turnover_rate);
+          }
+        }
       }
     }
   }
@@ -90,6 +100,16 @@ export class QuoteProvider {
   public setMockPrice(symbol: string, price: number): void {
     const [std] = normalizeSymbol(symbol);
     this.mockQuotes.set(std, price);
+  }
+
+  /** 注入离线 Mock 换手率 (单位 %)，非法值直接忽略，保证下游永不读到 NaN */
+  public setMockTurnover(symbol: string, turnoverRate: number): void {
+    const [std] = normalizeSymbol(symbol);
+    if (typeof turnoverRate !== "number" || !Number.isFinite(turnoverRate) || turnoverRate <= 0) {
+      this.mockTurnover.delete(std);
+      return;
+    }
+    this.mockTurnover.set(std, turnoverRate);
   }
 
   public setMockBars(symbol: string, bars: DailyBar[]): void {
@@ -197,6 +217,10 @@ export class QuoteProvider {
           amount: 0,
           time_str: "MOCK",
         };
+        const mockTau = this.mockTurnover.get(std);
+        if (mockTau !== undefined) {
+          results[std].turnover_rate = mockTau;
+        }
       } else {
         neededRemote.push([std, tc]);
       }
@@ -247,6 +271,11 @@ export class QuoteProvider {
           const highPStr = fields.length > 33 && fields[33] ? fields[33] : currPStr;
           const lowPStr = fields.length > 34 && fields[34] ? fields[34] : currPStr;
           const timeVal = fields.length > 30 ? fields[30] : "";
+          // 字段 38 = 当日换手率百分比；缺失或非法 (含字符串 "") 一律视为不可用
+          const rawTau = fields.length > 38 ? fields[38] : "";
+          const parsedTau = parseFloat(rawTau);
+          const turnoverRate =
+            Number.isFinite(parsedTau) && parsedTau > 0 ? parsedTau : undefined;
 
           for (const [std, tc] of neededRemote) {
             if (tc.toLowerCase() === tcCode) {
@@ -263,6 +292,9 @@ export class QuoteProvider {
                 amount: 0,
                 time_str: timeVal,
               };
+              if (turnoverRate !== undefined) {
+                results[std].turnover_rate = turnoverRate;
+              }
               break;
             }
           }

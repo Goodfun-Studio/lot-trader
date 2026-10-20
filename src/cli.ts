@@ -558,7 +558,7 @@ async function handlePhysics(engine: TraderEngine, args: string[]): Promise<void
     const bars60 = await engine.quoteProvider.getDailyBars(stdSymbol, 60);
     const bars250 = await engine.quoteProvider.getDailyBars(stdSymbol, 250);
 
-    const radar = computePhysicsRadar(stdSymbol, name, bars60, bars250, currentPrice);
+    const radar = computePhysicsRadar(stdSymbol, name, bars60, bars250, currentPrice, quote?.turnover_rate);
 
     if (isJson) {
       const out = {
@@ -605,10 +605,26 @@ async function handlePhysics(engine: TraderEngine, args: string[]): Promise<void
     console.log(`   • 惯性质量 m (当日成交/20日均量): ${radar.m.toFixed(2)}x`);
     console.log(`   • 多空合力 F (F = m × a): ${fSign}${radar.F.toFixed(2)} [${radar.force_status}] ${forceDesc}`);
 
-    console.log(`4. 流体阻尼与筹码承接 (Fluid Damping μ):`);
+    const effSign = radar.effective_force >= 0 ? "+" : "";
+    const tauText = radar.turnover_rate > 0 ? `${radar.turnover_rate.toFixed(2)}%` : "不可用 (数据源缺失)";
+    let confDesc = "正常博弈中枢 (参与度居中)";
+    let confFlag = "";
+    if (radar.confidence_level === "LOW") {
+      confDesc = "参与度不足，警惕无量虚火";
+      if (Math.abs(radar.F) >= 0.5) confFlag = " ⚠ 原始合力强但参与度低，结论待换手放大确认";
+    } else if (radar.confidence_level === "HIGH") {
+      confDesc = "天量对决，高确定性合力";
+      confFlag = " ✅ 放量真变盘";
+    }
+    console.log(`4. 博弈参与度与合力置信度 (Participation τ & Confidence-Weighted Force):`);
+    console.log(`   • 当日换手率 τ: ${tauText}`);
+    console.log(`   • 置信度加权系数 W_conf: ${radar.confidence_weight.toFixed(2)}x  |  置信等级: [${radar.confidence_level}] ${confDesc}${confFlag}`);
+    console.log(`   • 有效置信合力 F_eff = F × W_conf: ${effSign}${radar.effective_force.toFixed(2)}  (原始合力 F = ${fSign}${radar.F.toFixed(2)})`);
+
+    console.log(`5. 流体阻尼与筹码承接 (Fluid Damping μ):`);
     console.log(`   • 阻尼系数 μ: ${radar.mu.toLocaleString("en-US", { maximumFractionDigits: 0 })} (单位振幅消耗量能密度)`);
 
-    console.log(`5. 周期空间位置与区间回撤:`);
+    console.log(`6. 周期空间位置与区间回撤:`);
     console.log(`   • 60日空间位置: 分位数 ${radar.pct_rank_60.toFixed(1)}% | 距区间高点回撤: ${radar.pullback_60.toFixed(2)}% (区间: ${radar.min_60.toFixed(3)} ~ ${radar.max_60.toFixed(3)})`);
     console.log(`   • 250日空间位置: 分位数 ${radar.pct_rank_250.toFixed(1)}% | 距年线高点回撤: ${radar.pullback_250.toFixed(2)}% (区间: ${radar.min_250.toFixed(3)} ~ ${radar.max_250.toFixed(3)})`);
     console.log("=".repeat(80));
@@ -689,7 +705,9 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
           const p = t.physics;
           const v5Sign = p.v_short >= 0 ? "+" : "";
           const aSign = p.a >= 0 ? "+" : "";
-          console.log(`  物理动量走势: 速度v(5d)=${v5Sign}${p.v_short.toFixed(2)}% | 加速度a=${aSign}${p.a.toFixed(2)}% [${p.brake_status}] | 质量m=${p.m.toFixed(2)}x | 多空合力F=${p.F.toFixed(2)} [${p.force_status}] | 阻尼μ=${p.mu.toFixed(0)}`);
+          const effSign = p.effective_force >= 0 ? "+" : "";
+          const tauText = p.turnover_rate > 0 ? `τ=${p.turnover_rate.toFixed(2)}%` : "τ=缺失";
+          console.log(`  物理动量走势: 速度v(5d)=${v5Sign}${p.v_short.toFixed(2)}% | 加速度a=${aSign}${p.a.toFixed(2)}% [${p.brake_status}] | 质量m=${p.m.toFixed(2)}x | 合力F=${p.F.toFixed(2)} [${p.force_status}] → 有效合力F_eff=${effSign}${p.effective_force.toFixed(2)} [${p.confidence_level}] | 换手${tauText} × W_conf=${p.confidence_weight.toFixed(2)} | 阻尼μ=${p.mu.toFixed(0)}`);
         }
 
         if (t.lots.length > 0) {

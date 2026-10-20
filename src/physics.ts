@@ -25,6 +25,11 @@ export interface PhysicsRadarResult {
   // 4. 多空合力 F
   F: number;           // F = m * a
   force_status: string; // STRONG_SUPPORT | STRONG_RESISTANCE | NEUTRAL
+  // 4.1 博弈参与度与合力置信度加权 (Confidence-Weighted Effective Force)
+  turnover_rate: number;     // τ 当日真实换手率 (%)，0 表示不可用/缺失
+  confidence_weight: number; // W_conf 置信度加权系数，钳制于 [0.10, 2.00]
+  confidence_level: "LOW" | "MEDIUM" | "HIGH"; // 参与度置信等级
+  effective_force: number;   // F_eff = F × W_conf (有效置信合力)
   // 5. 流体阻尼系数 μ
   mu: number;          // Vol_today / (Max(High - Low, 0.001) / Close_today)
   // 6. 周期空间位置
@@ -36,6 +41,137 @@ export interface PhysicsRadarResult {
   max_60: number;
   min_250: number;
   max_250: number;
+}
+
+/**
+ * 换手率规模锚点 [τ%, W_abs]
+ * 逻辑：换手率越低，参与博弈的筹码越少，同样的斜率越可能是“地量假动作”，必须大幅折价；
+ * 换手率进入放量区间后给予温和溢价上限，避免天量情绪过热被无限放大。
+ */
+export const TURNOVER_SCALE_ANCHORS: ReadonlyArray<[number, number]> = [
+  [0.02, 0.15],
+  [0.05, 0.22],
+  [0.10, 0.33],
+  [0.20, 0.45],
+  [0.40, 0.70],
+  [0.60, 0.84],
+  [0.80, 0.93],
+  [1.00, 1.00],
+  [1.50, 1.06],
+  [2.00, 1.12],
+  [3.00, 1.18],
+  [5.00, 1.25],
+];
+
+/**
+ * 相对活跃倍数锚点 [γ, W_rel]，γ = τ / τ̄20 (无历史换手率序列时以成交量倍数 m 等价替代)
+ * 1.00 = 与近 20 日均量持平 → 中性基准 1.00
+ */
+export const RELATIVE_SURGE_ANCHORS: ReadonlyArray<[number, number]> = [
+  [0.30, 0.65],
+  [0.50, 0.75],
+  [0.80, 0.92],
+  [1.00, 1.00],
+  [1.50, 1.12],
+  [2.00, 1.22],
+  [3.00, 1.35],
+  [5.00, 1.45],
+];
+
+/** W_conf 硬性钳制区间，防止极端数据击穿 */
+export const CONFIDENCE_WEIGHT_CLAMP: readonly [number, number] = [0.10, 2.00];
+/** 置信等级分界：W_conf < 0.80 → LOW；[0.80, 1.20) → MEDIUM；≥ 1.20 → HIGH（HIGH 额外要求换手率证据可用） */
+export const CONFIDENCE_LEVEL_LOW_MAX = 0.80;
+export const CONFIDENCE_LEVEL_HIGH_MIN = 1.20;
+/** 换手率缺失时的置信上限：没有绝对参与度证据，绝不宣称 HIGH */
+export const MISSING_TURNOVER_WEIGHT_CAP = 1.20;
+
+/**
+ * 分段线性插值（锚点必须按 x 升序）；区间外做端点饱和，绝不外推或产生 NaN。
+ */
+export function interpolateAnchors(
+  x: number,
+  anchors: ReadonlyArray<[number, number]>,
+  fallback: number
+): number {
+  if (!Number.isFinite(x) || anchors.length === 0) return fallback;
+  if (x <= anchors[0][0]) return anchors[0][1];
+  const last = anchors[anchors.length - 1];
+  if (x >= last[0]) return last[1];
+  for (let i = 1; i < anchors.length; i++) {
+    const [x1, y1] = anchors[i];
+    if (x <= x1) {
+      const [x0, y0] = anchors[i - 1];
+      const span = x1 - x0;
+      if (span <= 0) return y1;
+      const t = (x - x0) / span;
+      const y = y0 + (y1 - y0) * t;
+      return Number.isFinite(y) ? y : y0;
+    }
+  }
+  return last[1];
+}
+
+export interface ConfidenceWeightResult {
+  turnover_rate: number;
+  confidence_weight: number;
+  confidence_level: "LOW" | "MEDIUM" | "HIGH";
+  /** 相对活跃倍数 γ (换手率缺失时退化为成交量倍数 m) */
+  relative_activity: number;
+  /** 换手率绝对规模是否为有效证据 */
+  turnover_available: boolean;
+}
+
+/**
+ * 计算置信度加权系数 W_conf 与等级。
+ *
+ * W_conf = clamp(W_abs(τ) × W_rel(γ), 0.10, 2.00)
+ *   - W_abs：当日换手率的绝对规模（判断是否“地量”）；
+ *   - W_rel：相对近 20 日均量的放量倍数（判断是否“重兵对决”）。
+ *
+ * 负向防误杀守卫：
+ *   1. τ 缺失 / 0 / 负数 / NaN / Infinity → 视为不可用：W_abs = 1.0（不折价也不溢价），
+ *      并封顶 W_conf ≤ 1.20，等级永不宣称 HIGH（HIGH 需同时具备绝对换手率证据）；
+ *   2. γ 缺失 / 0 / 负数 / NaN / Infinity → 视为无相对证据：W_rel = 1.0；
+ *   3. 任何路径均返回有限数值，绝不产生 NaN / Infinity / 除零。
+ */
+export function computeConfidenceWeight(
+  turnoverRate?: number | null,
+  volumeMultiple?: number | null
+): ConfidenceWeightResult {
+  const tauAvailable =
+    typeof turnoverRate === "number" && Number.isFinite(turnoverRate) && turnoverRate > 0;
+  const tau = tauAvailable ? (turnoverRate as number) : 0;
+
+  const gammaAvailable =
+    typeof volumeMultiple === "number" && Number.isFinite(volumeMultiple) && volumeMultiple > 0;
+  const gamma = gammaAvailable ? (volumeMultiple as number) : 1.0;
+
+  const wAbs = tauAvailable ? interpolateAnchors(tau, TURNOVER_SCALE_ANCHORS, 1.0) : 1.0;
+  const wRel = interpolateAnchors(gamma, RELATIVE_SURGE_ANCHORS, 1.0);
+
+  let weight = wAbs * wRel;
+  if (!Number.isFinite(weight)) weight = 1.0;
+  weight = Math.min(
+    CONFIDENCE_WEIGHT_CLAMP[1],
+    Math.max(CONFIDENCE_WEIGHT_CLAMP[0], weight)
+  );
+  if (!tauAvailable) {
+    weight = Math.min(weight, MISSING_TURNOVER_WEIGHT_CAP);
+  }
+
+  // 等级：LOW < 0.80 ≤ MEDIUM；HIGH 需 W_conf ≥ 1.20 **且**具备绝对换手率证据
+  let level: "LOW" | "MEDIUM" | "HIGH" = "MEDIUM";
+  if (weight < CONFIDENCE_LEVEL_LOW_MAX) level = "LOW";
+  else if (tauAvailable && weight >= CONFIDENCE_LEVEL_HIGH_MIN) level = "HIGH";
+
+  return {
+    turnover_rate: tauAvailable ? round(tau, 4) : 0,
+    confidence_weight: round(weight, 4),
+    confidence_level: level,
+    relative_activity: round(gamma, 4),
+    turnover_available: tauAvailable,
+  };
 }
 
 /**
@@ -95,11 +231,14 @@ export function computePhysicsRadar(
   name: string,
   bars: DailyBar[],
   bars250?: DailyBar[],
-  currentPriceOverride?: number
+  currentPriceOverride?: number,
+  turnoverRate?: number
 ): PhysicsRadarResult {
   // 负向防误杀边界守卫: 数据不足 5 根
   if (!bars || bars.length < 5) {
     const p = currentPriceOverride || (bars && bars.length > 0 ? bars[bars.length - 1].close : 0);
+    // 数据不足时 F = 0，有效合力必为 0；置信度仅作为数据质量旁注安全提供
+    const guardConf = computeConfidenceWeight(turnoverRate, 0);
     return {
       symbol,
       name,
@@ -112,6 +251,10 @@ export function computePhysicsRadar(
       m: 0,
       F: 0,
       force_status: "NEUTRAL",
+      turnover_rate: guardConf.turnover_rate,
+      confidence_weight: guardConf.confidence_weight,
+      confidence_level: guardConf.confidence_level,
+      effective_force: 0,
       mu: 0,
       pct_rank_60: 0,
       pullback_60: 0,
@@ -191,6 +334,13 @@ export function computePhysicsRadar(
     force_status = "STRONG_RESISTANCE";
   }
 
+  // 4.1 博弈参与度 (换手率) → 置信度加权有效合力 F_eff = F × W_conf
+  // 相对活跃倍数 γ 以“当日成交量 / 20 日均量”= m 作为等价锚点:
+  //   γ = τ / τ̄20 == (Vol_today / FloatShares) / (MA20Vol / FloatShares) == Vol_today / MA20Vol
+  const conf = computeConfidenceWeight(turnoverRate, m);
+  let effectiveForce = F * conf.confidence_weight;
+  if (!Number.isFinite(effectiveForce)) effectiveForce = 0;
+
   // 5. 流体阻尼系数 μ = Vol_today / (Max(High - Low, 0.001) / Close_today)
   const highToday = lastBar.high;
   const lowToday = lastBar.low;
@@ -257,6 +407,10 @@ export function computePhysicsRadar(
     m: isNaN(m) || !isFinite(m) ? 0 : m,
     F: isNaN(F) || !isFinite(F) ? 0 : F,
     force_status,
+    turnover_rate: conf.turnover_rate,
+    confidence_weight: conf.confidence_weight,
+    confidence_level: conf.confidence_level,
+    effective_force: round(effectiveForce, 4),
     mu: isNaN(mu) || !isFinite(mu) ? 0 : mu,
     pct_rank_60: isNaN(pct_rank_60) || !isFinite(pct_rank_60) ? 0 : pct_rank_60,
     pullback_60: isNaN(pullback_60) || !isFinite(pullback_60) ? 0 : pullback_60,
