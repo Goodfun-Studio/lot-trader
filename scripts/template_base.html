@@ -303,22 +303,30 @@
     <div class="header">
       <div class="header-title">
         <h1>📊 Lot-Trader 全局投资组合全景透视看板</h1>
-        <p>个人投资顾问 • 招商证券 (CMB) 全量流水穿透对齐 • 支持多账户独立核算与底仓隔离</p>
+        <p>个人投资顾问 • 招商证券 (CMB) & 平安证券 (PA) 双账户合并穿透 • 支持多账户独立核算与底仓隔离</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <span class="badge" style="background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">🏛 账户空间: 招商证券 (CMB)</span>
-        <span class="badge">已穿透 38 只全量标的 • 188 笔在场活跃批次 • 704 笔平仓战绩</span>
+        <span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);">🌐 全账户合并空间 (CMB + PA)</span>
+        <span class="badge">已穿透 {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场标的 • {{TOTAL_ACTIVE_LOTS_COUNT}} 笔活跃批次 • {{TOTAL_CLOSED_TRADES_COUNT}} 笔平仓战绩</span>
       </div>
     </div>
 
     <!-- Navigation Tabs -->
     <div class="nav-bar">
       <button class="nav-btn active" onclick="switchTab('tab-global')">📊 全局三层资产对冲全貌</button>
-      <button class="nav-btn" onclick="switchTab('tab-holdings')">📈 38 只活跃持仓盈亏全览 (按盈亏率分层)</button>
-      <button class="nav-btn" onclick="switchTab('tab-targets')">🎯 Lot-Trader 38 大穿透标的透视</button>
-      <button class="nav-btn" onclick="switchTab('tab-lots')">📋 188 笔在场活跃批次明细 (双维度)</button>
-      <button class="nav-btn" onclick="switchTab('tab-trades')">🏆 704 笔历史波段战绩簿 (75.9%)</button>
+      <button class="nav-btn" onclick="switchTab('tab-holdings')">📈 {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只活跃持仓盈亏全览 (按盈亏率分层)</button>
+      <button class="nav-btn" onclick="switchTab('tab-targets')">🎯 Lot-Trader {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 大穿透标的透视</button>
+      <button class="nav-btn" onclick="switchTab('tab-lots')">📋 {{TOTAL_ACTIVE_LOTS_COUNT}} 笔在场活跃批次明细 (双维度)</button>
+      <button class="nav-btn" onclick="switchTab('tab-trades')">🏆 {{TOTAL_CLOSED_TRADES_COUNT}} 笔历史波段战绩簿 ({{TOTAL_WIN_RATE_STR}})</button>
       <button class="nav-btn" onclick="switchTab('tab-radar')">🧭 操盘雷达与解套决策指南</button>
+    </div>
+
+    <!-- Account Filter Bar (Global Switcher) -->
+    <div class="account-filter-bar" style="display:flex;gap:10px;margin-bottom:20px;align-items:center;background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:10px;border:1px solid var(--card-border);flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600;">🏛 账户筛选视角:</span>
+      <button id="btn-acc-all" class="subview-btn active" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('ALL')">🌐 全账户合并 ({{TOTAL_ACTIVE_SYMBOLS_COUNT}} 标的 • {{TOTAL_ACTIVE_LOTS_COUNT}} 批次)</button>
+      <button id="btn-acc-cmb" class="subview-btn" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('CMB')">🏛 招商证券 CMB ({{CMB_ACTIVE_SYMBOLS_COUNT}} 标的 • {{CMB_ACTIVE_LOTS_COUNT}} 批次)</button>
+      <button id="btn-acc-pa" class="subview-btn" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('PA')">🛡 平安证券 PA ({{PA_ACTIVE_SYMBOLS_COUNT}} 标的 • {{PA_ACTIVE_LOTS_COUNT}} 批次)</button>
     </div>
 
     <!-- TAB 1: Global Macro Tri-Pillar -->
@@ -326,28 +334,28 @@
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-label">投资组合总规模 (两账户合并)</div>
-          <div class="kpi-value">¥124.94 万</div>
-          <div class="kpi-sub">招商证券 109.2 万 + 平安证券 15.8 万</div>
+          <div class="kpi-value">{{COMBINED_TOTAL_MKT_STR}}</div>
+          <div class="kpi-sub">招商证券 {{CMB_MKT_W_STR}} + 平安证券 {{PA_MKT_W_STR}}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">全局整体净浮盈</div>
-          <div class="kpi-value val-green">+¥3.73 万</div>
-          <div class="kpi-sub val-green">全球资产对冲完全吸收 A 股个股浮亏</div>
+          <div class="kpi-value {{COMBINED_TOTAL_FLOAT_PNL_CLS}}">{{COMBINED_TOTAL_FLOAT_PNL_STR}}</div>
+          <div class="kpi-sub">全球宽基(+25.2w)与红利(+3.9w)完全平抑个股浮亏</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">全球核心资产已赚利润</div>
-          <div class="kpi-value val-green">+¥21.93 万</div>
-          <div class="kpi-sub">海外指数 ETF (+20.1w) + 黄金 ETF (+5.9w)</div>
+          <div class="kpi-value val-green">+¥25.16 万</div>
+          <div class="kpi-sub">海外指数 ETF (+16.6w) + 黄金 ETF (+8.57w)</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">短线波段历史已落袋现金</div>
-          <div class="kpi-value val-green">+¥149,504.93</div>
-          <div class="kpi-sub">704 笔做T净利 ¥110,256 + 累计分红 ¥39,249</div>
+          <div class="kpi-value val-green">{{TOTAL_WITHDRAWN_CASH_STR}}</div>
+          <div class="kpi-sub">{{TOTAL_CLOSED_TRADES_COUNT}} 笔做T净利 {{TOTAL_REALIZED_PNL_STR}} + 累计分红 {{TOTAL_DIVIDENDS_STR}}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">波段操盘综合胜率与盈亏比</div>
-          <div class="kpi-value val-green">75.85%</div>
-          <div class="kpi-sub">704 战 534 捷 167 止损 • 盈亏比 2.55</div>
+          <div class="kpi-value val-green">{{TOTAL_WIN_RATE_STR}}</div>
+          <div class="kpi-sub">{{TOTAL_CLOSED_TRADES_COUNT}} 战 {{TOTAL_WIN_TRADES_COUNT}} 捷 {{TOTAL_LOSS_TRADES_COUNT}} 止损 • 盈亏比 {{TOTAL_WIN_LOSS_RATIO}}</div>
         </div>
       </div>
 
@@ -390,47 +398,47 @@
               <div class="alloc-title">🎯 Lot-Trader 批次消融层</div>
               <div class="alloc-ratio val-purple">27.3%</div>
             </div>
-            <div class="alloc-desc">涵盖恒瑞、我武、海螺、榨菜、合盛、恒生互联、劲嘉、天山、康泰、ST三木、金晶等 38 只标的，通过 188 笔在场活跃批次代冲做 T 与分红回笼。</div>
+            <div class="alloc-desc">涵盖恒瑞、我武、海螺、榨菜、*ST美芝、合盛、恒生互联、劲嘉、天山等标的，通过 {{TOTAL_ACTIVE_LOTS_COUNT}} 笔在场活跃批次代冲做 T 与分红回笼。</div>
             <div class="alloc-stats">
-              <div>做T净利: <strong class="val-green">+¥110,255.76</strong></div>
-              <div>累计分红: <strong class="val-green">+¥39,249.17</strong></div>
-              <div>已提现现金: <strong class="val-green">+¥149,504.93</strong></div>
-              <div>平仓战绩: <span class="val-green">704战534胜 (75.9%)</span></div>
+              <div>做T净利: <strong class="val-green">{{TOTAL_REALIZED_PNL_STR}}</strong></div>
+              <div>累计分红: <strong class="val-green">{{TOTAL_DIVIDENDS_STR}}</strong></div>
+              <div>已提现现金: <strong class="val-green">{{TOTAL_WITHDRAWN_CASH_STR}}</strong></div>
+              <div>平仓战绩: <span class="val-green">{{TOTAL_CLOSED_TRADES_COUNT}}战{{TOTAL_WIN_TRADES_COUNT}}胜 ({{TOTAL_WIN_RATE_STR}})</span></div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- TAB: 38 Active Holdings PnL & Return Rate Ranking -->
+    <!-- TAB: Active Holdings PnL & Return Rate Ranking -->
     <div id="tab-holdings" class="tab-pane">
       <div class="kpi-grid">
         <div class="kpi-card">
-          <div class="kpi-label">招商证券在场总成本</div>
-          <div class="kpi-value">¥1,125,208.66</div>
-          <div class="kpi-sub">38 只在场标的 • 188 笔活跃持仓批次</div>
+          <div class="kpi-label">全账户在场总成本 (合并)</div>
+          <div class="kpi-value">{{COMBINED_TOTAL_COST_STR}}</div>
+          <div class="kpi-sub">招商 {{CMB_COST_STR}} + 平安 {{PA_COST_STR}}</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">招商证券在场总市值</div>
-          <div class="kpi-value">¥1,118,785.60</div>
-          <div class="kpi-sub">占两账户合并总规模 (124.94万) 的 89.5%</div>
+          <div class="kpi-label">全账户在场总市值 (合并)</div>
+          <div class="kpi-value">{{COMBINED_TOTAL_MKT_STR}}</div>
+          <div class="kpi-sub">招商 {{CMB_MKT_STR}} + 平安 {{PA_MKT_STR}}</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">招商证券净浮动盈亏</div>
-          <div class="kpi-value val-green">-¥6,875.77 (-0.61%)</div>
-          <div class="kpi-sub val-green">整体本息倍数 0.99x (基本保本，对冲完全吸收)</div>
+          <div class="kpi-label">全账户净浮动盈亏</div>
+          <div class="kpi-value {{COMBINED_TOTAL_FLOAT_PNL_CLS}}">{{COMBINED_TOTAL_FLOAT_PNL_STR}}</div>
+          <div class="kpi-sub">整体本息倍数 0.99x (基本保本，对冲完全吸收)</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">资产分层对冲结构</div>
-          <div class="kpi-value val-green">11 浮盈 vs 27 浮亏</div>
-          <div class="kpi-sub">浮盈群贡献 +¥31.66万 抵消 浮亏群 -¥32.35万</div>
+          <div class="kpi-label">双账户分层对冲结构</div>
+          <div class="kpi-value val-green">13 浮盈 vs 34 浮亏</div>
+          <div class="kpi-sub">浮盈群贡献 +¥33.54万 抵消 浮亏群 -¥34.75万</div>
         </div>
       </div>
 
       <div class="section-card">
         <div class="section-header">
           <div class="section-title">
-            <span>📈</span> 招商证券 (CMB) 38 只在场活跃资产持仓盈亏与盈亏率全览
+            <span>📈</span> 全账户合并 (CMB + PA) {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场活跃资产持仓盈亏与盈亏率全览
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span class="tag tag-blue" style="font-size:11px;">公式: 盈亏率 = (市值 - 成本) / 成本</span>
@@ -467,7 +475,7 @@
           <strong>指标定义说明</strong>：<br>
           • <strong>持仓盈亏率（净收益率）</strong> = (持仓市值 - 持仓成本) ÷ 持仓成本，直接反映该标的自建仓以来的净回报率；<br>
           • <strong>本息倍数（净值）</strong> = 持仓市值 ÷ 持仓成本 = 1 + 持仓盈亏率。例如黄金 ETF 为 2.29x（本息翻倍有余），标普 500 为 1.57x；<br>
-          • <strong>双极对冲分层</strong>：11 只核心资产（全球指数、黄金、红利龙头）重仓 79.8 万元（占 71.4%），净赚 <strong>+31.66 万元</strong>；彻底对冲 27 只 A 股赛道与港股个股 32.0 万元持仓的 <strong>-32.35 万元</strong> 浮亏。
+          • <strong>双极对冲分层</strong>：13 只核心资产（全球指数、黄金、红利龙头与 *ST美芝）重仓逾 90 万元，净赚 <strong>+33.54 万元</strong>；彻底吸收 34 只 A 股赛道与港股个股的 <strong>-34.75 万元</strong> 浮亏，全盘保持在平衡线上。
         </div>
 
         <div class="table-container">
@@ -507,11 +515,11 @@
       <div class="section-card">
         <div class="section-header">
           <div class="section-title">
-            <span>🎯</span> Lot-Trader 三十八大穿透标的操盘透视卡片
+            <span>🎯</span> Lot-Trader {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 大穿透标的操盘透视卡片 (双账户)
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <select id="radar-status-filter" class="filter-select" onchange="filterTargetCards(this.value)">
-              <option value="ALL">全部 38 大标的 (全部雷达态势)</option>
+              <option value="ALL">全部 {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 大标的 (全部雷达态势)</option>
               <option value="DEEP_VALUE">🟢 极度低估区 (年线分位 < 15%)</option>
               <option value="HIGH_ALT">🟣 高位预警区 (年线分位 > 80%)</option>
               <option value="STEADY">⚖️ 匀速稳态 (STEADY)</option>
@@ -534,7 +542,7 @@
       <div class="section-card">
         <div class="section-header">
           <div class="section-title">
-            <span>📋</span> Lot-Trader 全部 188 笔在场活跃批次穿透明细 (38 大标的)
+            <span>📋</span> Lot-Trader 全部 {{TOTAL_ACTIVE_LOTS_COUNT}} 笔在场活跃批次穿透明细 ({{TOTAL_ACTIVE_SYMBOLS_COUNT}} 大标的)
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <select id="lots-symbol-filter" class="filter-select" onchange="filterLotsBySymbol(this.value)">
@@ -622,9 +630,9 @@
       <div class="section-card">
         <div class="section-header">
           <div class="section-title">
-            <span>🏆</span> 历史平仓战绩簿 (累计 704 笔平仓 • 534 捷 167 止损 3 平 • 综合胜率 75.85%)
+            <span>🏆</span> 历史平仓战绩簿 (累计 {{TOTAL_CLOSED_TRADES_COUNT}} 笔平仓 • {{TOTAL_WIN_TRADES_COUNT}} 捷 {{TOTAL_LOSS_TRADES_COUNT}} 止损 • 综合胜率 {{TOTAL_WIN_RATE_STR}})
           </div>
-          <span class="tag tag-green">净做T利润 +¥110,255.76 • 盈亏比 2.55</span>
+          <span class="tag tag-green">净做T利润 {{TOTAL_REALIZED_PNL_STR}} • 盈亏比 {{TOTAL_WIN_LOSS_RATIO}}</span>
         </div>
         <div style="padding: 12px 16px; background: rgba(16, 185, 129, 0.08); border-left: 4px solid var(--green); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1;">
           <strong>战绩簿说明</strong>：包含 2017-2026 年招商证券与平安证券双账户全量历史平仓战绩。展示了在熊市震荡期间通过底仓代冲、急跌反弹做 T、微损止损控制敞口所锁定的真实真金白银利润。
@@ -850,6 +858,73 @@
   <!-- Embedded Client-side Data -->
   <script>
     const TARGETS_DATA = {{TARGET_JS_JSON}};
+
+        // Global Account Filter State
+    let currentGlobalAccount = 'ALL';
+
+    function setGlobalAccountFilter(acc) {
+      currentGlobalAccount = acc;
+      ['btn-acc-all', 'btn-acc-cmb', 'btn-acc-pa'].forEach(function(id) {
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.remove('active');
+      });
+      const activeBtnId = acc === 'ALL' ? 'btn-acc-all' : (acc === 'CMB' ? 'btn-acc-cmb' : 'btn-acc-pa');
+      const activeBtn = document.getElementById(activeBtnId);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      // 1. Filter Holdings Table rows
+      const holdingsRows = document.querySelectorAll('#tbody-holdings tr');
+      holdingsRows.forEach(function(r) {
+        const rAcc = r.getAttribute('data-account') || 'CMB';
+        if (acc === 'ALL') {
+          r.style.display = '';
+        } else if (acc === 'CMB') {
+          r.style.display = (rAcc === 'CMB' || rAcc === 'BOTH') ? '' : 'none';
+        } else if (acc === 'PA') {
+          r.style.display = (rAcc === 'PA' || rAcc === 'BOTH') ? '' : 'none';
+        }
+      });
+
+      // 2. Filter Target Cards
+      const targetCards = document.querySelectorAll('.target-card');
+      targetCards.forEach(function(card) {
+        const cAcc = card.getAttribute('data-account') || 'CMB';
+        if (acc === 'ALL') {
+          card.style.display = '';
+        } else if (acc === 'CMB') {
+          card.style.display = (cAcc === 'CMB' || cAcc === 'BOTH') ? '' : 'none';
+        } else if (acc === 'PA') {
+          card.style.display = (cAcc === 'PA' || cAcc === 'BOTH') ? '' : 'none';
+        }
+      });
+
+      // 3. Filter Lots rows (time & pnl)
+      ['tbody-time', 'tbody-pnl'].forEach(function(tbId) {
+        const tb = document.getElementById(tbId);
+        if (tb) {
+          const rows = tb.querySelectorAll('tr');
+          rows.forEach(function(r) {
+            const rAcc = r.getAttribute('data-account') || 'CMB';
+            if (acc === 'ALL') {
+              r.style.display = '';
+            } else {
+              r.style.display = (rAcc === acc) ? '' : 'none';
+            }
+          });
+        }
+      });
+
+      // 4. Filter Trades rows
+      const tradeRows = document.querySelectorAll('#tbody-trades tr');
+      tradeRows.forEach(function(r) {
+        const rAcc = r.getAttribute('data-account') || 'CMB';
+        if (acc === 'ALL') {
+          r.style.display = '';
+        } else {
+          r.style.display = (rAcc === acc) ? '' : 'none';
+        }
+      });
+    }
 
     function switchTab(tabId) {
       var panes = document.querySelectorAll('.tab-pane');
