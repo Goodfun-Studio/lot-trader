@@ -1,4 +1,3 @@
-
 import sqlite3, json, subprocess, os, sys, argparse
 
 parser = argparse.ArgumentParser(description="Generate Lot Trader Global Dashboard")
@@ -19,7 +18,7 @@ lots_active_data = json.loads(out_lots.decode("utf-8"))["data"]
 out_stats = subprocess.check_output(["trade", "stats", "--json"])
 stats_data = json.loads(out_stats.decode("utf-8"))["data"]
 
-# 2.5 Fetch positions with physics momentum radar for all 38 targets
+# 2.5 Fetch positions with physics momentum radar
 print("Fetching position data with physics radar from trade CLI...")
 out_pos = subprocess.check_output(["trade", "position", "--json"])
 pos_data = json.loads(out_pos.decode("utf-8"))["data"]
@@ -60,45 +59,50 @@ ORDER BY t.executed_at DESC
 """)
 closed_trades_raw = c.fetchall()
 
-# Verified dividends by symbol
-DIVIDENDS_MAP = {
-    '600036.SH': 13240.48,
-    '600585.SH': 7857.00,
-    '600900.SH': 4539.46,
-    '002507.SZ': 3215.00,
-    '002233.SZ': 1592.00,
-    '300529.SZ': 1417.00,
-    '600276.SH': 1344.00,
-    '002191.SZ': 1323.00,
-    '300357.SZ': 1229.00,
-    '603260.SH': 1109.00,
-    '601398.SH': 783.90,   # CMB 309.00 + PA 474.90
-    '600390.SH': 767.00,
-    '300677.SZ': 683.00,
-    '600586.SH': 467.00,
-    '002466.SZ': 435.00,
-    '000877.SZ': 398.00,
-    '600064.SH': 352.00,   # PA
-    '603678.SH': 268.00,
-    '300595.SZ': 262.00,
-    '601012.SH': 211.00,
-    '000623.SZ': 145.00,   # PA
-    '002603.SZ': 134.00,
-    '002029.SZ': 125.00,
-    '000100.SZ': 122.00,
-    '300601.SZ': 101.00,
-    '000001.SZ': 60.90,    # PA
-    '000725.SZ': 42.00,
-    '600000.SH': 42.00,    # PA
+# Dividends map by symbol and account
+DIVIDENDS_BY_SYM_AND_ACC = {
+    '600036.SH': {'CMB': 13240.48},
+    '600585.SH': {'CMB': 7857.00},
+    '600900.SH': {'CMB': 4539.46},
+    '002507.SZ': {'CMB': 3215.00},
+    '002233.SZ': {'CMB': 1592.00},
+    '300529.SZ': {'CMB': 1417.00},
+    '600276.SH': {'CMB': 1344.00},
+    '002191.SZ': {'CMB': 1323.00},
+    '300357.SZ': {'CMB': 1229.00},
+    '603260.SH': {'CMB': 1109.00},
+    '601398.SH': {'CMB': 309.00, 'PA': 474.90},   # CMB 309.00 + PA 474.90
+    '600390.SH': {'CMB': 767.00},
+    '300677.SZ': {'CMB': 683.00},
+    '600586.SH': {'CMB': 467.00},
+    '002466.SZ': {'CMB': 435.00},
+    '000877.SZ': {'CMB': 398.00},
+    '600064.SH': {'PA': 352.00},                   # PA
+    '603678.SH': {'CMB': 268.00},
+    '300595.SZ': {'CMB': 262.00},
+    '601012.SH': {'CMB': 211.00},
+    '000623.SZ': {'PA': 145.00},                   # PA
+    '002603.SZ': {'CMB': 134.00},
+    '002029.SZ': {'CMB': 125.00},
+    '000100.SZ': {'CMB': 122.00},
+    '300601.SZ': {'CMB': 101.00},
+    '000001.SZ': {'PA': 60.90},                    # PA
+    '000725.SZ': {'CMB': 42.00},
+    '600000.SH': {'PA': 42.00},                    # PA
 }
+
+DIVIDENDS_MAP = {sym: sum(v.values()) for sym, v in DIVIDENDS_BY_SYM_AND_ACC.items()}
 
 # Group active lots by symbol
 active_lots_by_sym = {}
 for l in lots_active_data:
     sym = l["symbol"]
     if sym not in active_lots_by_sym:
-        active_lots_by_sym[sym] = []
-    active_lots_by_sym[sym].append(l)
+        active_lots_by_sym[sym] = {"ALL": [], "CMB": [], "PA": []}
+    active_lots_by_sym[sym]["ALL"].append(l)
+    acc = l.get("account_id") or "CMB"
+    if acc in active_lots_by_sym[sym]:
+        active_lots_by_sym[sym][acc].append(l)
 
 # Group all lots by symbol for modal & detail
 all_lots_by_sym = {}
@@ -159,22 +163,19 @@ for r in all_db_lots:
         "tag": lot_tag
     })
 
-# Compute per-symbol metrics
-target_metrics = {}
-for sym, sinfo in symbols_map.items():
+def compute_sym_metrics(sym, lots_list, trades_list, div_val):
+    sinfo = symbols_map[sym]
     name = sinfo["name"]
     aclass = sinfo["asset_class"]
     unit = "份" if "ETF" in name or "LOF" in name else "股"
     
-    # Active position
-    act_lots = active_lots_by_sym.get(sym, [])
-    if act_lots:
-        shares = sum(l["remaining_quantity"] for l in act_lots)
-        cost_total = sum(l["remaining_quantity"] * l["cost_basis_unit"] for l in act_lots)
+    if lots_list:
+        shares = sum(l["remaining_quantity"] for l in lots_list)
+        cost_total = sum(l["remaining_quantity"] * l["cost_basis_unit"] for l in lots_list)
         cost_unit = cost_total / shares if shares > 0 else 0
         cp = curr_prices.get(sym, cost_unit)
         mkt_val = shares * cp
-        float_pnl = sum(l["floating_pnl"] for l in act_lots)
+        float_pnl = sum(l["floating_pnl"] for l in lots_list)
         ret_rate = float_pnl / cost_total if cost_total > 0 else 0
     else:
         shares = 0
@@ -185,17 +186,14 @@ for sym, sinfo in symbols_map.items():
         float_pnl = 0
         ret_rate = 0
         
-    # Trade history from closed_trades_raw
-    sym_trades = [t for t in closed_trades_raw if t[2] == sym]
-    total_trades = len(sym_trades)
-    win_trades = sum(1 for t in sym_trades if t[8] > 0)
-    loss_trades = sum(1 for t in sym_trades if t[8] < 0)
-    win_pnl = sum(t[8] for t in sym_trades if t[8] > 0)
-    loss_pnl = sum(abs(t[8]) for t in sym_trades if t[8] < 0)
+    total_trades = len(trades_list)
+    win_trades = sum(1 for t in trades_list if t[8] > 0)
+    loss_trades = sum(1 for t in trades_list if t[8] < 0)
+    win_pnl = sum(t[8] for t in trades_list if t[8] > 0)
+    loss_pnl = sum(abs(t[8]) for t in trades_list if t[8] < 0)
     net_t_pnl = win_pnl - loss_pnl
     win_rate = win_trades / total_trades if total_trades > 0 else 0
     
-    # Profit factor & Win/loss ratio (盈亏比)
     if total_trades == 0:
         pf_str = "--"
         pf_val = 0
@@ -213,10 +211,9 @@ for sym, sinfo in symbols_map.items():
         avg_rr = avg_w / avg_l if avg_l > 0 else 999
         avg_rr_str = f"{avg_rr:.2f}"
         
-    div_val = DIVIDENDS_MAP.get(sym, 0.0)
     total_withdrawn = net_t_pnl + div_val
     
-    target_metrics[sym] = {
+    return {
         "symbol": sym,
         "name": name,
         "asset_class": aclass,
@@ -227,8 +224,7 @@ for sym, sinfo in symbols_map.items():
         "market_value": mkt_val,
         "floating_pnl": float_pnl,
         "return_rate": ret_rate,
-        "active_lots_count": len(act_lots),
-        "total_lots_count": len(all_lots_by_sym.get(sym, [])),
+        "active_lots_count": len(lots_list),
         "total_trades": total_trades,
         "win_trades": win_trades,
         "loss_trades": loss_trades,
@@ -243,7 +239,31 @@ for sym, sinfo in symbols_map.items():
         "total_withdrawn": total_withdrawn,
     }
 
-# Specific tags & strategy notes for all 38 symbols
+# Compute target_metrics for ALL, CMB, PA
+target_metrics_all = {}
+target_metrics_cmb = {}
+target_metrics_pa = {}
+
+for sym, sinfo in symbols_map.items():
+    sym_lots_group = active_lots_by_sym.get(sym, {"ALL": [], "CMB": [], "PA": []})
+    sym_trades_all = [t for t in closed_trades_raw if t[2] == sym]
+    sym_trades_cmb = [t for t in sym_trades_all if (t[10] or "CMB") == "CMB"]
+    sym_trades_pa = [t for t in sym_trades_all if (t[10] or "CMB") == "PA"]
+    
+    div_dict = DIVIDENDS_BY_SYM_AND_ACC.get(sym, {})
+    div_all = sum(div_dict.values())
+    div_cmb = div_dict.get("CMB", 0.0)
+    div_pa = div_dict.get("PA", 0.0)
+    
+    target_metrics_all[sym] = compute_sym_metrics(sym, sym_lots_group["ALL"], sym_trades_all, div_all)
+    if sym_lots_group["CMB"] or sym_trades_cmb or div_cmb > 0:
+        target_metrics_cmb[sym] = compute_sym_metrics(sym, sym_lots_group["CMB"], sym_trades_cmb, div_cmb)
+    if sym_lots_group["PA"] or sym_trades_pa or div_pa > 0:
+        target_metrics_pa[sym] = compute_sym_metrics(sym, sym_lots_group["PA"], sym_trades_pa, div_pa)
+
+target_metrics = target_metrics_all
+
+# Specific tags & strategy notes for all symbols
 SYMBOL_NOTES = {
     '513300.SH': ('全球核心成长 • 美股科技慢牛', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
                   '两账户在场 94,000 份（招商 84,000 + 平安 10,000），浮盈超 9.3 万元 (+57.0%)，做 T 净利 11,507 元；深厚利润垫完全免疫短期波动，长期跟踪止盈享受科技慢牛复利。'),
@@ -266,7 +286,7 @@ SYMBOL_NOTES = {
     '600036.SH': ('零售银行之王 • 高股息分红先锋', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
                   '在场 1,300 股浮盈 +37.7% (+1.52万)，历年分红高达 13,240 元，累计回笼 9,983 元；依托底仓波段做 T，持续收取丰厚股息。'),
     '601398.SH': ('国有特大行 • 稳健底仓避风港', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 500 股底仓丰厚浮盈 +46.0%，累计分红 309 元；设置移动止盈线，锁定利润同时持续享受高股息现金流。'),
+                  '两账户在场 1,500 股（招商 500 + 平安 1,000），丰厚浮盈 +32.3%，累计分红 784 元；设置移动止盈线，锁定利润同时持续享受高股息现金流。'),
     '002233.SZ': ('高股息水泥 • 9战全胜现金牛', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
                   '在场 800 股，历史 9 战 9 胜做 T 净赚 766 元，分红 1,592 元，累计回笼现金 2,358 元（占市值 37%）；依托底仓急跌反弹做 T。'),
     '600276.SH': ('创新药旗舰 • 46战44捷做T标杆', '[代冲消融山顶]', 'rgba(59, 130, 246, 0.4)',
@@ -294,7 +314,7 @@ SYMBOL_NOTES = {
     '000877.SZ': ('西北水泥龙头 • 3战全胜底仓静置', '[代冲消融山顶]', 'rgba(14, 165, 233, 0.4)',
                   '在场 700 股，历史做 T 3 战全胜净赚 +205 元，分红 398 元；水泥周期筑底，严格禁止外部新钱补仓，依托底仓急跌反弹做 T。'),
     '300601.SZ': ('创新疫苗龙头 • 周期筑底静置', '[代冲消融山顶]', 'rgba(239, 68, 68, 0.4)',
-                  '在场仅 200 股底仓，历史做 T 1 战全胜落袋 +159 元，分红 101 元；严格杜绝新钱左侧加仓，依托底仓急跌反弹做 T 定向冲销成本。'),
+                  '在场 仅 200 股底仓，历史做 T 1 战全胜落袋 +159 元，分红 101 元；严格杜绝新钱左侧加仓，依托底仓急跌反弹做 T 定向冲销成本。'),
     '000632.SZ': ('低价重组标的 • 9战波段小额防守', '[微仓波段防守]', 'rgba(245, 158, 11, 0.4)',
                   '在场仅 100 股（市值 340 元），历史 9 战 5 捷平分秋色，盈亏比 0.97；仓位极低完全不影响大局，等待退市警示解除或反弹平仓。'),
     '600586.SH': ('超白玻璃龙头 • 14战全胜安全现金', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)',
@@ -341,7 +361,6 @@ SYMBOL_NOTES = {
                   '在场仅 100 股（市值 1,350 元，成本 20.40 元）；持仓极小，静置观望，杜绝追加任何外部资金。'),
 }
 
-
 def format_physics_badge_card(p):
     if not p:
         return '<span class="tag tag-blue" style="font-size:10px;">--</span>'
@@ -387,43 +406,43 @@ def format_physics_badge_table(p):
         return '<span class="tag tag-purple" style="font-size:10px;">顶部减速</span>'
     return f'<span class="tag tag-blue" style="font-size:10px;">{st}</span>'
 
-# Generate Target Cards HTML for all 38 symbols (sorted by market value DESC)
-sorted_syms = sorted(
-    [s for s in target_metrics.keys() if target_metrics[s]["shares"] > 0],
-    key=lambda s: target_metrics[s]["market_value"],
+# Symbols with active shares
+active_syms_list = [s for s in symbols_map.keys() if active_lots_by_sym.get(s, {}).get("ALL")]
+
+# Build Target Cards HTML
+sorted_syms_by_mkt = sorted(
+    active_syms_list,
+    key=lambda s: target_metrics_all[s]["market_value"],
     reverse=True
 )
 
 target_cards_html = []
 target_js_data = {}
 
-for sym in sorted_syms:
-    m = target_metrics[sym]
+def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
     notes = SYMBOL_NOTES.get(sym, ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)', '依托底仓操盘，杜绝盲目左侧补仓。'))
     cat_tag, strat_tag, border_col, strat_desc = notes
-    
+
     qty_str = f"{m['shares']:,} {m['qty_unit']}"
     cost_str = f"¥{m['cost_unit']:.3f}" if m['cost_unit'] < 2.0 else f"¥{m['cost_unit']:.2f}"
     curr_p_str = f"¥{m['current_price']:.3f}" if m['current_price'] < 2.0 else f"¥{m['current_price']:.2f}"
     mkt_val_str = f"¥{m['market_value']:,.0f}"
-    
+
     fpnl = m['floating_pnl']
     fpnl_class = "val-green" if fpnl >= 0 else "val-red"
     fpnl_str = f"-¥{abs(fpnl):,.0f}" if fpnl < 0 else (f"+¥{fpnl:,.0f}" if fpnl > 0 else "¥0")
-    
+
     rr = m['return_rate']
     rr_class = "val-green" if rr >= 0 else "val-red"
     rr_str = f"-{abs(rr)*100:.2f}%" if rr < 0 else (f"+{rr*100:.2f}%" if rr > 0 else "0.00%")
-    
-    # T-trades stats
+
     if m['total_trades'] > 0:
         win_class = "val-green" if m['net_t_pnl'] >= 0 else "val-red"
         t_stats_str = f"{m['win_trades']}胜{m['loss_trades']}负 ({'+' if m['net_t_pnl'] >= 0 else ''}¥{m['net_t_pnl']:,.0f})"
     else:
         win_class = ""
         t_stats_str = "无平仓记录"
-        
-    # 盈亏比 (Profit/Loss Ratio)
+
     pf_str = m['profit_factor_str']
     if pf_str == '全胜':
         pf_class = "val-green"
@@ -435,14 +454,12 @@ for sym in sorted_syms:
         pf_class = "val-red"
     else:
         pf_class = "val-blue"
-        
-    total_lots = m['total_lots_count']
+
     tot_cost = m['cost_unit'] * m['shares']
     mult_val = (m['market_value'] / tot_cost) if tot_cost > 0 else 1.0
     mult_class = "val-green" if mult_val >= 1.0 else "val-red"
     mult_str = f"{mult_val:.2f}x"
-    
-    # Physics formatting for Card
+
     p = physics_by_sym.get(sym) or {}
     brake_status = p.get("brake_status", "STEADY")
     p_rank60 = p.get("pct_rank_60", 50.0)
@@ -450,38 +467,36 @@ for sym in sorted_syms:
     v_val = p.get("v_short", 0.0)
     m_val = p.get("m", 1.0)
     f_val = p.get("F", 0.0)
-    
+
     fill_cls_60 = "fill-green" if p_rank60 <= 20 else ("fill-red" if p_rank60 >= 80 else "fill-blue")
     fill_cls_250 = "fill-green" if p_rank250 <= 20 else ("fill-purple" if p_rank250 >= 80 else "fill-blue")
-    
+
     v_cls = "val-green" if v_val > 0 else ("val-red" if v_val < 0 else "")
     v_str = f"{'+' if v_val > 0 else ''}{v_val:.2f}%"
     m_cls = "val-green" if m_val >= 1.2 else ("val-amber" if m_val < 0.7 else "")
     m_str = f"{m_val:.2f}x"
-    
+
     feff_val = p.get("effective_force", f_val)
     conf_lvl = p.get("confidence_level", "MEDIUM")
     feff_cls = "val-green" if feff_val > 0 else ("val-red" if feff_val < 0 else "")
     feff_str = f"{'+' if feff_val > 0 else ''}{feff_val:.2f}"
     conf_col = "#10b981" if conf_lvl == "HIGH" else ("#f59e0b" if conf_lvl == "LOW" else "#38bdf8")
     conf_badge = f'<span style="font-size:9px;color:{conf_col};font-weight:600;">[{conf_lvl}]</span>'
-    
+
     card_badge_html = format_physics_badge_card(p)
-    
-    act_accs = set(l.get("account_id", "CMB") for l in act_lots)
-    if "CMB" in act_accs and "PA" in act_accs:
+
+    if acc_mode == "BOTH" or acc_mode == "ALL":
         acc_badge = '<span class="tag tag-purple" style="font-size:10px;padding:1px 6px;">CMB + PA 双账户</span>'
-        acc_filter_val = 'BOTH'
-    elif "PA" in act_accs:
+    elif acc_mode == "PA":
         acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA 平安证券</span>'
-        acc_filter_val = 'PA'
     else:
         acc_badge = '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB 招商证券</span>'
-        acc_filter_val = 'CMB'
 
-    # Build Card HTML
-    card = f"""          <!-- Target Card: {m['name']} ({sym}) -->
-          <div class="target-card" onclick="openTargetModal('{sym}')" data-account="{acc_filter_val}" data-brake-status="{brake_status}" data-rank-250="{p_rank250:.2f}" style="border-color: {border_col};">
+    display_style = 'display:none;' if is_hidden else ''
+    total_lots_count = m['active_lots_count']
+
+    return f"""          <!-- Target Card: {m['name']} ({sym}) [{acc_mode}] -->
+          <div class="target-card" onclick="openTargetModal('{sym}')" data-account-visibility="{visibility}" data-account="{acc_mode}" data-brake-status="{brake_status}" data-rank-250="{p_rank250:.2f}" style="border-color: {border_col}; {display_style}">
             <div class="target-card-head">
               <div>
                 <div class="target-card-name">{m['name']} <span style="font-size:11px;color:var(--text-muted);">({sym})</span></div>
@@ -528,56 +543,76 @@ for sym in sorted_syms:
               • <strong>操盘策略</strong>：{strat_desc}
             </div>
             <div class="target-card-hint">
-              👆 点击穿透查看 {total_lots} 笔批次明细 (按买入时间排序) →
+              👆 点击穿透查看 {total_lots_count} 笔批次明细 (按买入时间排序) →
             </div>
           </div>"""
-    target_cards_html.append(card)
-    
-    # Store for client-side JS Modal
+
+for sym in sorted_syms_by_mkt:
+    sym_lots = active_lots_by_sym.get(sym, {})
+    has_cmb = bool(sym_lots.get("CMB"))
+    has_pa = bool(sym_lots.get("PA"))
+
+    all_lots_for_sym = all_lots_by_sym.get(sym, [])
+    cmb_lots_for_sym = [l for l in all_lots_for_sym if l["account_id"] == "CMB"]
+    pa_lots_for_sym = [l for l in all_lots_for_sym if l["account_id"] == "PA"]
+
     target_js_data[sym] = {
-        "symbol": sym,
-        "name": m['name'],
-        "asset_class": m['asset_class'],
-        "category": cat_tag,
-        "qty_unit": m['qty_unit'],
-        "shares": m['shares'],
-        "cost_unit": m['cost_unit'],
-        "current_price": m['current_price'],
-        "market_value": m['market_value'],
-        "floating_pnl": m['floating_pnl'],
-        "return_rate": m['return_rate'],
-        "total_trades": m['total_trades'],
-        "win_trades": m['win_trades'],
-        "loss_trades": m['loss_trades'],
-        "win_rate": m['win_rate'],
-        "net_t_pnl": m['net_t_pnl'],
-        "profit_factor": m['profit_factor'],
-        "profit_factor_str": m['profit_factor_str'],
-        "avg_win_loss_str": m['avg_win_loss_str'],
-        "dividends": m['dividends'],
-        "total_withdrawn": m['total_withdrawn'],
-        "strategy": strat_desc,
-        "physics": physics_by_sym.get(sym),
-        "lots": all_lots_by_sym.get(sym, [])
+        "ALL": {
+            **target_metrics_all[sym],
+            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
+            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
+            "physics": physics_by_sym.get(sym),
+            "lots": all_lots_for_sym
+        }
     }
 
-target_cards_block = "\n\n".join(target_cards_html)
+    if has_cmb or cmb_lots_for_sym:
+        target_js_data[sym]["CMB"] = {
+            **(target_metrics_cmb.get(sym) or target_metrics_all[sym]),
+            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
+            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
+            "physics": physics_by_sym.get(sym),
+            "lots": cmb_lots_for_sym
+        }
 
-# Generate Tab: 38 Active Holdings table rows (sorted by return_rate DESC)
-total_active_mkt = sum(target_metrics[s]["market_value"] for s in sorted_syms)
+    if has_pa or pa_lots_for_sym:
+        target_js_data[sym]["PA"] = {
+            **(target_metrics_pa.get(sym) or target_metrics_all[sym]),
+            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
+            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
+            "physics": physics_by_sym.get(sym),
+            "lots": pa_lots_for_sym
+        }
+
+    if has_cmb and has_pa:
+        # Overlapping symbol: generate 3 cards
+        target_cards_html.append(build_single_card(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False))
+        target_cards_html.append(build_single_card(sym, target_metrics_cmb[sym], "CMB", "CMB", is_hidden=True))
+        target_cards_html.append(build_single_card(sym, target_metrics_pa[sym], "PA", "PA", is_hidden=True))
+    elif has_cmb:
+        target_cards_html.append(build_single_card(sym, target_metrics_cmb[sym], "CMB", "ALL,CMB", is_hidden=False))
+    elif has_pa:
+        target_cards_html.append(build_single_card(sym, target_metrics_pa[sym], "PA", "ALL,PA", is_hidden=False))
+
+target_cards_block = chr(10).join(target_cards_html)
+
+# Generate Tab: Active Holdings table rows
+total_active_mkt_all = sum(target_metrics_all[s]["market_value"] for s in active_syms_list)
+
 holdings_active_syms = sorted(
-    sorted_syms,
-    key=lambda s: target_metrics[s]["return_rate"],
+    active_syms_list,
+    key=lambda s: target_metrics_all[s]["return_rate"],
     reverse=True
 )
 
 rows_holdings_html = []
-for idx, sym in enumerate(holdings_active_syms, 1):
-    m = target_metrics[sym]
+current_initial_rank = 1
+
+def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, initial_idx=1):
     name = m["name"]
     notes = SYMBOL_NOTES.get(sym, ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)', '依托底仓操盘，杜绝盲目左侧补仓。'))
     cat_tag, strat_tag, border_col, strat_desc = notes
-    
+
     qty_str = f"{m['shares']:,} {m['qty_unit']}"
     cost_str = f"¥{m['cost_unit']:.3f}" if m['cost_unit'] < 2.0 else f"¥{m['cost_unit']:.2f}"
     curr_p_str = f"¥{m['current_price']:.3f}" if m['current_price'] < 2.0 else f"¥{m['current_price']:.2f}"
@@ -585,40 +620,40 @@ for idx, sym in enumerate(holdings_active_syms, 1):
     tot_cost_str = f"¥{tot_cost:,.2f}"
     mkt_val = m['market_value']
     mkt_val_str = f"¥{mkt_val:,.2f}"
-    
+
     fpnl = m['floating_pnl']
     fpnl_class = "val-green" if fpnl >= 0 else "val-red"
     fpnl_str = f"-¥{abs(fpnl):,.2f}" if fpnl < 0 else (f"+¥{fpnl:,.2f}" if fpnl > 0 else "¥0.00")
-    
+
     rr = m['return_rate']
     rr_class = "val-green" if rr >= 0 else "val-red"
-    rr_str = f"{"+" if rr > 0 else ""}{rr*100:.2f}%"
-    
+    rr_prefix = "+" if rr > 0 else ""
+    rr_str = f"{rr_prefix}{rr*100:.2f}%"
+
     mult = (mkt_val / tot_cost) if tot_cost > 0 else 1.0
     mult_class = "val-green" if mult >= 1.0 else "val-red"
     mult_str = f"{mult:.2f}x"
-    
-    weight = (mkt_val / total_active_mkt * 100) if total_active_mkt > 0 else 0
+
+    weight = (mkt_val / total_active_mkt_all * 100) if total_active_mkt_all > 0 else 0
     weight_str = f"{weight:.2f}%"
-    
+
     p_row = physics_by_sym.get(sym) or {}
     badge_table = format_physics_badge_table(p_row)
     rank250_val = p_row.get("pct_rank_250", 50.0)
     rank250_cls = "val-green" if rank250_val <= 20 else ("val-purple" if rank250_val >= 80 else "")
 
-    act_accs = set(l.get("account_id", "CMB") for l in act_lots)
-    if "CMB" in act_accs and "PA" in act_accs:
+    if acc_mode == "BOTH" or acc_mode == "ALL":
         tbl_acc_badge = '<span class="tag tag-purple" style="font-size:10px;padding:1px 6px;">CMB+PA</span>'
-        tbl_acc_val = 'BOTH'
-    elif "PA" in act_accs:
+    elif acc_mode == "PA":
         tbl_acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>'
-        tbl_acc_val = 'PA'
     else:
         tbl_acc_badge = '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
-        tbl_acc_val = 'CMB'
 
-    row = f'''              <tr data-symbol="{sym}" data-account="{tbl_acc_val}" data-pnl-rate="{rr}" data-pnl-val="{fpnl}" data-mkt-val="{mkt_val}" data-cost-val="{tot_cost}" data-rank-250="{rank250_val:.2f}">
-                <td class="rank-cell">{idx}</td>
+    display_style = 'style="display:none;"' if is_hidden else ''
+    rank_disp = str(initial_idx) if not is_hidden else '-'
+
+    return f"""              <tr data-symbol="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-pnl-rate="{rr}" data-pnl-val="{fpnl}" data-mkt-val="{mkt_val}" data-cost-val="{tot_cost}" data-rank-250="{rank250_val:.2f}" {display_style}>
+                <td class="rank-cell">{rank_disp}</td>
                 <td>{tbl_acc_badge}</td>
                 <td><code>{sym}</code></td>
                 <td><strong>{name}</strong></td>
@@ -636,13 +671,28 @@ for idx, sym in enumerate(holdings_active_syms, 1):
                 <td><strong class="{rank250_cls}">{rank250_val:.1f}%</strong></td>
                 <td><span class="tag tag-blue">{strat_tag}</span></td>
                 <td><button class="subview-btn" style="padding:2px 8px;font-size:11px;" onclick="openTargetModal('{sym}')">🎯 穿透明细</button></td>
-              </tr>'''
-    rows_holdings_html.append(row)
+              </tr>"""
+
+for sym in holdings_active_syms:
+    sym_lots = active_lots_by_sym.get(sym, {})
+    has_cmb = bool(sym_lots.get("CMB"))
+    has_pa = bool(sym_lots.get("PA"))
+
+    if has_cmb and has_pa:
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False, initial_idx=current_initial_rank))
+        current_initial_rank += 1
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_cmb[sym], "CMB", "CMB", is_hidden=True))
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_pa[sym], "PA", "PA", is_hidden=True))
+    elif has_cmb:
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_cmb[sym], "CMB", "ALL,CMB", is_hidden=False, initial_idx=current_initial_rank))
+        current_initial_rank += 1
+    elif has_pa:
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_pa[sym], "PA", "ALL,PA", is_hidden=False, initial_idx=current_initial_rank))
+        current_initial_rank += 1
 
 tbody_holdings = chr(10).join(rows_holdings_html)
 
-
-# Generate Tab 3 Active lots rows (188 active lots)
+# Generate Tab 3 Active lots rows (time dimension)
 rows_time_html = []
 for idx, lot in enumerate(lots_active_data, 1):
     sym = lot["symbol"]
@@ -661,7 +711,7 @@ for idx, lot in enumerate(lots_active_data, 1):
     rr_class = "val-green" if rr >= 0 else "val-red"
     rr_prefix = "+" if rr > 0 else ""
     rr_str = f"{rr_prefix}{rr*100:.2f}%"
-    
+
     if rr > 0.15:
         strat = '<span class="tag tag-green">[跟踪止盈]</span>'
     elif rr > 0.0:
@@ -675,10 +725,11 @@ for idx, lot in enumerate(lots_active_data, 1):
     else:
         strat = '<span class="tag tag-purple">[山顶代冲消融]</span>'
 
-    lot_acc = lot.get("account_id", "CMB")
+    lot_acc = lot.get("account_id") or "CMB"
+    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if lot_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
     rows_time_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}">
       <td class="rank-cell">{idx}</td>
-      <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">{lot.get("account_id", "CMB")}</span></td>
+      <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
       <td><code>{lot_id}</code></td>
       <td>{buy_date}</td>
@@ -690,7 +741,7 @@ for idx, lot in enumerate(lots_active_data, 1):
       <td>{strat}</td>
     </tr>""")
 
-tbody_time = "\n".join(rows_time_html)
+tbody_time = chr(10).join(rows_time_html)
 
 # Ranked by PnL
 lots_by_pnl = sorted(lots_active_data, key=lambda x: x["return_rate"], reverse=True)
@@ -712,7 +763,7 @@ for idx, lot in enumerate(lots_by_pnl, 1):
     rr_class = "val-green" if rr >= 0 else "val-red"
     rr_prefix = "+" if rr > 0 else ""
     rr_str = f"{rr_prefix}{rr*100:.2f}%"
-    
+
     if rr > 0.15:
         strat = '<span class="tag tag-green">[跟踪止盈]</span>'
     elif rr > 0.0:
@@ -726,10 +777,11 @@ for idx, lot in enumerate(lots_by_pnl, 1):
     else:
         strat = '<span class="tag tag-purple">[山顶代冲消融]</span>'
 
-    lot_acc = lot.get("account_id", "CMB")
+    lot_acc = lot.get("account_id") or "CMB"
+    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if lot_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
     rows_pnl_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}" data-return="{rr}">
       <td class="rank-cell">{idx}</td>
-      <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">{lot.get("account_id", "CMB")}</span></td>
+      <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
       <td><code>{lot_id}</code></td>
       <td>{buy_date}</td>
@@ -741,9 +793,9 @@ for idx, lot in enumerate(lots_by_pnl, 1):
       <td>{strat}</td>
     </tr>""")
 
-tbody_pnl = "\n".join(rows_pnl_html)
+tbody_pnl = chr(10).join(rows_pnl_html)
 
-# Generate Tab 4 Closed Trades rows (704 trades)
+# Generate Tab 4 Closed Trades rows
 rows_trades_html = []
 for idx, tr in enumerate(closed_trades_raw, 1):
     tr_id, name, sym, buy_time, buy_p, exec_time, sell_p, qty, pnl, action, tr_acc = tr
@@ -758,7 +810,7 @@ for idx, tr in enumerate(closed_trades_raw, 1):
     rr_class = "val-green" if rr >= 0 else "val-red"
     rr_prefix = "+" if rr > 0 else ""
     rr_str = f"{rr_prefix}{rr*100:.2f}%"
-    
+
     if pnl < 0:
         tag = '<span class="tag tag-red">微损止损</span>'
     elif rr >= 0.10:
@@ -767,14 +819,15 @@ for idx, tr in enumerate(closed_trades_raw, 1):
         tag = '<span class="tag tag-green">波段止盈落袋</span>'
     else:
         tag = '<span class="tag tag-blue">底仓代冲做T</span>'
-        
+
     p_buy_fmt = f"¥{buy_p:.3f}" if buy_p < 2.0 else f"¥{buy_p:.2f}"
     p_sell_fmt = f"¥{sell_p:.3f}" if sell_p < 2.0 else f"¥{sell_p:.2f}"
 
     trade_acc = tr_acc or "CMB"
+    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if trade_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
     rows_trades_html.append(f"""              <tr data-symbol="{sym}" data-account="{trade_acc}">
       <td>{idx}</td>
-      <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">{tr_acc or "CMB"}</span></td>
+      <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
       <td>{buy_d} ({p_buy_fmt})</td>
       <td>{sell_d} ({p_sell_fmt})</td>
@@ -784,16 +837,115 @@ for idx, tr in enumerate(closed_trades_raw, 1):
       <td>{tag}</td>
     </tr>""")
 
-tbody_trades = "\n".join(rows_trades_html)
+tbody_trades = chr(10).join(rows_trades_html)
 
 # Symbol select options for Tab 3 filter
-symbol_options = [f'<option value="ALL">全部 {len(sorted_syms)} 大标的 ({len(lots_active_data)} 笔在场活跃批次)</option>']
-for s in sorted_syms:
-    m = target_metrics[s]
+symbol_options = [f'<option value="ALL">全部 {len(sorted_syms_by_mkt)} 大标的 ({len(lots_active_data)} 笔在场活跃批次)</option>']
+for s in sorted_syms_by_mkt:
+    m = target_metrics_all[s]
     symbol_options.append(f'<option value="{s}">{m["name"]} ({s}) - {m["active_lots_count"]} 笔活跃批次</option>')
-symbol_select_options_html = "\n".join(symbol_options)
+symbol_select_options_html = chr(10).join(symbol_options)
 
-# Convert target_js_data to JSON string for client-side embedding
+# Global Core symbols for macro KPI
+GLOBAL_CORE_SYMBOLS = {'513300.SH', '513500.SH', '518880.SH', '513880.SH', '513080.SH', '513030.SH'}
+
+# Compute complete ACCOUNT_METRICS for ALL, CMB, PA
+account_metrics = {}
+for acc in ['ALL', 'CMB', 'PA']:
+    if acc == 'ALL':
+        acc_lots = lots_active_data
+        acc_trades = closed_trades_raw
+        div_sum = sum(sum(v.values()) for v in DIVIDENDS_BY_SYM_AND_ACC.values())
+    else:
+        acc_lots = [l for l in lots_active_data if (l.get('account_id') or 'CMB') == acc]
+        acc_trades = [t for t in closed_trades_raw if (t[10] or 'CMB') == acc]
+        div_sum = sum(v.get(acc, 0.0) for v in DIVIDENDS_BY_SYM_AND_ACC.values())
+
+    active_syms = set(l['symbol'] for l in acc_lots)
+    total_active_syms = len(active_syms)
+    total_active_lots = len(acc_lots)
+
+    cost_val = sum(l['remaining_quantity'] * l['cost_basis_unit'] for l in acc_lots)
+    mkt_val = sum(l['remaining_quantity'] * l['current_price'] for l in acc_lots)
+    pnl_val = sum(l['floating_pnl'] for l in acc_lots)
+    pnl_rate = (pnl_val / cost_val) if cost_val > 0 else 0.0
+    mult_val = (mkt_val / cost_val) if cost_val > 0 else 1.0
+
+    tr_cnt = len(acc_trades)
+    win_cnt = sum(1 for t in acc_trades if t[8] > 0)
+    loss_cnt = sum(1 for t in acc_trades if t[8] < 0)
+    real_pnl = sum(t[8] for t in acc_trades)
+    win_rate = (win_cnt / tr_cnt * 100) if tr_cnt > 0 else 0.0
+    win_sum = sum(t[8] for t in acc_trades if t[8] > 0)
+    loss_sum = sum(abs(t[8]) for t in acc_trades if t[8] < 0)
+    if tr_cnt == 0:
+        pf_str = "--"
+    elif loss_cnt == 0:
+        pf_str = "全胜"
+    else:
+        pf = win_sum / loss_sum if loss_sum > 0 else 999.0
+        pf_str = f"{pf:.2f}"
+
+    total_withdrawn = real_pnl + div_sum
+
+    sym_lots_map = {}
+    for l in acc_lots:
+        s = l['symbol']
+        if s not in sym_lots_map:
+            sym_lots_map[s] = []
+        sym_lots_map[s].append(l)
+
+    pos_syms = []
+    neg_syms = []
+    for s, lots in sym_lots_map.items():
+        spnl = sum(l['floating_pnl'] for l in lots)
+        if spnl >= 0:
+            pos_syms.append(spnl)
+        else:
+            neg_syms.append(spnl)
+
+    pos_sum = sum(pos_syms)
+    neg_sum = sum(neg_syms)
+
+    global_lots = [l for l in acc_lots if l['symbol'] in GLOBAL_CORE_SYMBOLS]
+    global_pnl = sum(l['floating_pnl'] for l in global_lots)
+
+    pnl_cls = "val-green" if pnl_val >= 0 else "val-red"
+    pnl_pfx = "+" if pnl_val > 0 else ""
+
+    account_metrics[acc] = {
+        "acc": acc,
+        "active_syms_count": total_active_syms,
+        "active_lots_count": total_active_lots,
+        "cost_val": cost_val,
+        "cost_str": f"¥{cost_val:,.2f}",
+        "mkt_val": mkt_val,
+        "mkt_str": f"¥{mkt_val:,.2f}",
+        "mkt_w_str": f"{mkt_val/10000:.2f} 万",
+        "pnl_val": pnl_val,
+        "pnl_str": f"{pnl_pfx}¥{pnl_val:,.2f} ({pnl_rate*100:.2f}%)",
+        "pnl_cls": pnl_cls,
+        "multiple_str": f"{mult_val:.2f}x",
+        "closed_trades_count": tr_cnt,
+        "win_trades_count": win_cnt,
+        "loss_trades_count": loss_cnt,
+        "realized_pnl_val": real_pnl,
+        "realized_pnl_str": f"{'+' if real_pnl >= 0 else ''}¥{real_pnl:,.2f}",
+        "win_rate_str": f"{win_rate:.2f}%",
+        "win_loss_ratio_str": pf_str,
+        "dividends_val": div_sum,
+        "dividends_str": f"+¥{div_sum:,.2f}",
+        "withdrawn_val": total_withdrawn,
+        "withdrawn_str": f"+¥{total_withdrawn:,.2f}",
+        "pos_count": len(pos_syms),
+        "neg_count": len(neg_syms),
+        "pos_sum_str": f"+¥{pos_sum/10000:.2f}万",
+        "neg_sum_str": f"¥{neg_sum/10000:.2f}万",
+        "global_pnl_str": f"+¥{global_pnl/10000:.2f} 万" if global_pnl >= 0 else f"-¥{abs(global_pnl)/10000:.2f} 万",
+    }
+
+# Convert data to JSON string for client-side embedding
+account_metrics_json = json.dumps(account_metrics, ensure_ascii=False)
 target_js_json = json.dumps(target_js_data, ensure_ascii=False)
 
 print("HTML Components prepared. Assembling full page...")
@@ -802,46 +954,10 @@ print("HTML Components prepared. Assembling full page...")
 with open(template_path, "r", encoding="utf-8") as tf:
     html_template = tf.read()
 
-# Dynamic KPI calculations for interpolation
-total_active_syms = len(sorted_syms)
-total_active_lots = len(lots_active_data)
-
-total_cost = sum(l['remaining_quantity'] * l['cost_basis_unit'] for l in lots_active_data)
-total_mkt = sum(l['remaining_quantity'] * l['current_price'] for l in lots_active_data)
-total_float_pnl = sum(l['floating_pnl'] for l in lots_active_data)
-
-cmb_lots = [l for l in lots_active_data if l.get("account_id") == "CMB"]
-pa_lots = [l for l in lots_active_data if l.get("account_id") == "PA"]
-
-cmb_active_syms = len(set(l['symbol'] for l in cmb_lots))
-pa_active_syms = len(set(l['symbol'] for l in pa_lots))
-cmb_active_lots = len(cmb_lots)
-pa_active_lots = len(pa_lots)
-
-cmb_cost = sum(l['remaining_quantity'] * l['cost_basis_unit'] for l in cmb_lots)
-cmb_mkt = sum(l['remaining_quantity'] * l['current_price'] for l in cmb_lots)
-cmb_float_pnl = sum(l['floating_pnl'] for l in cmb_lots)
-
-pa_cost = sum(l['remaining_quantity'] * l['cost_basis_unit'] for l in pa_lots)
-pa_mkt = sum(l['remaining_quantity'] * l['current_price'] for l in pa_lots)
-pa_float_pnl = sum(l['floating_pnl'] for l in pa_lots)
-
-# Trades stats
-total_closed_trades = len(closed_trades_raw)
-total_win_trades = sum(1 for t in closed_trades_raw if t[8] > 0)
-total_loss_trades = sum(1 for t in closed_trades_raw if t[8] < 0)
-total_realized_pnl = sum(t[8] for t in closed_trades_raw)
-win_rate = (total_win_trades / total_closed_trades * 100) if total_closed_trades > 0 else 0
-win_pnl_sum = sum(t[8] for t in closed_trades_raw if t[8] > 0)
-loss_pnl_sum = sum(abs(t[8]) for t in closed_trades_raw if t[8] < 0)
-win_loss_ratio = (win_pnl_sum / loss_pnl_sum) if loss_pnl_sum > 0 else 999.0
-
-# Dividends & Cash Withdrawn
-total_divs = sum(DIVIDENDS_MAP.values())
-total_withdrawn_cash = total_realized_pnl + total_divs
-
-float_pnl_cls = "val-green" if total_float_pnl >= 0 else "val-red"
-float_pnl_prefix = "+" if total_float_pnl > 0 else ""
+# Dynamic Placeholders interpolation
+m_all = account_metrics["ALL"]
+m_cmb = account_metrics["CMB"]
+m_pa = account_metrics["PA"]
 
 html_content = html_template.replace("{{TARGET_CARDS_BLOCK}}", target_cards_block)
 html_content = html_content.replace("{{TBODY_HOLDINGS}}", tbody_holdings)
@@ -849,43 +965,47 @@ html_content = html_content.replace("{{TBODY_TIME}}", tbody_time)
 html_content = html_content.replace("{{TBODY_PNL}}", tbody_pnl)
 html_content = html_content.replace("{{TBODY_TRADES}}", tbody_trades)
 html_content = html_content.replace("{{SYMBOL_OPTIONS}}", symbol_select_options_html)
+html_content = html_content.replace("{{ACCOUNT_METRICS_JSON}}", account_metrics_json)
 html_content = html_content.replace("{{TARGET_JS_JSON}}", target_js_json)
 
-# Dynamic Placeholders
-html_content = html_content.replace("{{TOTAL_ACTIVE_SYMBOLS_COUNT}}", str(total_active_syms))
-html_content = html_content.replace("{{TOTAL_ACTIVE_LOTS_COUNT}}", str(total_active_lots))
-html_content = html_content.replace("{{TOTAL_CLOSED_TRADES_COUNT}}", str(total_closed_trades))
-html_content = html_content.replace("{{TOTAL_WIN_TRADES_COUNT}}", str(total_win_trades))
-html_content = html_content.replace("{{TOTAL_LOSS_TRADES_COUNT}}", str(total_loss_trades))
-html_content = html_content.replace("{{TOTAL_WIN_RATE_STR}}", f"{win_rate:.2f}%")
-html_content = html_content.replace("{{TOTAL_WIN_LOSS_RATIO}}", f"{win_loss_ratio:.2f}")
+# Dynamic Placeholder Tokens
+html_content = html_content.replace("{{TOTAL_ACTIVE_SYMBOLS_COUNT}}", str(m_all["active_syms_count"]))
+html_content = html_content.replace("{{TOTAL_ACTIVE_LOTS_COUNT}}", str(m_all["active_lots_count"]))
+html_content = html_content.replace("{{TOTAL_CLOSED_TRADES_COUNT}}", str(m_all["closed_trades_count"]))
+html_content = html_content.replace("{{TOTAL_WIN_TRADES_COUNT}}", str(m_all["win_trades_count"]))
+html_content = html_content.replace("{{TOTAL_LOSS_TRADES_COUNT}}", str(m_all["loss_trades_count"]))
+html_content = html_content.replace("{{TOTAL_WIN_RATE_STR}}", m_all["win_rate_str"])
+html_content = html_content.replace("{{TOTAL_WIN_LOSS_RATIO}}", m_all["win_loss_ratio_str"])
 
-html_content = html_content.replace("{{COMBINED_TOTAL_MKT_STR}}", f"¥{total_mkt/10000:.2f} 万")
-html_content = html_content.replace("{{COMBINED_TOTAL_COST_STR}}", f"¥{total_cost:,.2f}")
-float_pnl_pct = (total_float_pnl / total_cost * 100) if total_cost > 0 else 0.0
-html_content = html_content.replace("{{COMBINED_TOTAL_FLOAT_PNL_STR}}", f"{float_pnl_prefix}¥{total_float_pnl:,.2f} ({float_pnl_pct:.2f}%)")
-html_content = html_content.replace("{{COMBINED_TOTAL_FLOAT_PNL_CLS}}", float_pnl_cls)
+html_content = html_content.replace("{{COMBINED_TOTAL_MKT_STR}}", f"¥{m_all['mkt_val']/10000:.2f} 万")
+html_content = html_content.replace("{{COMBINED_TOTAL_COST_STR}}", m_all["cost_str"])
+html_content = html_content.replace("{{COMBINED_TOTAL_FLOAT_PNL_STR}}", m_all["pnl_str"])
+html_content = html_content.replace("{{COMBINED_TOTAL_FLOAT_PNL_CLS}}", m_all["pnl_cls"])
+html_content = html_content.replace("{{COMBINED_TOTAL_MULT_STR}}", m_all["multiple_str"])
+html_content = html_content.replace("{{COMBINED_GLOBAL_PNL_STR}}", m_all["global_pnl_str"])
+html_content = html_content.replace("{{TOTAL_POS_COUNT}}", str(m_all["pos_count"]))
+html_content = html_content.replace("{{TOTAL_NEG_COUNT}}", str(m_all["neg_count"]))
+html_content = html_content.replace("{{TOTAL_POS_SUM_STR}}", m_all["pos_sum_str"])
+html_content = html_content.replace("{{TOTAL_NEG_SUM_STR}}", m_all["neg_sum_str"])
 
-html_content = html_content.replace("{{TOTAL_REALIZED_PNL_STR}}", f"+¥{total_realized_pnl:,.2f}")
-html_content = html_content.replace("{{TOTAL_DIVIDENDS_STR}}", f"+¥{total_divs:,.2f}")
-html_content = html_content.replace("{{TOTAL_WITHDRAWN_CASH_STR}}", f"+¥{total_withdrawn_cash:,.2f}")
+html_content = html_content.replace("{{TOTAL_REALIZED_PNL_STR}}", m_all["realized_pnl_str"])
+html_content = html_content.replace("{{TOTAL_DIVIDENDS_STR}}", m_all["dividends_str"])
+html_content = html_content.replace("{{TOTAL_WITHDRAWN_CASH_STR}}", m_all["withdrawn_str"])
 
-html_content = html_content.replace("{{CMB_ACTIVE_SYMBOLS_COUNT}}", str(cmb_active_syms))
-html_content = html_content.replace("{{CMB_ACTIVE_LOTS_COUNT}}", str(cmb_active_lots))
-html_content = html_content.replace("{{CMB_COST_STR}}", f"¥{cmb_cost:,.2f}")
-html_content = html_content.replace("{{CMB_MKT_STR}}", f"¥{cmb_mkt:,.2f}")
-html_content = html_content.replace("{{CMB_MKT_W_STR}}", f"{cmb_mkt/10000:.1f} 万")
+html_content = html_content.replace("{{CMB_ACTIVE_SYMBOLS_COUNT}}", str(m_cmb["active_syms_count"]))
+html_content = html_content.replace("{{CMB_ACTIVE_LOTS_COUNT}}", str(m_cmb["active_lots_count"]))
+html_content = html_content.replace("{{CMB_COST_STR}}", m_cmb["cost_str"])
+html_content = html_content.replace("{{CMB_MKT_STR}}", m_cmb["mkt_str"])
+html_content = html_content.replace("{{CMB_MKT_W_STR}}", m_cmb["mkt_w_str"])
 
-html_content = html_content.replace("{{PA_ACTIVE_SYMBOLS_COUNT}}", str(pa_active_syms))
-html_content = html_content.replace("{{PA_ACTIVE_LOTS_COUNT}}", str(pa_active_lots))
-html_content = html_content.replace("{{PA_COST_STR}}", f"¥{pa_cost:,.2f}")
-html_content = html_content.replace("{{PA_MKT_STR}}", f"¥{pa_mkt:,.2f}")
-html_content = html_content.replace("{{PA_MKT_W_STR}}", f"{pa_mkt/10000:.1f} 万")
+html_content = html_content.replace("{{PA_ACTIVE_SYMBOLS_COUNT}}", str(m_pa["active_syms_count"]))
+html_content = html_content.replace("{{PA_ACTIVE_LOTS_COUNT}}", str(m_pa["active_lots_count"]))
+html_content = html_content.replace("{{PA_COST_STR}}", m_pa["cost_str"])
+html_content = html_content.replace("{{PA_MKT_STR}}", m_pa["mkt_str"])
+html_content = html_content.replace("{{PA_MKT_W_STR}}", m_pa["mkt_w_str"])
 
 out_path = os.path.abspath(args.out)
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(html_content)
 
 print(f"Global dashboard successfully generated: {out_path} (Size: {os.path.getsize(out_path):,} bytes)")
-
-
