@@ -177,7 +177,7 @@ export function computePhysicsRadar(
 
   let m = 0;
   if (maVol20 > 0 && volToday > 0) {
-    m = round(volToday / maVol20, 2);
+    m = round(volToday / maVol20, 6);
   } else if (volToday === 0) {
     m = 0;
   }
