@@ -119,6 +119,8 @@ export class AppDatabase {
   public getConnection(): Database {
     if (!this._conn) {
       this._conn = new Database(this.dbPath);
+      this._conn.run("PRAGMA journal_mode = WAL;");
+      this._conn.run("PRAGMA busy_timeout = 5000;");
       this._conn.run("PRAGMA foreign_keys = ON;");
     }
     return this._conn;
