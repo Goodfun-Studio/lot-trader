@@ -104,43 +104,76 @@ export class QuoteProvider {
       return all.slice(-count);
     }
 
-    // Request Tencent fqkline endpoint
-    const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + tc + ",day,,," + count + ",qfq";
+    // 1. Request Tencent fqkline endpoint
     try {
+      const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + tc + ",day,,," + count + ",qfq";
       const resp = await fetch(url, {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(3000),
       });
-      if (!resp.ok) {
-        return [];
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text.startsWith("{")) {
+          const json: any = JSON.parse(text);
+          if (json && json.code === 0 && json.data && json.data[tc]) {
+            const targetData = json.data[tc];
+            const rawBars: any[] = targetData.qfqday || targetData.day || [];
+            if (Array.isArray(rawBars) && rawBars.length >= 5) {
+              const bars: DailyBar[] = [];
+              for (const item of rawBars) {
+                if (!Array.isArray(item) || item.length < 6) continue;
+                const [date, openStr, closeStr, highStr, lowStr, volStr] = item;
+                bars.push({
+                  date: String(date),
+                  open: parseFloat(openStr) || 0,
+                  close: parseFloat(closeStr) || 0,
+                  high: parseFloat(highStr) || 0,
+                  low: parseFloat(lowStr) || 0,
+                  volume: parseFloat(volStr) || 0,
+                });
+              }
+              if (bars.length >= 5) {
+                return bars.slice(-count);
+              }
+            }
+          }
+        }
       }
-      const json: any = await resp.json();
-      if (!json || json.code !== 0 || !json.data || !json.data[tc]) {
-        return [];
-      }
-      const targetData = json.data[tc];
-      const rawBars: any[] = targetData.qfqday || targetData.day || [];
-      if (!Array.isArray(rawBars)) {
-        return [];
-      }
-
-      const bars: DailyBar[] = [];
-      for (const item of rawBars) {
-        if (!Array.isArray(item) || item.length < 6) continue;
-        const [date, openStr, closeStr, highStr, lowStr, volStr] = item;
-        bars.push({
-          date: String(date),
-          open: parseFloat(openStr) || 0,
-          close: parseFloat(closeStr) || 0,
-          high: parseFloat(highStr) || 0,
-          low: parseFloat(lowStr) || 0,
-          volume: parseFloat(volStr) || 0,
-        });
-      }
-      return bars.slice(-count);
     } catch {
-      return [];
+      // Fall through to Sina fallback
     }
+
+    // 2. Sina KLine fallback
+    try {
+      const sinaUrl = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=" + tc + "&scale=240&ma=no&datalen=" + count;
+      const resp = await fetch(sinaUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (resp.ok) {
+        const json: any = await resp.json();
+        if (Array.isArray(json) && json.length >= 5) {
+          const bars: DailyBar[] = [];
+          for (const item of json) {
+            bars.push({
+              date: String(item.day),
+              open: parseFloat(item.open) || 0,
+              close: parseFloat(item.close) || 0,
+              high: parseFloat(item.high) || 0,
+              low: parseFloat(item.low) || 0,
+              volume: (parseFloat(item.volume) || 0) / 100, // convert shares to 手
+            });
+          }
+          if (bars.length >= 5) {
+            return bars.slice(-count);
+          }
+        }
+      }
+    } catch {
+      // Return empty array
+    }
+
+    return [];
   }
 
 
