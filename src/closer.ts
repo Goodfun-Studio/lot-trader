@@ -45,6 +45,7 @@ export class LotCloser {
     }
 
     const symbol = row.symbol;
+    const accountId = row.account_id || 'DEFAULT';
     const settlementMode = this.arbitrator.getSymbolSettlementMode(symbol);
 
     const bDateStr = row.buy_time.slice(0, 10);
@@ -65,17 +66,17 @@ export class LotCloser {
           throw new Error(`标的 ${symbol} 为法定 T+1，当日买入份额无法直接平仓。若有可用底仓请指定 --substitute-core`);
         }
 
-        const availCore = this.arbitrator.computeAvailableCorePosition(symbol, now);
+        const availCore = this.arbitrator.computeAvailableCorePosition(symbol, now, accountId);
         if (availCore < qtyToClose) {
-          throw new Error(`底仓可用配额不足，严防裸卖空！可用底仓仅 ${availCore} 股，申请代冲 ${qtyToClose} 股`);
+          throw new Error(`底仓可用配额不足，严防裸卖空！账户 ${accountId} 可用底仓仅 ${availCore} 股，申请代冲 ${qtyToClose} 股`);
         }
 
-        const coreRow = this.conn.query<{ lot_id: string }, [string, string]>(
+        const coreRow = this.conn.query<{ lot_id: string }, [string, string, string]>(
           `SELECT lot_id FROM lots
-           WHERE symbol = ? AND status = 'ACTIVE' AND date(buy_time) < date(?)
+           WHERE symbol = ? AND account_id = ? AND status = 'ACTIVE' AND date(buy_time) < date(?)
            ORDER BY buy_time ASC
            LIMIT 1`
-        ).get(symbol, now.toISOString());
+        ).get(symbol, accountId, now.toISOString());
 
         if (coreRow) {
           substitutedCoreLotId = coreRow.lot_id;
@@ -139,10 +140,11 @@ export class LotCloser {
       );
 
       this.conn.run(
-        `INSERT INTO trades (trade_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tradeId,
+          accountId,
           lotId,
           tradeAction,
           closePrice.toString(),
@@ -159,6 +161,7 @@ export class LotCloser {
     const updatedRow = this.conn.query<any, [string]>("SELECT * FROM lots WHERE lot_id = ?").get(lotId)!;
     const updatedLot: Lot = {
       lot_id: updatedRow.lot_id,
+      account_id: updatedRow.account_id || accountId,
       symbol: updatedRow.symbol,
       buy_time: new Date(updatedRow.buy_time),
       buy_price: Number(updatedRow.buy_price),
@@ -181,6 +184,7 @@ export class LotCloser {
 
     const trade: Trade = {
       trade_id: tradeId,
+      account_id: accountId,
       lot_id: lotId,
       action: tradeAction,
       price: closePrice,
@@ -193,4 +197,3 @@ export class LotCloser {
     return [updatedLot, trade];
   }
 }
-

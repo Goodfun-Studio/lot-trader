@@ -46,6 +46,7 @@ export interface SymbolConfig {
 
 export interface Lot {
   lot_id: string;
+  account_id: string;
   symbol: string;
   buy_time: Date;
   buy_price: number;
@@ -72,6 +73,7 @@ export interface Lot {
 export interface Signal {
   signal_id: string;
   lot_id: string;
+  account_id?: string;
   symbol: string;
   signal_type: SignalType;
   trigger_return_rate: number;
@@ -85,6 +87,7 @@ export interface Signal {
 export interface Trade {
   trade_id: string;
   lot_id: string;
+  account_id: string;
   action: TradeAction;
   price: number;
   quantity: number;

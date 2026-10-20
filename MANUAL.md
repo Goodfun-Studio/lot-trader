@@ -63,29 +63,30 @@ trade --help
 2. **批次独立生命周期**：每次建仓生成独立 Lot。浮亏超 -20% 属于深跌等待加仓区，绝不冻结。
 3. **加仓防抖守卫**：梯级加仓执行 `trade lot add`，系统会自动限制 48 小时同源冷却并计算整百股数。
 4. **单标的 30% 仓位硬顶**：买入前系统会自动核算组合占比，超 30% 需向用户提示风控预警。
+5. **多账户独立核算与底仓代冲强隔离**：支持多券商账户（`--account <ACC>`，默认 `DEFAULT`）。日内代冲做 T 严禁跨账户挪用底仓，加仓默认继承父批次账户。
 
 ### 命令速查字典
 - 录入买入建仓：
-  trade lot buy --symbol <代码, 如 518880.SH> --price <单价> --qty <股数, 需整百> --json
+  trade lot buy --symbol <代码, 如 518880.SH> --price <单价> --qty <股数, 需整百> [--account <账户代码>] --json
 
 - 梯级逢低加仓：
-  trade lot add --parent-lot-id <父批次ID, 如 LOT-20261019-001> --price <当前单价> [--amount 10000] --json
+  trade lot add --parent-lot-id <父批次ID, 如 LOT-20261019-001> --price <当前单价> [--amount 10000] [--account <账户代码>] --json
 
 - 查看三层深层聚合持仓全景（组合总览 + 标的双仓位与建议点位 + 活跃批次内嵌展开）：
-  trade position [--symbol <代码>] [--cap <单标满仓额, 默认50000>] --json
+  trade position [--symbol <代码>] [--cap <单标满仓额, 默认50000>] [--account <账户代码>] --json
   （亦可直接 trade position 查看结构分明的高可读三层嵌套 ASCII 报表）
 
 - 查看所有持仓批次：
-  trade lot list --status ACTIVE --json
+  trade lot list [--status ACTIVE] [--symbol <代码>] [--account <账户代码>] --json
 
 - 盘中实时扫描信号（含动态跟踪止盈）：
-  trade scan --json
+  trade scan [--account <账户代码>] --json
 
 - 指定批次平仓止盈：
-  trade lot close --lot-id <批次ID> --price <成交单价> [--qty <平仓数量>] [--substitute-core] --json
+  trade lot close --lot-id <批次ID> --price <成交单价> [--qty <平仓数量>] [--account <账户代码>] [--substitute-core] --json
 
 - 查看历史战绩与多维归因：
-  trade stats --json
+  trade stats [--account <账户代码>] --json
 ```
 
 ---

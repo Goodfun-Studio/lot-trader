@@ -140,7 +140,7 @@ export class SignalScanner {
           };
         } else {
           // Bought today in T+1
-          const availCore = this.arbitrator.computeAvailableCorePosition(lot.symbol, now);
+          const availCore = this.arbitrator.computeAvailableCorePosition(lot.symbol, now, lot.account_id);
           if (availCore >= lot.remaining_quantity) {
             signalType = SignalType.DAY_TRADE_PROFIT_ALERT;
             suggestedAction = "SUBSTITUTE_CORE_CLOSE";
@@ -214,6 +214,7 @@ export class SignalScanner {
       return {
         signal_id: sigId,
         lot_id: lot.lot_id,
+        account_id: lot.account_id,
         symbol: lot.symbol,
         signal_type: signalType,
         trigger_return_rate: returnRate,

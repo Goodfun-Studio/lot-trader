@@ -12,6 +12,7 @@ import { PositionAggregator, PositionSummary } from "./position.ts";
 
 export interface LotListItem {
   lot_id: string;
+  account_id: string;
   symbol: string;
   symbol_name: string;
   settlement_mode: string;
@@ -181,10 +182,12 @@ export class TraderEngine {
     fee?: number,
     buyTime?: Date,
     parentLotId?: string,
-    skipRiskCheck: boolean = false
+    skipRiskCheck: boolean = false,
+    accountId?: string
   ): Lot {
     const [stdSymbol] = normalizeSymbol(symbolInput);
     const now = buyTime || new Date();
+    const accId = accountId && accountId.trim() ? accountId.trim() : 'DEFAULT';
 
     if (quantity <= 0) {
       throw new Error("买入数量必须大于 0");
@@ -276,9 +279,10 @@ export class TraderEngine {
 
     const tx = this.conn.transaction(() => {
       this.conn.run(
-        "INSERT INTO lots (lot_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level, can_sell_now, is_day_trading, max_high_price, max_low_price, peak_price, trailing_stop_active, realized_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO lots (lot_id, account_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level, can_sell_now, is_day_trading, max_high_price, max_low_price, peak_price, trailing_stop_active, realized_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           lotId,
+          accId,
           parentLotId || null,
           stdSymbol,
           now.toISOString(),
@@ -300,9 +304,10 @@ export class TraderEngine {
       );
 
       this.conn.run(
-        "INSERT INTO trades (trade_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           tradeId,
+          accId,
           lotId,
           "BUY",
           price.toString(),
@@ -333,12 +338,15 @@ export class TraderEngine {
       fee?: number;
       buyTime?: Date;
       skipRiskCheck?: boolean;
+      accountId?: string;
     }
   ): Lot {
     const parentLot = this.getLot(parentLotId);
     if (!parentLot) {
       throw new Error("指定的父批次不存在: " + parentLotId);
     }
+
+    const targetAccountId = options?.accountId && options.accountId.trim() ? options.accountId.trim() : (parentLot.account_id || 'DEFAULT');
 
     let quantity = options?.qty;
     if (!quantity || quantity <= 0) {
@@ -356,7 +364,8 @@ export class TraderEngine {
       options?.fee,
       options?.buyTime,
       parentLotId,
-      options?.skipRiskCheck
+      options?.skipRiskCheck,
+      targetAccountId
     );
   }
 
@@ -366,6 +375,7 @@ export class TraderEngine {
 
     return {
       lot_id: row.lot_id,
+      account_id: row.account_id || 'DEFAULT',
       symbol: row.symbol,
       buy_time: new Date(row.buy_time),
       buy_price: Number(row.buy_price),
@@ -389,7 +399,7 @@ export class TraderEngine {
     };
   }
 
-  public async listLots(status: string = "ACTIVE", symbol?: string): Promise<LotListItem[]> {
+  public async listLots(status: string = "ACTIVE", symbol?: string, accountId?: string): Promise<LotListItem[]> {
     let query = "SELECT * FROM lots WHERE 1=1";
     const params: any[] = [];
 
@@ -401,6 +411,10 @@ export class TraderEngine {
       const [stdSymbol] = normalizeSymbol(symbol);
       query += " AND symbol = ?";
       params.push(stdSymbol);
+    }
+    if (accountId) {
+      query += " AND account_id = ?";
+      params.push(accountId);
     }
     query += " ORDER BY buy_time DESC";
 
@@ -445,12 +459,13 @@ export class TraderEngine {
       } else if (bDateStr < nowDateStr) {
         dynamicCanSell = true;
       } else {
-        const availCore = this.arbitrator.computeAvailableCorePosition(sym, now);
+        const availCore = this.arbitrator.computeAvailableCorePosition(sym, now, r.account_id);
         dynamicCanSell = availCore >= remQ;
       }
 
       results.push({
         lot_id: r.lot_id,
+        account_id: r.account_id || 'DEFAULT',
         symbol: sym,
         symbol_name: name,
         settlement_mode: setMode,
@@ -477,11 +492,16 @@ export class TraderEngine {
 
   public async scanSignals(
     customThresholds?: Record<string, number>,
-    asOfTime?: Date
+    asOfTime?: Date,
+    accountId?: string
   ): Promise<Signal[]> {
-    const rows = this.conn.query<{ lot_id: string; symbol: string }>(
-      "SELECT lot_id, symbol FROM lots WHERE status = 'ACTIVE'"
-    ).all();
+    let query = "SELECT lot_id, symbol FROM lots WHERE status = 'ACTIVE'";
+    const params: any[] = [];
+    if (accountId) {
+      query += " AND account_id = ?";
+      params.push(accountId);
+    }
+    const rows = this.conn.query<{ lot_id: string; symbol: string }, any[]>(query).all(...params);
 
     if (!rows || rows.length === 0) {
       return [];
@@ -531,15 +551,15 @@ export class TraderEngine {
     return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime);
   }
 
-  public async getHierarchicalPositionView(symbolFilter?: string, asOfTime?: Date, customFullPositionCap?: number): Promise<PositionHierarchicalView> {
-    return this.positionAggregator.getHierarchicalPositionView(symbolFilter, asOfTime, customFullPositionCap);
+  public async getHierarchicalPositionView(symbolFilter?: string, asOfTime?: Date, customFullPositionCap?: number, accountFilter?: string): Promise<PositionHierarchicalView> {
+    return this.positionAggregator.getHierarchicalPositionView(symbolFilter, asOfTime, customFullPositionCap, accountFilter);
   }
 
-  public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date): Promise<PositionSummary[]> {
-    return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime);
+  public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date, accountFilter?: string): Promise<PositionSummary[]> {
+    return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime, accountFilter);
   }
 
-  public computeStats(days?: number, symbol?: string): TradingStats {
+  public computeStats(days?: number, symbol?: string, accountId?: string): TradingStats {
     let query = "SELECT t.*, l.symbol, l.substituted_core_lot_id, s.settlement_mode FROM trades t JOIN lots l ON t.lot_id = l.lot_id LEFT JOIN symbols s ON l.symbol = s.symbol WHERE t.action IN ('SELL_REGULAR', 'SELL_DAY_TRADE')";
     const params: any[] = [];
 
@@ -551,6 +571,10 @@ export class TraderEngine {
       const [stdS] = normalizeSymbol(symbol);
       query += " AND l.symbol = ?";
       params.push(stdS);
+    }
+    if (accountId) {
+      query += " AND t.account_id = ?";
+      params.push(accountId);
     }
 
     const rows = this.conn.query<any, any[]>(query).all(...params);

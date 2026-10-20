@@ -39,10 +39,10 @@ function printLotHelp(): void {
   console.log(`usage: trade lot {buy,add,list,close} ...
 
 Lot actions:
-  buy               Buy / create a new initial lot
-  add               Pyramid dip add to an existing lot (with anti-shake guard)
-  list              List lots
-  close             Close a lot (full or partial)
+  buy               Buy / create a new initial lot [--account <ACC>]
+  add               Pyramid dip add to an existing lot (with anti-shake guard) [--account <ACC>]
+  list              List lots [--account <ACC>]
+  close             Close a lot (full or partial) [--account <ACC>]
 `);
 }
 
@@ -53,6 +53,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
       symbol: { type: "string" },
       price: { type: "string" },
       qty: { type: "string" },
+      account: { type: "string" },
       fee: { type: "string" },
       time: { type: "string" },
       parent: { type: "string" },
@@ -72,12 +73,13 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
     const symbol = values.symbol as string;
     const price = parseFloat(values.price as string);
     const qty = parseInt(values.qty as string, 10);
+    const account = values.account ? (values.account as string).trim() : undefined;
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const parent = values.parent as string | undefined;
     const skipRisk = Boolean(values["skip-risk"]);
 
-    const lot = engine.buyLot(symbol, price, qty, fee, time, parent, skipRisk);
+    const lot = engine.buyLot(symbol, price, qty, fee, time, parent, skipRisk, account);
 
     if (isJson) {
       const out = {
@@ -86,6 +88,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
         timestamp: new Date().toISOString(),
         data: {
           lot_id: lot.lot_id,
+          account_id: lot.account_id,
           symbol: lot.symbol,
           buy_time: lot.buy_time.toISOString(),
           buy_price: lot.buy_price,
@@ -100,7 +103,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
       console.log(JSON.stringify(out, null, 2));
     } else {
       console.log(`✅ 成功录入买入批次: ${lot.lot_id}`);
-      console.log(`标的代码: ${lot.symbol} | 数量: ${lot.buy_quantity} | 成交单价: ${lot.buy_price.toFixed(4)} 元`);
+      console.log(`所属账户: ${lot.account_id} | 标的代码: ${lot.symbol} | 数量: ${lot.buy_quantity} | 成交单价: ${lot.buy_price.toFixed(4)} 元`);
       console.log(`全成本单价: ${lot.cost_basis_unit.toFixed(4)} 元 | 规费: ${lot.buy_fee.toFixed(2)} 元 | 即刻可卖: ${lot.can_sell_now}`);
       if (lot.parent_lot_id) {
         console.log(`溯源父批次: ${lot.parent_lot_id} (加仓层级 L${lot.pyramid_level})`);
@@ -125,6 +128,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       price: { type: "string" },
       amount: { type: "string" },
       qty: { type: "string" },
+      account: { type: "string" },
       fee: { type: "string" },
       time: { type: "string" },
       "skip-risk": { type: "boolean", default: false },
@@ -144,6 +148,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
     const price = parseFloat(values.price as string);
     const amount = values.amount ? parseFloat(values.amount as string) : undefined;
     const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
+    const account = values.account ? (values.account as string).trim() : undefined;
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const skipRisk = Boolean(values["skip-risk"]);
@@ -154,6 +159,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       fee,
       buyTime: time,
       skipRiskCheck: skipRisk,
+      accountId: account,
     });
 
     if (isJson) {
@@ -163,6 +169,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
         timestamp: new Date().toISOString(),
         data: {
           lot_id: lot.lot_id,
+          account_id: lot.account_id,
           parent_lot_id: lot.parent_lot_id,
           symbol: lot.symbol,
           buy_time: lot.buy_time.toISOString(),
@@ -178,7 +185,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       console.log(JSON.stringify(out, null, 2));
     } else {
       console.log(`✅ 成功完成梯级加仓！批次ID: ${lot.lot_id}`);
-      console.log(`父批次: ${lot.parent_lot_id} | 递增后加仓层级: L${lot.pyramid_level}`);
+      console.log(`所属账户: ${lot.account_id} | 父批次: ${lot.parent_lot_id} | 递增后加仓层级: L${lot.pyramid_level}`);
       console.log(`标的代码: ${lot.symbol} | 加仓数量: ${lot.buy_quantity} 股 | 成交单价: ${lot.buy_price.toFixed(4)} 元`);
       console.log(`加仓全成本单价: ${lot.cost_basis_unit.toFixed(4)} 元 | 规费: ${lot.buy_fee.toFixed(2)} 元`);
     }
@@ -198,6 +205,7 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
     options: {
       status: { type: "string", default: "ACTIVE" },
       symbol: { type: "string" },
+      account: { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -206,9 +214,10 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
   const isJson = Boolean(values.json);
   const status = (values.status as string) || "ACTIVE";
   const symbol = values.symbol as string | undefined;
+  const account = values.account ? (values.account as string).trim() : undefined;
 
   try {
-    const lots = await engine.listLots(status, symbol);
+    const lots = await engine.listLots(status, symbol, account);
 
     if (isJson) {
       const out = {
@@ -220,11 +229,11 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
       console.log(JSON.stringify(out, null, 2));
     } else {
       if (lots.length === 0) {
-        console.log(`暂无符合条件的批次数据 (status=${status}, symbol=${symbol || "None"})`);
+        console.log(`暂无符合条件的批次数据 (status=${status}, symbol=${symbol || "None"}, account=${account || "All"})`);
         return;
       }
 
-      const header = `${"Lot ID".padEnd(19)} | ${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(6)} | ${"BuyCost".padStart(8)} | ${"Current".padStart(8)} | ${"Return".padStart(9)} | ${"PnL".padStart(10)} | ${"Action Advice".padEnd(14)}`;
+      const header = `${"Lot ID".padEnd(19)} | ${"Account".padEnd(10)} | ${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(6)} | ${"BuyCost".padStart(8)} | ${"Current".padStart(8)} | ${"Return".padStart(9)} | ${"PnL".padStart(10)} | ${"Action Advice".padEnd(14)}`;
       const sep = "-".repeat(header.length);
       console.log(sep);
       console.log(header);
@@ -248,6 +257,7 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
         const pnlStr = (l.floating_pnl >= 0 ? "+" : "") + formatCurrency(l.floating_pnl);
 
         const idCol = l.lot_id.padEnd(19);
+        const accCol = (l.account_id || "DEFAULT").padEnd(10);
         const symCol = l.symbol.padEnd(10);
         const nameCol = l.symbol_name.slice(0, 6).padEnd(8);
         const qtyCol = String(l.remaining_quantity).padStart(6);
@@ -257,7 +267,7 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
         const pnlCol = pnlStr.padStart(10);
         const advCol = advice.padEnd(14);
 
-        console.log(`${idCol} | ${symCol} | ${nameCol} | ${qtyCol} | ${costCol} | ${currCol} | ${retCol} | ${pnlCol} | ${advCol}`);
+        console.log(`${idCol} | ${accCol} | ${symCol} | ${nameCol} | ${qtyCol} | ${costCol} | ${currCol} | ${retCol} | ${pnlCol} | ${advCol}`);
       }
       console.log(sep);
     }
@@ -278,6 +288,7 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
       "lot-id": { type: "string" },
       price: { type: "string" },
       qty: { type: "string" },
+      account: { type: "string" },
       "substitute-core": { type: "boolean", default: false },
       fee: { type: "string" },
       time: { type: "string" },
@@ -299,6 +310,14 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
     const substituteCore = Boolean(values["substitute-core"]);
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
+    const account = values.account ? (values.account as string).trim() : undefined;
+
+    if (account) {
+      const targetLot = engine.getLot(lotId);
+      if (targetLot && targetLot.account_id !== account) {
+        throw new Error(`批次账户不匹配：批次 ${lotId} 属于账户 ${targetLot.account_id}，而非指定的 ${account}`);
+      }
+    }
 
     const [updatedLot, trade] = engine.closeLot(lotId, price, qty, substituteCore, fee, time);
 
@@ -309,6 +328,7 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
         timestamp: new Date().toISOString(),
         data: {
           lot_id: updatedLot.lot_id,
+          account_id: updatedLot.account_id,
           trade_id: trade.trade_id,
           action: trade.action,
           close_price: trade.price,
@@ -325,7 +345,7 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
     } else {
       const isPartial = updatedLot.remaining_quantity > 0;
       console.log(`🎉 批次${isPartial ? "部分" : "全额"}平仓操作成功！流水号: ${trade.trade_id}`);
-      console.log(`批次ID: ${updatedLot.lot_id} | 当前状态: ${updatedLot.status}`);
+      console.log(`批次ID: ${updatedLot.lot_id} | 账户: ${updatedLot.account_id} | 当前状态: ${updatedLot.status}`);
       console.log(`平仓成交价: ${trade.price.toFixed(4)} 元 | 本次平仓股数: ${trade.quantity} 股 | 规费: ${trade.fee.toFixed(2)} 元`);
       console.log(`本次实现净利润: ${(trade.realized_pnl >= 0 ? "+" : "")}${formatCurrency(trade.realized_pnl)} 元`);
       if (updatedLot.is_day_trading) {
@@ -350,12 +370,14 @@ async function handleScan(engine: TraderEngine, args: string[]): Promise<void> {
     args,
     options: {
       thresholds: { type: "string" },
+      account: { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
   });
 
   const isJson = Boolean(values.json);
+  const account = values.account ? (values.account as string).trim() : undefined;
 
   try {
     let thresholds: Record<string, number> | undefined;
@@ -363,13 +385,14 @@ async function handleScan(engine: TraderEngine, args: string[]): Promise<void> {
       thresholds = JSON.parse(values.thresholds as string);
     }
 
-    const signals = await engine.scanSignals(thresholds);
+    const signals = await engine.scanSignals(thresholds, undefined, account);
 
     if (isJson) {
       const sigList = signals.map((s) => ({
         signal_id: s.signal_id,
         signal_type: s.signal_type,
         lot_id: s.lot_id,
+        account_id: s.account_id || "DEFAULT",
         symbol: s.symbol,
         trigger_return_rate: s.trigger_return_rate,
         trigger_price: s.trigger_price,
@@ -397,7 +420,7 @@ async function handleScan(engine: TraderEngine, args: string[]): Promise<void> {
       console.log("=".repeat(80));
       for (const s of signals) {
         const payload = s.payload_json ? JSON.parse(s.payload_json) : {};
-        console.log(`【${s.signal_type}】标的: ${s.symbol} | 批次: ${s.lot_id}`);
+        console.log(`【${s.signal_type}】[账户: ${s.account_id || "DEFAULT"}] 标的: ${s.symbol} | 批次: ${s.lot_id}`);
         console.log(`当前价格: ${s.trigger_price.toFixed(4)} | 收益率: ${formatRate(s.trigger_return_rate)}`);
         console.log(`建议动作: ${s.suggested_action}`);
         if (payload.reason) {
@@ -425,6 +448,7 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
     options: {
       days: { type: "string" },
       symbol: { type: "string" },
+      account: { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -433,9 +457,10 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
   const isJson = Boolean(values.json);
   const days = values.days ? parseInt(values.days as string, 10) : undefined;
   const symbol = values.symbol as string | undefined;
+  const account = values.account ? (values.account as string).trim() : undefined;
 
   try {
-    const stats = engine.computeStats(days, symbol);
+    const stats = engine.computeStats(days, symbol, account);
 
     if (isJson) {
       const out = {
@@ -503,6 +528,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
       symbol: { type: "string" },
       cap: { type: "string" },
       "full-position-cap": { type: "string" },
+      account: { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -512,9 +538,10 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
   const symbol = values.symbol as string | undefined;
   const capStr = (values.cap as string) || (values["full-position-cap"] as string);
   const customCap = capStr ? parseFloat(capStr) : undefined;
+  const account = values.account ? (values.account as string).trim() : undefined;
 
   try {
-    const view = await engine.getHierarchicalPositionView(symbol, undefined, customCap);
+    const view = await engine.getHierarchicalPositionView(symbol, undefined, customCap, account);
 
     if (isJson) {
       const out = {
@@ -526,7 +553,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
       console.log(JSON.stringify(out, null, 2));
     } else {
       if (view.targets.length === 0) {
-        console.log(`暂无持仓标的数据 (symbol=${symbol || "None"})`);
+        console.log(`暂无持仓标的数据 (symbol=${symbol || "None"}, account=${account || "All"})`);
         return;
       }
 
@@ -534,7 +561,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
       const pnlPrefix = summary.total_floating_pnl >= 0 ? "+" : "";
 
       console.log("=".repeat(120));
-      console.log("💼 投资组合总览 (Portfolio Summary)");
+      console.log(`💼 投资组合总览 (Portfolio Summary)${account ? ` [账户: ${account}]` : ""}`);
       console.log("=".repeat(120));
       console.log(`总持仓成本: ${formatCurrency(summary.total_cost).padStart(12)} 元 | 单标满仓额度: ${formatCurrency(summary.full_position_cap).padStart(10)} 元 | 持仓标的数: ${String(summary.total_symbols_count).padStart(3)} 个`);
       console.log(`总持仓市值: ${formatCurrency(summary.total_market_value).padStart(12)} 元 | 组合总盈亏额: ${(pnlPrefix + formatCurrency(summary.total_floating_pnl)).padStart(10)} 元 | 组合收益率: ${formatRate(summary.overall_return_rate).padStart(8)}`);
@@ -554,7 +581,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
 
         if (t.lots.length > 0) {
           console.log(`  └─ 下属活跃批次明细 (共 ${t.lots.length} 笔):`);
-          const subHeader = `     ${"Lot ID".padEnd(19)} | ${"Buy Date".padEnd(10)} | ${"Buy Price".padStart(9)} | ${"Unit Cost".padStart(9)} | ${"Qty".padStart(6)} | ${"Return%".padStart(8)} | ${"Float PnL".padStart(10)} | ${"Can Sell".padEnd(8)} | ${"Action Advice".padEnd(12)}`;
+          const subHeader = `     ${"Lot ID".padEnd(19)} | ${"Account".padEnd(10)} | ${"Buy Date".padEnd(10)} | ${"Buy Price".padStart(9)} | ${"Unit Cost".padStart(9)} | ${"Qty".padStart(6)} | ${"Return%".padStart(8)} | ${"Float PnL".padStart(10)} | ${"Can Sell".padEnd(8)} | ${"Action Advice".padEnd(12)}`;
           const subSep = "     " + "-".repeat(subHeader.length - 5);
           console.log(subSep);
           console.log(subHeader);
@@ -577,6 +604,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
             const canSellStr = l.can_sell_now ? "即刻可卖" : "T+1冻结";
 
             const idCol = l.lot_id.padEnd(19);
+            const accCol = (l.account_id || "DEFAULT").padEnd(10);
             const dateCol = dateStr.padEnd(10);
             const bPriceCol = l.buy_price.toFixed(3).padStart(9);
             const costCol = l.cost_basis_unit.toFixed(3).padStart(9);
@@ -586,7 +614,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
             const sellCol = canSellStr.padEnd(8);
             const advCol = advice.padEnd(12);
 
-            console.log(`     ${idCol} | ${dateCol} | ${bPriceCol} | ${costCol} | ${qtyCol} | ${retCol} | ${pnlCol} | ${sellCol} | ${advCol}`);
+            console.log(`     ${idCol} | ${accCol} | ${dateCol} | ${bPriceCol} | ${costCol} | ${qtyCol} | ${retCol} | ${pnlCol} | ${sellCol} | ${advCol}`);
           }
           console.log(subSep);
         }

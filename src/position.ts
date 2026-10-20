@@ -10,6 +10,7 @@ import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 
 export interface LotListItem {
   lot_id: string;
+  account_id: string;
   symbol: string;
   symbol_name: string;
   settlement_mode: string;
@@ -113,7 +114,8 @@ export class PositionAggregator {
   public async getHierarchicalPositionView(
     symbolFilter?: string,
     asOfTime?: Date,
-    customFullPositionCap?: number
+    customFullPositionCap?: number,
+    accountFilter?: string
   ): Promise<PositionHierarchicalView> {
     const now = asOfTime || new Date();
     const cap = customFullPositionCap && customFullPositionCap > 0 ? customFullPositionCap : this.fullPositionCap;
@@ -125,6 +127,10 @@ export class PositionAggregator {
       const [stdSymbol] = normalizeSymbol(symbolFilter);
       query += " AND symbol = ?";
       params.push(stdSymbol);
+    }
+    if (accountFilter) {
+      query += " AND account_id = ?";
+      params.push(accountFilter);
     }
     query += " ORDER BY symbol ASC, datetime(buy_time) DESC";
 
@@ -194,7 +200,7 @@ export class PositionAggregator {
       if (settlementMode === "NATIVE_T0") {
         // Will set after totalQty is summed
       } else {
-        availableCoreQty = this.arbitrator.computeAvailableCorePosition(sym, now);
+        availableCoreQty = this.arbitrator.computeAvailableCorePosition(sym, now, accountFilter);
       }
 
       for (const lot of lots) {
@@ -225,6 +231,7 @@ export class PositionAggregator {
 
         nestedLots.push({
           lot_id: lot.lot_id,
+          account_id: lot.account_id || 'DEFAULT',
           symbol: sym,
           symbol_name: name,
           settlement_mode: settlementMode,
@@ -344,8 +351,8 @@ export class PositionAggregator {
   /**
    * Backward-compatible method returning flat list of TargetHoldingView (PositionSummary[]).
    */
-  public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date): Promise<PositionSummary[]> {
-    const view = await this.getHierarchicalPositionView(symbolFilter, asOfTime);
+  public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date, accountFilter?: string): Promise<PositionSummary[]> {
+    const view = await this.getHierarchicalPositionView(symbolFilter, asOfTime, undefined, accountFilter);
     return view.targets;
   }
 }

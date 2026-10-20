@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS symbols (
 
 CREATE TABLE IF NOT EXISTS lots (
     lot_id VARCHAR(32) PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT',
     parent_lot_id VARCHAR(32),
     symbol VARCHAR(20) NOT NULL,
     buy_time DATETIME NOT NULL,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS signals (
 
 CREATE TABLE IF NOT EXISTS trades (
     trade_id VARCHAR(32) PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT',
     lot_id VARCHAR(32) NOT NULL,
     action VARCHAR(20) NOT NULL,
     price DECIMAL(10, 4) NOT NULL,
@@ -134,6 +136,17 @@ export class AppDatabase {
     }
     try {
       conn.run("ALTER TABLE lots ADD COLUMN trailing_stop_active BOOLEAN DEFAULT 0;");
+    } catch {
+      // Column might already exist
+    }
+
+    try {
+      conn.run("ALTER TABLE lots ADD COLUMN account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT';");
+    } catch {
+      // Column might already exist
+    }
+    try {
+      conn.run("ALTER TABLE trades ADD COLUMN account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT';");
     } catch {
       // Column might already exist
     }

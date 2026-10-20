@@ -33,19 +33,24 @@ export class SettlementArbitrator {
     return SettlementMode.STATUTORY_T1;
   }
 
-  public computeAvailableCorePosition(symbol: string, asOfDate?: Date): number {
+  public computeAvailableCorePosition(symbol: string, asOfDate?: Date, accountId?: string): number {
     const targetDate = asOfDate || new Date();
     // Compare YYYY-MM-DD
     const targetDateStr = targetDate.toISOString().slice(0, 10);
+
+    let query = "SELECT lot_id, buy_time, remaining_quantity, status FROM lots WHERE symbol = ? AND status IN ('ACTIVE', 'CLOSING')";
+    const params: any[] = [symbol];
+    if (accountId) {
+      query += " AND account_id = ?";
+      params.push(accountId);
+    }
 
     const rows = this.conn.query<{
       lot_id: string;
       buy_time: string;
       remaining_quantity: number;
       status: string;
-    }, [string]>(
-      "SELECT lot_id, buy_time, remaining_quantity, status FROM lots WHERE symbol = ? AND status IN ('ACTIVE', 'CLOSING')"
-    ).all(symbol);
+    }, any[]>(query).all(...params);
 
     let totalCore = 0;
     for (const r of rows) {
@@ -77,7 +82,7 @@ export class SettlementArbitrator {
     }
 
     // Bought today: check if core position is available for day-trade substitution
-    const availCore = this.computeAvailableCorePosition(lot.symbol, now);
+    const availCore = this.computeAvailableCorePosition(lot.symbol, now, lot.account_id);
     if (availCore >= lot.remaining_quantity) {
       return [true, `STATUTORY_T1: 盘中加仓，可用底仓充足(${availCore}股)，支持代冲做T`];
     } else if (availCore > 0) {
@@ -87,4 +92,3 @@ export class SettlementArbitrator {
     }
   }
 }
-
