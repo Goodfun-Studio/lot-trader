@@ -15,6 +15,16 @@ export interface Quote {
   time_str: string;
 }
 
+export interface DailyBar {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number; // 手
+}
+
+
 /**
  * Normalizes user input symbol to:
  * [standard_symbol, tencent_symbol]
@@ -25,7 +35,15 @@ export interface Quote {
  * "600519" -> ["600519.SH", "sh600519"]
  */
 export function normalizeSymbol(code: string): [string, string] {
-  const clean = code.trim().toUpperCase();
+  let clean = code.trim();
+  const lower = clean.toLowerCase();
+  if (lower.startsWith("sh") || lower.startsWith("sz") || lower.startsWith("bj")) {
+    const market = clean.slice(0, 2).toUpperCase();
+    const numPart = clean.slice(2);
+    return [`${numPart}.${market}`, `${market.toLowerCase()}${numPart}`];
+  }
+
+  clean = clean.toUpperCase();
   if (clean.includes(".")) {
     const parts = clean.split(".");
     const codePart = parts[0];
@@ -58,6 +76,7 @@ export function normalizeSymbol(code: string): [string, string] {
 
 export class QuoteProvider {
   private mockQuotes: Map<string, number> = new Map();
+  private mockBars: Map<string, DailyBar[]> = new Map();
 
   constructor(mockQuotes?: Record<string, number>) {
     if (mockQuotes) {
@@ -72,6 +91,58 @@ export class QuoteProvider {
     const [std] = normalizeSymbol(symbol);
     this.mockQuotes.set(std, price);
   }
+
+  public setMockBars(symbol: string, bars: DailyBar[]): void {
+    const [std] = normalizeSymbol(symbol);
+    this.mockBars.set(std, bars);
+  }
+
+  public async getDailyBars(symbol: string, count: number = 60): Promise<DailyBar[]> {
+    const [std, tc] = normalizeSymbol(symbol);
+    if (this.mockBars.has(std)) {
+      const all = this.mockBars.get(std)!;
+      return all.slice(-count);
+    }
+
+    // Request Tencent fqkline endpoint
+    const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + tc + ",day,,," + count + ",qfq";
+    try {
+      const resp = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) {
+        return [];
+      }
+      const json: any = await resp.json();
+      if (!json || json.code !== 0 || !json.data || !json.data[tc]) {
+        return [];
+      }
+      const targetData = json.data[tc];
+      const rawBars: any[] = targetData.qfqday || targetData.day || [];
+      if (!Array.isArray(rawBars)) {
+        return [];
+      }
+
+      const bars: DailyBar[] = [];
+      for (const item of rawBars) {
+        if (!Array.isArray(item) || item.length < 6) continue;
+        const [date, openStr, closeStr, highStr, lowStr, volStr] = item;
+        bars.push({
+          date: String(date),
+          open: parseFloat(openStr) || 0,
+          close: parseFloat(closeStr) || 0,
+          high: parseFloat(highStr) || 0,
+          low: parseFloat(lowStr) || 0,
+          volume: parseFloat(volStr) || 0,
+        });
+      }
+      return bars.slice(-count);
+    } catch {
+      return [];
+    }
+  }
+
 
   public async getQuotes(symbols: string[]): Promise<Record<string, Quote>> {
     const results: Record<string, Quote> = {};

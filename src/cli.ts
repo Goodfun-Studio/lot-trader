@@ -4,6 +4,8 @@
  */
 import { AppDatabase } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
+import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
+import { normalizeSymbol } from "./quotes.ts";
 import { parseArgs } from "util";
 
 function formatCurrency(val: number): string {
@@ -19,16 +21,17 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,position,scan,stats} ...
+  console.log(`usage: trade [-h] {lot,position,scan,stats,physics} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,position,scan,stats}  Available subcommands
+  {lot,position,scan,stats,physics}  Available subcommands
     lot             Lot operations (buy, add, list, close)
     position        Position / Holding aggregated view
     scan            Scan active lots for signals (including trailing stop)
     stats           Performance statistics with multi-dimensional attribution
+    physics         Physics momentum radar analysis (velocity, acceleration, force, damping)
 
 options:
   -h, --help        show this help message and exit
@@ -515,6 +518,110 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
   }
 }
 
+
+async function handlePhysics(engine: TraderEngine, args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      symbol: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  let symbolInput = values.symbol as string | undefined;
+  if (!symbolInput && positionals.length > 0) {
+    symbolInput = positionals[0];
+  }
+
+  if (!symbolInput) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: "Missing required parameter: <symbol>", data: null }));
+    } else {
+      console.error("❌ 错误: 请指定要分析的标的代码，例如: trade physics 600519 或 trade physics 518880.SH");
+    }
+    process.exit(1);
+  }
+
+  const [stdSymbol, tcCode] = normalizeSymbol(symbolInput);
+
+  try {
+    // 1. Fetch real-time quote for latest price & name
+    const quoteMap = await engine.quoteProvider.getQuotes([stdSymbol]);
+    const quote = quoteMap[stdSymbol];
+    const name = quote?.name || stdSymbol;
+    const currentPrice = quote?.current_price || 0;
+
+    // 2. Fetch daily bars (60 days and 250 days)
+    const bars60 = await engine.quoteProvider.getDailyBars(stdSymbol, 60);
+    const bars250 = await engine.quoteProvider.getDailyBars(stdSymbol, 250);
+
+    const radar = computePhysicsRadar(stdSymbol, name, bars60, bars250, currentPrice);
+
+    if (isJson) {
+      const out = {
+        code: 0,
+        msg: "success",
+        timestamp: new Date().toISOString(),
+        data: radar,
+      };
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+
+    // ASCII Terminal Radar Card
+    console.log("=".repeat(80));
+    console.log(`🎯 标的物理运动量化雷达 (Physics Momentum Radar) - ${radar.symbol} (${radar.name})`);
+    console.log("=".repeat(80));
+    console.log(`最新现价: ${radar.current_price.toFixed(3).padStart(9)} 元 | 历史K线样本: ${String(radar.data_bars_count).padStart(3)} 日 | 数据源: 腾讯财经前复权`);
+    console.log("-".repeat(80));
+
+    const vShortSign = radar.v_short >= 0 ? "+" : "";
+    const vMidSign = radar.v_mid >= 0 ? "+" : "";
+    const aSign = radar.a >= 0 ? "+" : "";
+    const fSign = radar.F >= 0 ? "+" : "";
+
+    let brakeDesc = "平稳运行";
+    if (radar.brake_status === "ACCELERATING_UP") brakeDesc = "加速上涨 (冲锋)";
+    else if (radar.brake_status === "BRAKING_BOTTOM") brakeDesc = "减速筑底 (下坠刹车)";
+    else if (radar.brake_status === "ACCELERATING_DOWN") brakeDesc = "加速下坠 (破位风险)";
+    else if (radar.brake_status === "BRAKING_TOP") brakeDesc = "冲高减速 (滞涨蓄势)";
+
+    let forceDesc = "多空均衡";
+    if (radar.force_status === "STRONG_SUPPORT") forceDesc = "底部强承接托底 (外力显著做多)";
+    else if (radar.force_status === "STRONG_RESISTANCE") forceDesc = "上方强抛压阻力 (外力显著做空)";
+
+    console.log(`1. 动量速度 (Velocity v):`);
+    console.log(`   • 5日短期动量斜率: ${vShortSign}${radar.v_short.toFixed(2)}% / 日`);
+    console.log(`   • 20日中期动量斜率: ${vMidSign}${radar.v_mid.toFixed(2)}% / 日`);
+
+    console.log(`2. 动量加速度 (Acceleration a) & 运行态势:`);
+    console.log(`   • 加速度 a: ${aSign}${radar.a.toFixed(2)}% / 日²`);
+    console.log(`   • 态势研判: [${radar.brake_status}] ${brakeDesc}`);
+
+    console.log(`3. 惯性质量 (Inertial Mass m) & 多空博弈净合力 (Force F):`);
+    console.log(`   • 惯性质量 m (当日成交/20日均量): ${radar.m.toFixed(2)}x`);
+    console.log(`   • 多空合力 F (F = m × a): ${fSign}${radar.F.toFixed(2)} [${radar.force_status}] ${forceDesc}`);
+
+    console.log(`4. 流体阻尼与筹码承接 (Fluid Damping μ):`);
+    console.log(`   • 阻尼系数 μ: ${radar.mu.toLocaleString("en-US", { maximumFractionDigits: 0 })} (单位振幅消耗量能密度)`);
+
+    console.log(`5. 周期空间位置与区间回撤:`);
+    console.log(`   • 60日空间位置: 分位数 ${radar.pct_rank_60.toFixed(1)}% | 距区间高点回撤: ${radar.pullback_60.toFixed(2)}% (区间: ${radar.min_60.toFixed(3)} ~ ${radar.max_60.toFixed(3)})`);
+    console.log(`   • 250日空间位置: 分位数 ${radar.pct_rank_250.toFixed(1)}% | 距年线高点回撤: ${radar.pullback_250.toFixed(2)}% (区间: ${radar.min_250.toFixed(3)} ~ ${radar.max_250.toFixed(3)})`);
+    console.log("=".repeat(80));
+  } catch (err: any) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+    } else {
+      console.error(`❌ 物理雷达分析失败: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
+
 async function handlePosition(engine: TraderEngine, args: string[]): Promise<void> {
   // Support 'trade position list' or direct 'trade position'
   let actualArgs = args;
@@ -578,6 +685,12 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
         console.log(`  持仓总成本: ${formatCurrency(t.total_cost_basis)} 元  |  持仓总市值: ${formatCurrency(t.market_value)} 元  |  浮动盈亏: ${tPnlPrefix}${formatCurrency(t.total_floating_pnl)} 元 (${formatRate(t.overall_return_rate)})`);
         console.log(`  成本仓位比: ${(t.cost_position_rate * 100).toFixed(2)}%  |  当前市值仓位: ${(t.current_position_rate * 100).toFixed(2)}%  |  组合市值占比: ${(t.portfolio_weight * 100).toFixed(2)}%`);
         console.log(`  最近买入价: ${t.last_buy_price > 0 ? t.last_buy_price.toFixed(3) + " 元" : "无"}  |  建议加仓区间: < ${t.recommended_buy_in_point.toFixed(3)} (-10%)  |  建议止盈区间: > ${t.recommended_sale_out_point.toFixed(3)} (+10%)`);
+        if (t.physics) {
+          const p = t.physics;
+          const v5Sign = p.v_short >= 0 ? "+" : "";
+          const aSign = p.a >= 0 ? "+" : "";
+          console.log(`  物理动量走势: 速度v(5d)=${v5Sign}${p.v_short.toFixed(2)}% | 加速度a=${aSign}${p.a.toFixed(2)}% [${p.brake_status}] | 质量m=${p.m.toFixed(2)}x | 多空合力F=${p.F.toFixed(2)} [${p.force_status}] | 阻尼μ=${p.mu.toFixed(0)}`);
+        }
 
         if (t.lots.length > 0) {
           console.log(`  └─ 下属活跃批次明细 (共 ${t.lots.length} 笔):`);
@@ -669,6 +782,8 @@ export async function main(): Promise<void> {
     await handleScan(engine, restArgs);
   } else if (command === "stats") {
     await handleStats(engine, restArgs);
+  } else if (command === "physics" || command === "radar") {
+    await handlePhysics(engine, restArgs);
   } else {
     printHelp();
     process.exit(1);

@@ -7,6 +7,7 @@ import { LotStatus } from "./models.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 
 export interface LotListItem {
   lot_id: string;
@@ -61,6 +62,7 @@ export interface TargetHoldingView {
   recommended_buy_in_point: number;  // last_buy_price * 0.90
   recommended_sale_out_point: number; // last_buy_price * 1.10
   lots: LotListItem[];             // 归属于该标的的全部活跃批次
+  physics?: PhysicsRadarResult;     // 物理运动量化雷达分析
   // Backward compatibility fields
   active_lots_count: number;
   target_tp_10: number;
@@ -281,7 +283,22 @@ export class PositionAggregator {
       const targetDip10 = round(avgCostPrice * 0.90, 4);
       const targetDip20 = round(avgCostPrice * 0.80, 4);
 
+      
+      // Fetch daily bars for physics radar analysis (optional / non-blocking fallback)
+      let physics: PhysicsRadarResult | undefined = undefined;
+      try {
+        const bars60 = await this.quoteProvider.getDailyBars(sym, 60);
+        if (bars60 && bars60.length >= 5) {
+          const bars250 = await this.quoteProvider.getDailyBars(sym, 250);
+          physics = computePhysicsRadar(sym, name, bars60, bars250, currentPrice);
+        }
+      } catch {
+        // Safe fallback
+      }
+
       targetsPre.push({
+        physics,
+
         symbol: sym,
         name,
         asset_class: assetClass,

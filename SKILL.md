@@ -89,6 +89,21 @@ trade lot close --lot-id <批次ID> --price <成交单价> [--qty <数量>] [--a
 - 支持全额平仓与部分平仓（指定 `--qty`）。
  - 股票日内做 T 代冲平仓需追加 `--substitute-core`（严格限制在同一券商账户内的交收底仓代冲）。
 
+### 标的物理运动量化雷达 (Physics Momentum Radar)
+```bash
+trade physics <代码> [--json]
+# 或别名
+trade radar <代码> [--json]
+```
+- 输出标的纯量化客观物理运动指标（腾讯财经前复权历史K线驱动）：
+  - **动量速度 v (Velocity)**：5日短期动量斜率与20日中期动量斜率（归一化日均斜率百分比 v = (k / P_mean) * 100%）；
+  - **动量加速度 a (Acceleration)**：短期速度变化率（a = v_short_current - v_short_prev），量化加速上涨、加速下坠或下坠刹车减速；
+  - **惯性质量 m (Inertial Mass)**：当日成交量相对20日均量倍数（m = Vol_today / MA(Vol, 20)）；
+  - **多空博弈净合力 F (Force)**：F = m * a，量化急跌天量下坠收敛的底部强承接托底（F > 0）或巨量滞涨上方抛压（F < 0）；
+  - **流体阻尼系数 μ (Fluid Damping)**：单位价格振幅所消耗的成交量密度，量化盘口筹码承接的浓稠度；
+  - **周期空间位置**：60日/250日价格分位数与距区间最高点回撤幅度。
+- `trade position` 标的卡头下方自动呈现该标的物理动量走势核心摘要。
+
 ### 复盘战绩统计
 ```bash
 trade stats --json
