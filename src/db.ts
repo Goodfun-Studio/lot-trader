@@ -117,7 +117,7 @@ export class AppDatabase {
 
   constructor(dbPath?: string) {
     if (!dbPath) {
-      const envDb = process.env.LOT_TRADER_DB;
+      const envDb = process.env.LOT_TRADER_DB || process.env.TRADE_DB_PATH;
       this.dbPath = envDb ? envDb : DEFAULT_DB_PATH;
     } else {
       this.dbPath = dbPath;

@@ -121,8 +121,8 @@ function resolveChildPath(): string | undefined {
 function resolveDashboardDb(explicitDb?: string): string {
   return (
     explicitDb ||
-    process.env.TRADE_DB_PATH ||
     process.env.LOT_TRADER_DB ||
+    process.env.TRADE_DB_PATH ||
     join(homedir(), ".trade", "trade.db")
   );
 }

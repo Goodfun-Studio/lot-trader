@@ -1,3 +1,4 @@
+import { AssetClass, SettlementMode } from "./models.ts";
 /**
  * Real-time quotes provider with Tencent qt.gtimg.cn and offline mock fallback.
  */
@@ -308,3 +309,50 @@ export class QuoteProvider {
   }
 }
 
+
+
+export interface InferredSymbolMetadata {
+  cleanCode: string;
+  stdSymbol: string;
+  tencentCode: string;
+  assetClass: AssetClass;
+  settlementMode: SettlementMode;
+}
+
+/**
+ * Strictly infers asset class and settlement mode by 6-digit prefix.
+ * Strict rules:
+ * - Shanghai ETF: 51xxxx, 52xxxx, 56xxxx, 58xxxx
+ * - Shenzhen ETF: 15xxxx, 16xxxx, 18xxxx
+ * - All others: STOCK + STATUTORY_T1
+ * - Native T+0 whitelist: Gold ETFs (518880, 518800, 159934, 159937) and Cross-border ETFs (513xxx)
+ * - All other ETFs: STATUTORY_T1
+ */
+export function inferSymbolMetadata(code: string): InferredSymbolMetadata {
+  const [stdSymbol, tencentCode] = normalizeSymbol(code);
+  const cleanCode = stdSymbol.replace(/\.(SH|SZ|BJ)$/i, "");
+
+  // 1. Asset Class via strict 6-digit prefix
+  const isShEtf = /^(51|52|56|58)\d{4}$/.test(cleanCode);
+  const isSzEtf = /^(15|16|18)\d{4}$/.test(cleanCode);
+  const isEtf = isShEtf || isSzEtf;
+  const assetClass = isEtf ? AssetClass.ETF : AssetClass.STOCK;
+
+  // 2. Settlement Mode: strictly whitelisted T+0
+  const goldWhitelist = ["518880", "518800", "159934", "159937"];
+  const isGold = goldWhitelist.includes(cleanCode);
+  const isCrossBorderEtf = /^513\d{3}$/.test(cleanCode);
+
+  let settlementMode = SettlementMode.STATUTORY_T1;
+  if (isGold || isCrossBorderEtf) {
+    settlementMode = SettlementMode.NATIVE_T0;
+  }
+
+  return {
+    cleanCode,
+    stdSymbol,
+    tencentCode,
+    assetClass,
+    settlementMode,
+  };
+}

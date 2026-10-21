@@ -7,7 +7,7 @@ import { computeCostBasis, computeFloatingPnl, getSellFeeRate } from "./calc.ts"
 import { SettlementArbitrator } from "./settlement.ts";
 import { SignalScanner } from "./scanner.ts";
 import { LotCloser } from "./closer.ts";
-import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { QuoteProvider, normalizeSymbol, inferSymbolMetadata } from "./quotes.ts";
 import { PositionAggregator, PositionSummary } from "./position.ts";
 
 export interface LotListItem {
@@ -59,6 +59,33 @@ export interface TradingStats {
 }
 
 export class TraderEngine {
+
+  public ensureSymbol(symbolInput: string, customName?: string, assetClassOverride?: AssetClass, settlementModeOverride?: SettlementMode) {
+    const meta = inferSymbolMetadata(symbolInput);
+    const stdSymbol = meta.stdSymbol;
+
+    let symRow = this.conn.query<{
+      symbol: string;
+      name: string;
+      asset_class: string;
+      settlement_mode: string;
+    }, [string]>("SELECT * FROM symbols WHERE symbol = ?").get(stdSymbol);
+
+    if (!symRow) {
+      const assetClass = assetClassOverride || meta.assetClass;
+      const setMode = settlementModeOverride || meta.settlementMode;
+      const name = customName && customName.trim() ? customName.trim() : meta.cleanCode;
+
+      this.conn.run(
+        "INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode) VALUES (?, ?, ?, ?)",
+        [stdSymbol, name, assetClass, setMode]
+      );
+
+      symRow = this.conn.query<any, [string]>("SELECT * FROM symbols WHERE symbol = ?").get(stdSymbol);
+    }
+    return symRow;
+  }
+
   public conn: Database;
   public quoteProvider: QuoteProvider;
   public arbitrator: SettlementArbitrator;
@@ -712,26 +739,7 @@ export class TraderEngine {
   }): Dividend {
     const [stdSymbol] = normalizeSymbol(params.symbol);
 
-    let symRow = this.conn.query<{ symbol: string }, [string]>(
-      "SELECT symbol FROM symbols WHERE symbol = ?"
-    ).get(stdSymbol);
-
-    if (!symRow) {
-      const isGoldEtf =
-        stdSymbol.includes("518880") ||
-        stdSymbol.includes("159934") ||
-        stdSymbol.includes("518800") ||
-        stdSymbol.includes("159937") ||
-        stdSymbol.includes("513");
-      const assetClass =
-        stdSymbol.includes("51") || stdSymbol.includes("15") || stdSymbol.includes("58") ? "ETF" : "STOCK";
-      const setMode = isGoldEtf ? "NATIVE_T0" : "STATUTORY_T1";
-      const name = "标的" + stdSymbol;
-      this.conn.run(
-        "INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode) VALUES (?, ?, ?, ?)",
-        [stdSymbol, name, assetClass, setMode]
-      );
-    }
+    this.ensureSymbol(params.symbol);
 
     const amount = Number(params.amount);
     if (!isFinite(amount) || amount <= 0) {

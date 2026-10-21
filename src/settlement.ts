@@ -3,6 +3,7 @@
  */
 import { Database } from "bun:sqlite";
 import { SettlementMode, LotStatus, Lot } from "./models.ts";
+import { inferSymbolMetadata } from "./quotes.ts";
 
 export class SettlementArbitrator {
   private conn: Database;
@@ -20,17 +21,9 @@ export class SettlementArbitrator {
       return row.settlement_mode as SettlementMode;
     }
 
-    // Fallback heuristic: 518xxx, 159934, etc are Native T+0
-    if (
-      symbol.includes("518880") ||
-      symbol.includes("159934") ||
-      symbol.includes("518800") ||
-      symbol.includes("159937") ||
-      symbol.includes("513")
-    ) {
-      return SettlementMode.NATIVE_T0;
-    }
-    return SettlementMode.STATUTORY_T1;
+    // Fallback heuristic using strict prefix inference
+    const meta = inferSymbolMetadata(symbol);
+    return meta.settlementMode;
   }
 
   public computeAvailableCorePosition(symbol: string, asOfDate?: Date, accountId?: string): number {
