@@ -18,7 +18,11 @@
 - **单标的 30% 仓位硬顶组合级风控中间件 (Position Cap & Risk Guard)**：
   - 买入/加仓前置核算该标的在投资组合中的持仓占比；
   - 超过 30.00% 组合级硬顶红线时坚决触发风控拦截，阻断无序重仓。
-- **全局交互式看板原生原语**：`trade dashboard [--out <path>] [--open]` 一键生成单文件 HTML 全景看板（标的全景卡片 / 持仓总览 / 时间维度与盈亏率维度物理隔离的批次双视图 / 平仓战绩与穿透弹窗）。
+- **多券商账户注册表与买卖理由沉淀 (Accounts & Decision Thesis)**：
+  - `accounts` 表维护 `account_id / name / broker_code / currency / is_active`，支持券商预设 (`CMB`…`IBKR`/`CUSTOM`)；
+  - `trade account list/add` 原语；未登记账户买入时自愈登记，快捷录入永不中断；
+  - `lots.buy_reason` / `lots.close_reason` + `trades.reason` 全链路记录建仓假设、平仓复盘与单笔动机，缺省为 `NULL` 完全向后兼容。
+- **全局交互式看板原生原语**：`trade dashboard [--out <path>] [--open]` 一键生成单文件 HTML 全景看板（标的全景卡片 / 持仓总览 / 时间维度与盈亏率维度物理隔离的批次双视图 / 平仓战绩与穿透弹窗）。看板账户切换器完全由账本动态生成，零硬编码券商字面量。
 - **批次部分平仓与战绩多维归因**：
   - 支持指定数量部分平仓，状态保持 `ACTIVE` 持续监控；
   - `trade stats` 提供按标的明细、按操盘类型（普通波段、天然 T+0、底仓代冲做 T）的多维战绩归因。
@@ -27,7 +31,7 @@
 
 ### 1. 构建与测试
 ```bash
-# 运行 76 项全量核心测试（100% 通过）
+# 运行全量核心测试（100% 通过）
 bun test
 
 # 编译生成单一独立可执行文件 trade
@@ -36,8 +40,13 @@ bun run build
 
 ### 2. 命令行核心操作
 ```bash
-# 初始买入建仓（支持 JSON 管道输出）
-./trade lot buy --symbol 518880.SH --price 6.120 --qty 2000 --json
+# 账户注册与查询
+./trade account add CMB_MAIN --name "招商稳健仓" --broker CMB --json
+./trade account list
+
+# 买入建仓并沉淀决策理由（同时支持位置参数速记）
+./trade lot buy --symbol 518880.SH --price 6.120 --qty 2000 --account CMB_MAIN --reason "避险底仓 + 央行增持" --json
+./trade lot edit LOT-20261019-001 --reason "升级：降息周期加码" --json
 
 # 梯级加仓（自动绑定血缘并受 48h 防抖守卫保护）
 ./trade lot add --parent-lot-id LOT-20261019-001 --price 5.500 --amount 10000 --json
@@ -50,8 +59,8 @@ bun run build
 ./trade scan
 ./trade scan --json
 
-# 批次平仓（支持全额或部分平仓、底仓代冲做 T）
-./trade lot close --lot-id LOT-20261019-001 --price 7.050 --qty 1000 --json
+# 批次平仓（支持全额或部分平仓、底仓代冲做 T，并沉淀平仓复盘）
+./trade lot close --lot-id LOT-20261019-001 --price 7.050 --qty 1000 --reason "触及 +15% 移动止盈" --json
 ./trade lot close --lot-id LOT-20261019-002 --price 1670.00 --substitute-core --json
 
 # 现金分红流水管理

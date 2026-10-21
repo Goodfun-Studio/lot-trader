@@ -5,10 +5,20 @@ import { Database } from "bun:sqlite";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { mkdirSync } from "fs";
+import { AccountRepository, DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 
 export const DEFAULT_DB_PATH = join(homedir(), ".trade", "trade.db");
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS accounts (
+    account_id VARCHAR(32) PRIMARY KEY,
+    name VARCHAR(50) NOT NULL,
+    broker_code VARCHAR(32) DEFAULT 'CUSTOM',
+    currency VARCHAR(10) DEFAULT 'CNY',
+    is_active BOOLEAN DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS symbols (
     symbol VARCHAR(20) PRIMARY KEY,
     name VARCHAR(50) NOT NULL,
@@ -38,6 +48,8 @@ CREATE TABLE IF NOT EXISTS lots (
     max_low_price DECIMAL(10, 4),
     peak_price DECIMAL(10, 4),
     trailing_stop_active BOOLEAN DEFAULT 0,
+    buy_reason TEXT,
+    close_reason TEXT,
     close_time DATETIME,
     close_avg_price DECIMAL(10, 4),
     realized_pnl DECIMAL(12, 2) DEFAULT 0.00,
@@ -82,6 +94,7 @@ CREATE TABLE IF NOT EXISTS trades (
     quantity INT NOT NULL,
     fee DECIMAL(10, 2) DEFAULT 0.00,
     realized_pnl DECIMAL(12, 2) DEFAULT 0.00,
+    reason TEXT,
     executed_at DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -166,6 +179,25 @@ export class AppDatabase {
     } catch {
       // Column might already exist
     }
+
+    // Decision rationale (Decision Thesis) columns: additive, nullable, never blocking.
+    for (const ddl of [
+      "ALTER TABLE lots ADD COLUMN buy_reason TEXT;",
+      "ALTER TABLE lots ADD COLUMN close_reason TEXT;",
+      "ALTER TABLE trades ADD COLUMN reason TEXT;",
+    ]) {
+      try {
+        conn.run(ddl);
+      } catch {
+        // Column might already exist
+      }
+    }
+
+    // Account registry: seed the generic fallback, then backfill every account id already
+    // present in the ledger so legacy databases surface all accounts without manual setup.
+    const accounts = new AccountRepository(conn);
+    accounts.ensureAccount(DEFAULT_ACCOUNT_ID);
+    accounts.registerAccountsFromLedger();
 
     const insertStmt = conn.prepare(`
       INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode, lot_size)

@@ -2,13 +2,14 @@
  * Lot Trader engine services.
  */
 import { Database } from "bun:sqlite";
-import { Lot, LotStatus, SettlementMode, Signal, Trade, Dividend } from "./models.ts";
+import { Lot, LotStatus, SettlementMode, Signal, Trade, Dividend, AssetClass } from "./models.ts";
 import { computeCostBasis, computeFloatingPnl, getSellFeeRate } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { SignalScanner } from "./scanner.ts";
-import { LotCloser } from "./closer.ts";
+import { LotCloser, appendReason } from "./closer.ts";
 import { QuoteProvider, normalizeSymbol, inferSymbolMetadata } from "./quotes.ts";
-import { PositionAggregator, PositionSummary } from "./position.ts";
+import { PositionAggregator, PositionSummary, PositionHierarchicalView } from "./position.ts";
+import { Account, AccountRepository, DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./accounts.ts";
 
 export interface LotListItem {
   lot_id: string;
@@ -30,6 +31,8 @@ export interface LotListItem {
   is_day_trading: boolean;
   peak_price?: number | null;
   trailing_stop_active?: boolean;
+  buy_reason?: string | null;
+  close_reason?: string | null;
   realized_pnl: number;
 }
 
@@ -92,6 +95,7 @@ export class TraderEngine {
   public scanner: SignalScanner;
   public closer: LotCloser;
   public positionAggregator: PositionAggregator;
+  public accounts: AccountRepository;
   public portfolioBudget?: number;
 
   constructor(dbConn: Database, quoteProvider?: QuoteProvider, portfolioBudget?: number) {
@@ -101,7 +105,39 @@ export class TraderEngine {
     this.scanner = new SignalScanner(dbConn);
     this.closer = new LotCloser(dbConn);
     this.positionAggregator = new PositionAggregator(dbConn, this.quoteProvider);
+    this.accounts = new AccountRepository(dbConn);
     this.portfolioBudget = portfolioBudget;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Account registry primitives (trade account list / add)
+  // ---------------------------------------------------------------------------
+
+  public listAccounts(includeInactive: boolean = false): Account[] {
+    return this.accounts.listAccounts(includeInactive);
+  }
+
+  public getAccount(accountId: string): Account | null {
+    return this.accounts.getAccount(accountId);
+  }
+
+  public addAccount(
+    accountId: string,
+    options: { name: string; brokerCode?: string; currency?: string },
+  ): Account {
+    return this.accounts.addAccount(accountId, options);
+  }
+
+  public ensureAccount(accountId?: string | null): Account {
+    return this.accounts.ensureAccount(accountId);
+  }
+
+  /** `--account ALL` (or empty) means "no account filter", everything else is an exact account id. */
+  public resolveAccountFilter(accountId?: string | null): string | undefined {
+    if (!accountId) return undefined;
+    const trimmed = accountId.trim();
+    if (!trimmed || trimmed.toUpperCase() === "ALL") return undefined;
+    return normalizeAccountId(trimmed);
   }
 
   /**
@@ -121,7 +157,7 @@ export class TraderEngine {
       remaining_quantity: number;
       buy_price: number;
       cost_basis_unit: number;
-    }>("SELECT symbol, remaining_quantity, buy_price, cost_basis_unit FROM lots WHERE status = 'ACTIVE'").all();
+    }, []>("SELECT symbol, remaining_quantity, buy_price, cost_basis_unit FROM lots WHERE status = 'ACTIVE'").all();
 
     let existingTargetSymbolValue = 0;
     let otherSymbolsValue = 0;
@@ -210,11 +246,12 @@ export class TraderEngine {
     buyTime?: Date,
     parentLotId?: string,
     skipRiskCheck: boolean = false,
-    accountId?: string
+    accountId?: string,
+    buyReason?: string | null
   ): Lot {
     const [stdSymbol] = normalizeSymbol(symbolInput);
     const now = buyTime || new Date();
-    const accId = accountId && accountId.trim() ? accountId.trim() : 'DEFAULT';
+    const accId = normalizeAccountId(accountId);
 
     if (quantity <= 0) {
       throw new Error("买入数量必须大于 0");
@@ -274,7 +311,7 @@ export class TraderEngine {
       symRow = this.conn.query<any, [string]>("SELECT * FROM symbols WHERE symbol = ?").get(stdSymbol);
     }
 
-    const settlementMode = symRow.settlement_mode as SettlementMode;
+    const settlementMode = symRow!.settlement_mode as SettlementMode;
 
     let buyFee = fee;
     if (buyFee === undefined || buyFee === null) {
@@ -304,9 +341,13 @@ export class TraderEngine {
     const timeStr = "" + year + month + day + hours + mins + secs;
     const tradeId = "TRD-" + timeStr + "-" + randSuffix;
 
+    // Account registry: self-heal unknown accounts right before the ledger write, so quick entry
+    // into a brand-new broker account never blocks (and failed validations leave no trace).
+    this.accounts.ensureAccount(accId);
+
     const tx = this.conn.transaction(() => {
       this.conn.run(
-        "INSERT INTO lots (lot_id, account_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level, can_sell_now, is_day_trading, max_high_price, max_low_price, peak_price, trailing_stop_active, realized_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO lots (lot_id, account_id, parent_lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, buy_fee, cost_basis_unit, status, pyramid_level, can_sell_now, is_day_trading, max_high_price, max_low_price, peak_price, trailing_stop_active, buy_reason, realized_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           lotId,
           accId,
@@ -326,12 +367,13 @@ export class TraderEngine {
           price.toString(),
           price.toString(),
           0,
+          (buyReason ?? "").trim() || null,
           "0.00",
         ]
       );
 
       this.conn.run(
-        "INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, reason, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           tradeId,
           accId,
@@ -341,6 +383,7 @@ export class TraderEngine {
           quantity,
           buyFee.toString(),
           "0.00",
+          (buyReason ?? "").trim() || null,
           now.toISOString(),
         ]
       );
@@ -366,6 +409,7 @@ export class TraderEngine {
       buyTime?: Date;
       skipRiskCheck?: boolean;
       accountId?: string;
+      reason?: string | null;
     }
   ): Lot {
     const parentLot = this.getLot(parentLotId);
@@ -373,7 +417,7 @@ export class TraderEngine {
       throw new Error("指定的父批次不存在: " + parentLotId);
     }
 
-    const targetAccountId = options?.accountId && options.accountId.trim() ? options.accountId.trim() : (parentLot.account_id || 'DEFAULT');
+    const targetAccountId = options?.accountId && options.accountId.trim() ? options.accountId.trim() : (parentLot.account_id || DEFAULT_ACCOUNT_ID);
 
     let quantity = options?.qty;
     if (!quantity || quantity <= 0) {
@@ -392,7 +436,8 @@ export class TraderEngine {
       options?.buyTime,
       parentLotId,
       options?.skipRiskCheck,
-      targetAccountId
+      targetAccountId,
+      options?.reason ?? null
     );
   }
 
@@ -402,7 +447,7 @@ export class TraderEngine {
 
     return {
       lot_id: row.lot_id,
-      account_id: row.account_id || 'DEFAULT',
+      account_id: row.account_id || DEFAULT_ACCOUNT_ID,
       symbol: row.symbol,
       buy_time: new Date(row.buy_time),
       buy_price: Number(row.buy_price),
@@ -420,10 +465,50 @@ export class TraderEngine {
       max_low_price: row.max_low_price ? Number(row.max_low_price) : null,
       peak_price: row.peak_price ? Number(row.peak_price) : null,
       trailing_stop_active: Boolean(row.trailing_stop_active),
+      buy_reason: row.buy_reason ?? null,
+      close_reason: row.close_reason ?? null,
       close_time: row.close_time ? new Date(row.close_time) : null,
       close_avg_price: row.close_avg_price ? Number(row.close_avg_price) : null,
       realized_pnl: Number(row.realized_pnl),
     };
+  }
+
+  /**
+   * Update the decision thesis on an existing lot without touching any accounting field.
+   * Empty string clears the note (stored as NULL), omitted fields are left untouched.
+   */
+  public updateLotReason(
+    lotId: string,
+    patch: { buyReason?: string | null; closeReason?: string | null; append?: boolean },
+  ): Lot {
+    const lot = this.getLot(lotId);
+    if (!lot) {
+      throw new Error("批次不存在: " + lotId);
+    }
+
+    const sets: string[] = [];
+    const params: any[] = [];
+
+    if (patch.buyReason !== undefined) {
+      const value = patch.append ? appendReason(lot.buy_reason, patch.buyReason) : (patch.buyReason ?? "").trim() || null;
+      sets.push("buy_reason = ?");
+      params.push(value);
+    }
+    if (patch.closeReason !== undefined) {
+      const value = patch.append
+        ? appendReason(lot.close_reason, patch.closeReason)
+        : (patch.closeReason ?? "").trim() || null;
+      sets.push("close_reason = ?");
+      params.push(value);
+    }
+
+    if (sets.length === 0) {
+      throw new Error("未提供任何需要更新的字段 (--reason / --close-reason)");
+    }
+
+    params.push(lotId);
+    this.conn.run(`UPDATE lots SET ${sets.join(", ")} WHERE lot_id = ?`, params);
+    return this.getLot(lotId)!;
   }
 
   public async listLots(status: string = "ACTIVE", symbol?: string, accountId?: string): Promise<LotListItem[]> {
@@ -441,7 +526,7 @@ export class TraderEngine {
     }
     if (accountId) {
       query += " AND account_id = ?";
-      params.push(accountId);
+      params.push(this.resolveAccountFilter(accountId) ?? normalizeAccountId(accountId));
     }
     query += " ORDER BY buy_time DESC";
 
@@ -492,7 +577,7 @@ export class TraderEngine {
 
       results.push({
         lot_id: r.lot_id,
-        account_id: r.account_id || 'DEFAULT',
+        account_id: r.account_id || DEFAULT_ACCOUNT_ID,
         symbol: sym,
         symbol_name: name,
         settlement_mode: setMode,
@@ -510,6 +595,8 @@ export class TraderEngine {
         is_day_trading: Boolean(r.is_day_trading),
         peak_price: r.peak_price ? Number(r.peak_price) : null,
         trailing_stop_active: Boolean(r.trailing_stop_active),
+        buy_reason: r.buy_reason ?? null,
+        close_reason: r.close_reason ?? null,
         realized_pnl: Number(r.realized_pnl),
       });
     }
@@ -526,7 +613,7 @@ export class TraderEngine {
     const params: any[] = [];
     if (accountId) {
       query += " AND account_id = ?";
-      params.push(accountId);
+      params.push(this.resolveAccountFilter(accountId) ?? normalizeAccountId(accountId));
     }
     const rows = this.conn.query<{ lot_id: string; symbol: string }, any[]>(query).all(...params);
 
@@ -573,17 +660,18 @@ export class TraderEngine {
     closeQuantity?: number,
     substituteCore: boolean = false,
     fee?: number,
-    closeTime?: Date
+    closeTime?: Date,
+    closeReason?: string | null
   ): [Lot, Trade] {
-    return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime);
+    return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime, closeReason);
   }
 
   public async getHierarchicalPositionView(symbolFilter?: string, asOfTime?: Date, customFullPositionCap?: number, accountFilter?: string): Promise<PositionHierarchicalView> {
-    return this.positionAggregator.getHierarchicalPositionView(symbolFilter, asOfTime, customFullPositionCap, accountFilter);
+    return this.positionAggregator.getHierarchicalPositionView(symbolFilter, asOfTime, customFullPositionCap, this.resolveAccountFilter(accountFilter));
   }
 
   public async getPositionSummaries(symbolFilter?: string, asOfTime?: Date, accountFilter?: string): Promise<PositionSummary[]> {
-    return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime, accountFilter);
+    return this.positionAggregator.getPositionSummaries(symbolFilter, asOfTime, this.resolveAccountFilter(accountFilter));
   }
 
   public computeStats(days?: number, symbol?: string, accountId?: string): TradingStats {
@@ -601,7 +689,7 @@ export class TraderEngine {
     }
     if (accountId) {
       query += " AND t.account_id = ?";
-      params.push(accountId);
+      params.push(this.resolveAccountFilter(accountId) ?? normalizeAccountId(accountId));
     }
 
     const rows = this.conn.query<any, any[]>(query).all(...params);
@@ -746,7 +834,8 @@ export class TraderEngine {
       throw new Error(`Invalid dividend amount: ${params.amount}. Must be a positive finite number.`);
     }
 
-    const accountId = params.accountId ? params.accountId.trim().toUpperCase() : "DEFAULT";
+    const accountId = normalizeAccountId(params.accountId);
+    this.accounts.ensureAccount(accountId);
     const now = new Date();
     let exDate = params.exDate ? params.exDate.trim() : "";
     if (!exDate) {
@@ -800,8 +889,8 @@ export class TraderEngine {
     }
 
     if (filter?.accountId) {
-      const acc = filter.accountId.trim().toUpperCase();
-      if (acc !== "ALL") {
+      const acc = this.resolveAccountFilter(filter.accountId);
+      if (acc) {
         query += " AND account_id = ?";
         params.push(acc);
       }
@@ -845,8 +934,8 @@ export class TraderEngine {
     }
 
     if (accountId) {
-      const acc = accountId.trim().toUpperCase();
-      if (acc !== "ALL") {
+      const acc = this.resolveAccountFilter(accountId);
+      if (acc) {
         query += " AND account_id = ?";
         params.push(acc);
       }

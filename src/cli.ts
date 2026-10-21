@@ -26,13 +26,14 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,position,scan,stats,physics,dashboard,dividend} ...
+  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,dividend} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,position,scan,stats,physics,dashboard}  Available subcommands
-    lot             Lot operations (buy, add, list, close)
+  {lot,account,position,scan,stats,physics,dashboard,dividend}  Available subcommands
+    lot             Lot operations (buy, add, list, close, edit)
+    account         Broker account registry (add, list)
     position        Position / Holding aggregated view
     scan            Scan active lots for signals (including trailing stop)
     stats           Performance statistics with multi-dimensional attribution
@@ -226,50 +227,180 @@ async function handleDashboard(args: string[]): Promise<void> {
 }
 
 function printLotHelp(): void {
-  console.log(`usage: trade lot {buy,add,list,close} ...
+  console.log(`usage: trade lot {buy,add,list,close,edit} ...
 
 Lot actions:
-  buy               Buy / create a new initial lot [--account <ACC>]
-  add               Pyramid dip add to an existing lot (with anti-shake guard) [--account <ACC>]
-  list              List lots [--account <ACC>]
-  close             Close a lot (full or partial) [--account <ACC>]
+  buy               Buy / create a new initial lot [--account <ACC>] [--reason <TEXT>]
+  add               Pyramid dip add to an existing lot (with anti-shake guard) [--account <ACC>] [--reason <TEXT>]
+  list              List lots [--account <ACC>] [--status ACTIVE|CLOSED|ALL]
+  close             Close a lot (full or partial) [--account <ACC>] [--reason <TEXT>]
+  edit              Update the decision thesis of a lot [--reason <TEXT>] [--close-reason <TEXT>]
+
+Positional shorthand (equivalent to the flags):
+  trade lot buy <symbol> <price> <qty>
+  trade lot add <lot_id> <price>
+  trade lot close <lot_id> <price> [qty]
+  trade lot edit <lot_id>
 `);
 }
 
+function printAccountHelp(): void {
+  console.log(`usage: trade account {add,list} ...
+
+Broker account registry:
+  list              List configured accounts [--all] [--json]
+  add               Register an account: trade account add <account_id> --name <name> [--broker <code>] [--currency <ISO>]
+
+Broker presets: CMB | CITIC | HTSC | EASTMONEY | GUOTAI | YINHE | GF | PA | FUTU | IBKR | CUSTOM
+Unknown accounts passed to 'trade lot buy --account' are auto-registered as CUSTOM.
+`);
+}
+
+async function handleAccount(engine: TraderEngine, args: string[]): Promise<void> {
+  const subAction = args[0];
+  const restArgs = args.slice(1);
+
+  if (!subAction || subAction === "-h" || subAction === "--help") {
+    printAccountHelp();
+    return;
+  }
+
+  if (subAction === "list") {
+    const { values } = parseArgs({
+      args: restArgs,
+      options: {
+        all: { type: "boolean", default: false },
+        json: { type: "boolean", default: false },
+      },
+      strict: false,
+    });
+    const isJson = Boolean(values.json);
+
+    try {
+      const accounts = engine.listAccounts(Boolean(values.all));
+      if (isJson) {
+        console.log(JSON.stringify({ code: 0, msg: "success", data: accounts }, null, 2));
+        return;
+      }
+      if (accounts.length === 0) {
+        console.log("暂无已配置账户，可使用 trade account add <id> --name <别名> 登记。");
+        return;
+      }
+      console.log(`🏛 已配置券商账户 (共 ${accounts.length} 个)`);
+      console.log("-".repeat(90));
+      console.log(
+        "Account ID".padEnd(14) + " | " + "Name".padEnd(18) + " | " + "Broker".padEnd(10) + " | " + "Currency".padEnd(8) + " | " + "Status"
+      );
+      console.log("-".repeat(90));
+      for (const a of accounts) {
+        console.log(
+          a.account_id.padEnd(14) + " | " +
+          a.name.padEnd(18) + " | " +
+          a.broker_code.padEnd(10) + " | " +
+          a.currency.padEnd(8) + " | " +
+          (a.is_active ? "ACTIVE" : "INACTIVE")
+        );
+      }
+      console.log("-".repeat(90));
+    } catch (err: any) {
+      if (isJson) {
+        console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+      } else {
+        console.error(`❌ 查询账户失败: ${err.message}`);
+      }
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subAction === "add") {
+    const { values, positionals } = parseArgs({
+      args: restArgs,
+      options: {
+        id: { type: "string" },
+        name: { type: "string" },
+        broker: { type: "string" },
+        currency: { type: "string" },
+        json: { type: "boolean", default: false },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+    const isJson = Boolean(values.json);
+    const accountId = (values.id as string | undefined) || positionals[0];
+    const name = values.name as string | undefined;
+
+    try {
+      if (!accountId || !name) {
+        throw new Error("Missing required arguments: <account_id> (or --id), --name");
+      }
+      const account = engine.addAccount(accountId, {
+        name,
+        brokerCode: values.broker as string | undefined,
+        currency: values.currency as string | undefined,
+      });
+      if (isJson) {
+        console.log(JSON.stringify({ code: 0, msg: "success", data: account }, null, 2));
+      } else {
+        console.log(`✅ 账户登记成功: ${account.account_id}`);
+        console.log(`别名: ${account.name} | 券商: ${account.broker_code} | 币种: ${account.currency} | 状态: ${account.is_active ? "ACTIVE" : "INACTIVE"}`);
+      }
+    } catch (err: any) {
+      if (isJson) {
+        console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+      } else {
+        console.error(`❌ 账户登记失败: ${err.message}`);
+      }
+      process.exit(1);
+    }
+    return;
+  }
+
+  printAccountHelp();
+  process.exit(1);
+}
+
 async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args,
     options: {
       symbol: { type: "string" },
       price: { type: "string" },
       qty: { type: "string" },
       account: { type: "string" },
+      reason: { type: "string" },
       fee: { type: "string" },
       time: { type: "string" },
       parent: { type: "string" },
       "skip-risk": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
+    allowPositionals: true,
     strict: false,
   });
 
   const isJson = Boolean(values.json);
 
   try {
-    if (!values.symbol || !values.price || !values.qty) {
-      throw new Error("Missing required arguments: --symbol, --price, --qty");
+    const symbolArg = (values.symbol as string | undefined) || positionals[0];
+    const priceArg = (values.price as string | undefined) || positionals[1];
+    const qtyArg = (values.qty as string | undefined) || positionals[2];
+
+    if (!symbolArg || !priceArg || !qtyArg) {
+      throw new Error("Missing required arguments: --symbol, --price, --qty (or: trade lot buy <symbol> <price> <qty>)");
     }
 
-    const symbol = values.symbol as string;
-    const price = parseFloat(values.price as string);
-    const qty = parseInt(values.qty as string, 10);
+    const symbol = symbolArg;
+    const price = parseFloat(priceArg);
+    const qty = parseInt(qtyArg, 10);
     const account = values.account ? (values.account as string).trim() : undefined;
+    const reason = values.reason !== undefined ? (values.reason as string) : undefined;
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const parent = values.parent as string | undefined;
     const skipRisk = Boolean(values["skip-risk"]);
 
-    const lot = engine.buyLot(symbol, price, qty, fee, time, parent, skipRisk, account);
+    const lot = engine.buyLot(symbol, price, qty, fee, time, parent, skipRisk, account, reason);
 
     if (isJson) {
       const out = {
@@ -288,6 +419,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
           status: lot.status,
           pyramid_level: lot.pyramid_level,
           can_sell_now: lot.can_sell_now,
+          buy_reason: lot.buy_reason ?? null,
         },
       };
       console.log(JSON.stringify(out, null, 2));
@@ -297,6 +429,9 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
       console.log(`全成本单价: ${lot.cost_basis_unit.toFixed(4)} 元 | 规费: ${lot.buy_fee.toFixed(2)} 元 | 即刻可卖: ${lot.can_sell_now}`);
       if (lot.parent_lot_id) {
         console.log(`溯源父批次: ${lot.parent_lot_id} (加仓层级 L${lot.pyramid_level})`);
+      }
+      if (lot.buy_reason) {
+        console.log(`买入理由: ${lot.buy_reason}`);
       }
     }
   } catch (err: any) {
@@ -310,7 +445,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
 }
 
 async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args,
     options: {
       "parent-lot-id": { type: "string" },
@@ -319,26 +454,31 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       amount: { type: "string" },
       qty: { type: "string" },
       account: { type: "string" },
+      reason: { type: "string" },
       fee: { type: "string" },
       time: { type: "string" },
       "skip-risk": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
+    allowPositionals: true,
     strict: false,
   });
 
   const isJson = Boolean(values.json);
-  const parentId = (values["parent-lot-id"] as string) || (values.parent as string);
+  const parentId =
+    (values["parent-lot-id"] as string) || (values.parent as string) || positionals[0];
+  const priceArg = (values.price as string | undefined) || positionals[1];
 
   try {
-    if (!parentId || !values.price) {
-      throw new Error("Missing required arguments: --parent-lot-id (or --parent), --price");
+    if (!parentId || !priceArg) {
+      throw new Error("Missing required arguments: --parent-lot-id (or --parent), --price (or: trade lot add <lot_id> <price>)");
     }
 
-    const price = parseFloat(values.price as string);
+    const price = parseFloat(priceArg);
     const amount = values.amount ? parseFloat(values.amount as string) : undefined;
     const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
     const account = values.account ? (values.account as string).trim() : undefined;
+    const reason = values.reason !== undefined ? (values.reason as string) : undefined;
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const skipRisk = Boolean(values["skip-risk"]);
@@ -350,6 +490,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       buyTime: time,
       skipRiskCheck: skipRisk,
       accountId: account,
+      reason,
     });
 
     if (isJson) {
@@ -370,6 +511,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
           status: lot.status,
           pyramid_level: lot.pyramid_level,
           can_sell_now: lot.can_sell_now,
+          buy_reason: lot.buy_reason ?? null,
         },
       };
       console.log(JSON.stringify(out, null, 2));
@@ -378,6 +520,9 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       console.log(`所属账户: ${lot.account_id} | 父批次: ${lot.parent_lot_id} | 递增后加仓层级: L${lot.pyramid_level}`);
       console.log(`标的代码: ${lot.symbol} | 加仓数量: ${lot.buy_quantity} 股 | 成交单价: ${lot.buy_price.toFixed(4)} 元`);
       console.log(`加仓全成本单价: ${lot.cost_basis_unit.toFixed(4)} 元 | 规费: ${lot.buy_fee.toFixed(2)} 元`);
+      if (lot.buy_reason) {
+        console.log(`加仓理由: ${lot.buy_reason}`);
+      }
     }
   } catch (err: any) {
     if (isJson) {
@@ -423,7 +568,7 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
         return;
       }
 
-      const header = `${"Lot ID".padEnd(19)} | ${"Account".padEnd(10)} | ${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(6)} | ${"BuyCost".padStart(8)} | ${"Current".padStart(8)} | ${"Return".padStart(9)} | ${"PnL".padStart(10)} | ${"Action Advice".padEnd(14)}`;
+      const header = `${"Lot ID".padEnd(19)} | ${"Account".padEnd(10)} | ${"Symbol".padEnd(10)} | ${"Name".padEnd(8)} | ${"Qty".padStart(6)} | ${"BuyCost".padStart(8)} | ${"Current".padStart(8)} | ${"Return".padStart(9)} | ${"PnL".padStart(10)} | ${"Action Advice".padEnd(14)} | ${"Buy Reason"}`;
       const sep = "-".repeat(header.length);
       console.log(sep);
       console.log(header);
@@ -456,8 +601,9 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
         const retCol = formatRate(rRate).padStart(9);
         const pnlCol = pnlStr.padStart(10);
         const advCol = advice.padEnd(14);
+        const reasonCol = (l.buy_reason || "--").replace(/\s+/g, " ").slice(0, 32);
 
-        console.log(`${idCol} | ${accCol} | ${symCol} | ${nameCol} | ${qtyCol} | ${costCol} | ${currCol} | ${retCol} | ${pnlCol} | ${advCol}`);
+        console.log(`${idCol} | ${accCol} | ${symCol} | ${nameCol} | ${qtyCol} | ${costCol} | ${currCol} | ${retCol} | ${pnlCol} | ${advCol} | ${reasonCol}`);
       }
       console.log(sep);
     }
@@ -472,44 +618,51 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
 }
 
 async function handleLotClose(engine: TraderEngine, args: string[]): Promise<void> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args,
     options: {
       "lot-id": { type: "string" },
       price: { type: "string" },
       qty: { type: "string" },
       account: { type: "string" },
+      reason: { type: "string" },
       "substitute-core": { type: "boolean", default: false },
       fee: { type: "string" },
       time: { type: "string" },
       json: { type: "boolean", default: false },
     },
+    allowPositionals: true,
     strict: false,
   });
 
   const isJson = Boolean(values.json);
 
   try {
-    if (!values["lot-id"] || !values.price) {
-      throw new Error("Missing required arguments: --lot-id, --price");
+    const lotIdArg = (values["lot-id"] as string | undefined) || positionals[0];
+    const priceArg = (values.price as string | undefined) || positionals[1];
+    const qtyArg = (values.qty as string | undefined) || positionals[2];
+
+    if (!lotIdArg || !priceArg) {
+      throw new Error("Missing required arguments: --lot-id, --price (or: trade lot close <lot_id> <price> [qty])");
     }
 
-    const lotId = values["lot-id"] as string;
-    const price = parseFloat(values.price as string);
-    const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
+    const lotId = lotIdArg;
+    const price = parseFloat(priceArg);
+    const qty = qtyArg !== undefined ? parseInt(qtyArg, 10) : undefined;
     const substituteCore = Boolean(values["substitute-core"]);
+    const reason = values.reason !== undefined ? (values.reason as string) : undefined;
     const fee = values.fee ? parseFloat(values.fee as string) : undefined;
     const time = values.time ? new Date(values.time as string) : undefined;
     const account = values.account ? (values.account as string).trim() : undefined;
 
     if (account) {
       const targetLot = engine.getLot(lotId);
-      if (targetLot && targetLot.account_id !== account) {
+      if (targetLot && targetLot.account_id !== engine.resolveAccountFilter(account)) {
         throw new Error(`批次账户不匹配：批次 ${lotId} 属于账户 ${targetLot.account_id}，而非指定的 ${account}`);
       }
     }
 
-    const [updatedLot, trade] = engine.closeLot(lotId, price, qty, substituteCore, fee, time);
+    const [updatedLot, trade] = engine.closeLot(lotId, price, qty, substituteCore, fee, time, reason);
 
     if (isJson) {
       const out = {
@@ -525,6 +678,9 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
           close_quantity: trade.quantity,
           fee: trade.fee,
           realized_pnl: trade.realized_pnl,
+          reason: trade.reason ?? null,
+          buy_reason: updatedLot.buy_reason ?? null,
+          close_reason: updatedLot.close_reason ?? null,
           remaining_quantity: updatedLot.remaining_quantity,
           lot_status: updatedLot.status,
           is_day_trading: updatedLot.is_day_trading,
@@ -544,12 +700,86 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
       if (isPartial) {
         console.log(`剩余持仓股数: ${updatedLot.remaining_quantity} 股 (状态保持 ACTIVE 继续监控)`);
       }
+      if (trade.reason) {
+        console.log(`平仓理由: ${trade.reason}`);
+      }
     }
   } catch (err: any) {
     if (isJson) {
       console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
     } else {
       console.error(`❌ 平仓失败: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
+
+async function handleLotEdit(engine: TraderEngine, args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      "lot-id": { type: "string" },
+      reason: { type: "string" },
+      "buy-reason": { type: "string" },
+      "close-reason": { type: "string" },
+      append: { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  const lotId = (values["lot-id"] as string | undefined) || positionals[0];
+
+  try {
+    if (!lotId) {
+      throw new Error("Missing required arguments: <lot_id> (or --lot-id)");
+    }
+
+    const buyReason = values["buy-reason"] !== undefined ? (values["buy-reason"] as string) : (values.reason as string | undefined);
+    const closeReason = values["close-reason"] as string | undefined;
+
+    if (buyReason === undefined && closeReason === undefined) {
+      throw new Error("Missing reason: pass --reason <TEXT> (buy thesis) and/or --close-reason <TEXT>");
+    }
+
+    const lot = engine.updateLotReason(lotId, {
+      buyReason,
+      closeReason,
+      append: Boolean(values.append),
+    });
+
+    if (isJson) {
+      console.log(
+        JSON.stringify(
+          {
+            code: 0,
+            msg: "success",
+            data: {
+              lot_id: lot.lot_id,
+              account_id: lot.account_id,
+              symbol: lot.symbol,
+              status: lot.status,
+              buy_reason: lot.buy_reason ?? null,
+              close_reason: lot.close_reason ?? null,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.log(`✅ 批次 ${lot.lot_id} 决策理由已更新`);
+      console.log(`账户: ${lot.account_id} | 标的: ${lot.symbol} | 状态: ${lot.status}`);
+      console.log(`买入理由: ${lot.buy_reason || "--"}`);
+      console.log(`平仓理由: ${lot.close_reason || "--"}`);
+    }
+  } catch (err: any) {
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: err.message, data: null }));
+    } else {
+      console.error(`❌ 更新理由失败: ${err.message}`);
     }
     process.exit(1);
   }
@@ -1125,10 +1355,14 @@ async function main(): Promise<void> {
       await handleLotList(engine, subArgs);
     } else if (subCmd === "close") {
       await handleLotClose(engine, subArgs);
+    } else if (subCmd === "edit") {
+      await handleLotEdit(engine, subArgs);
     } else {
       printLotHelp();
       process.exit(1);
     }
+  } else if (command === "account") {
+    await handleAccount(engine, restArgs);
   } else if (command === "position") {
     await handlePosition(engine, restArgs);
   } else if (command === "scan") {

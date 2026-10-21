@@ -303,10 +303,10 @@
     <div class="header">
       <div class="header-title">
         <h1>📊 Lot-Trader 全局投资组合全景透视看板</h1>
-        <p>个人投资顾问 • 招商证券 (CMB) & 平安证券 (PA) 双账户合并穿透 • 支持多账户独立核算与底仓隔离</p>
+        <p>个人投资顾问 • {{ACCOUNT_MERGE_LABEL}} • 支持多账户独立核算与底仓物理隔离</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);">🌐 全账户合并空间 (CMB + PA)</span>
+        <span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);">🌐 {{ACCOUNT_MERGE_LABEL}}</span>
         <span class="badge">已穿透 {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场标的 • {{TOTAL_ACTIVE_LOTS_COUNT}} 笔活跃批次 • {{TOTAL_CLOSED_TRADES_COUNT}} 笔平仓战绩</span>
       </div>
     </div>
@@ -324,18 +324,16 @@
     <!-- Account Filter Bar (Global Switcher) -->
     <div class="account-filter-bar" style="display:flex;gap:10px;margin-bottom:20px;align-items:center;background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:10px;border:1px solid var(--card-border);flex-wrap:wrap;">
       <span style="font-size:12px;color:var(--text-muted);font-weight:600;">🏛 账户筛选视角:</span>
-      <button id="btn-acc-all" class="subview-btn active" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('ALL')">🌐 全账户合并 ({{TOTAL_ACTIVE_SYMBOLS_COUNT}} 标的 • {{TOTAL_ACTIVE_LOTS_COUNT}} 批次)</button>
-      <button id="btn-acc-cmb" class="subview-btn" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('CMB')">🏛 招商证券 CMB ({{CMB_ACTIVE_SYMBOLS_COUNT}} 标的 • {{CMB_ACTIVE_LOTS_COUNT}} 批次)</button>
-      <button id="btn-acc-pa" class="subview-btn" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('PA')">🛡 平安证券 PA ({{PA_ACTIVE_SYMBOLS_COUNT}} 标的 • {{PA_ACTIVE_LOTS_COUNT}} 批次)</button>
+      {{ACCOUNT_FILTER_BUTTONS_HTML}}
     </div>
 
     <!-- TAB 1: Global Macro Tri-Pillar -->
     <div id="tab-global" class="tab-pane active">
       <div class="kpi-grid">
         <div class="kpi-card">
-          <div id="kpi-tab1-scale-label" class="kpi-label">投资组合总规模 (两账户合并)</div>
+          <div id="kpi-tab1-scale-label" class="kpi-label">投资组合总规模 (全账户合并)</div>
           <div id="kpi-tab1-scale-val" class="kpi-value">{{COMBINED_TOTAL_MKT_STR}}</div>
-          <div id="kpi-tab1-scale-sub" class="kpi-sub">招商证券 {{CMB_MKT_W_STR}} + 平安证券 {{PA_MKT_W_STR}}</div>
+          <div id="kpi-tab1-scale-sub" class="kpi-sub">{{ACCOUNT_MKT_W_SPLIT_STR}}</div>
         </div>
         <div class="kpi-card">
           <div id="kpi-tab1-pnl-label" class="kpi-label">全局整体净浮盈</div>
@@ -416,12 +414,12 @@
         <div class="kpi-card">
           <div id="kpi-tab2-cost-label" class="kpi-label">全账户在场总成本 (合并)</div>
           <div id="kpi-tab2-cost-val" class="kpi-value">{{COMBINED_TOTAL_COST_STR}}</div>
-          <div id="kpi-tab2-cost-sub" class="kpi-sub">招商 {{CMB_COST_STR}} + 平安 {{PA_COST_STR}}</div>
+          <div id="kpi-tab2-cost-sub" class="kpi-sub">{{ACCOUNT_COST_SPLIT_STR}}</div>
         </div>
         <div class="kpi-card">
           <div id="kpi-tab2-mkt-label" class="kpi-label">全账户在场总市值 (合并)</div>
           <div id="kpi-tab2-mkt-val" class="kpi-value">{{COMBINED_TOTAL_MKT_STR}}</div>
-          <div id="kpi-tab2-mkt-sub" class="kpi-sub">招商 {{CMB_MKT_STR}} + 平安 {{PA_MKT_STR}}</div>
+          <div id="kpi-tab2-mkt-sub" class="kpi-sub">{{ACCOUNT_MKT_SPLIT_STR}}</div>
         </div>
         <div class="kpi-card">
           <div id="kpi-tab2-pnl-label" class="kpi-label">全账户净浮动盈亏</div>
@@ -429,7 +427,7 @@
           <div id="kpi-tab2-pnl-sub" class="kpi-sub">整体本息倍数 {{COMBINED_TOTAL_MULT_STR}} (基本保本，对冲完全吸收)</div>
         </div>
         <div class="kpi-card">
-          <div id="kpi-tab2-hedge-label" class="kpi-label">双账户分层对冲结构</div>
+          <div id="kpi-tab2-hedge-label" class="kpi-label">账户分层对冲结构</div>
           <div id="kpi-tab2-hedge-val" class="kpi-value val-green">{{TOTAL_POS_COUNT}} 浮盈 vs {{TOTAL_NEG_COUNT}} 浮亏</div>
           <div id="kpi-tab2-hedge-sub" class="kpi-sub">浮盈群贡献 {{TOTAL_POS_SUM_STR}} 抵消 浮亏群 {{TOTAL_NEG_SUM_STR}}</div>
         </div>
@@ -438,7 +436,7 @@
       <div class="section-card">
         <div class="section-header">
           <div class="section-title">
-            <span id="title-holdings"><span>📈</span> 全账户合并 (CMB + PA) {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场活跃资产持仓盈亏与盈亏率全览</span>
+            <span id="title-holdings"><span>📈</span> {{ACCOUNT_MERGE_LABEL}} {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场活跃资产持仓盈亏与盈亏率全览</span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span class="tag tag-blue" style="font-size:11px;">公式: 盈亏率 = (市值 - 成本) / 成本</span>
@@ -644,7 +642,7 @@
           <span class="tag tag-green">净做T利润 {{TOTAL_REALIZED_PNL_STR}} • 盈亏比 {{TOTAL_WIN_LOSS_RATIO}}</span>
         </div>
         <div style="padding: 12px 16px; background: rgba(16, 185, 129, 0.08); border-left: 4px solid var(--green); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1;">
-          <strong>战绩簿说明</strong>：包含 2017-2026 年招商证券与平安证券双账户全量历史平仓战绩。展示了在熊市震荡期间通过底仓代冲、急跌反弹做 T、微损止损控制敞口所锁定的真实真金白银利润。
+          <strong>战绩簿说明</strong>：包含 2017-2026 年全账户全量历史平仓战绩。展示了在熊市震荡期间通过底仓代冲、急跌反弹做 T、微损止损控制敞口所锁定的真实真金白银利润。
         </div>
         <div class="table-container">
           <table class="data-table">
@@ -869,32 +867,46 @@
     const ACCOUNT_METRICS = {{ACCOUNT_METRICS_JSON}};
     const TARGETS_DATA = {{TARGET_JS_JSON}};
 
+    function accountShortLabel(acc) {
+      const m = ACCOUNT_METRICS[acc];
+      if (!m) return acc;
+      return m.short_label || m.label || acc;
+    }
+
+    function escapeAttr(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
     // Global Account Filter State
     let currentGlobalAccount = 'ALL';
 
     function setGlobalAccountFilter(acc) {
       currentGlobalAccount = acc;
-      ['btn-acc-all', 'btn-acc-cmb', 'btn-acc-pa'].forEach(function(id) {
-        const btn = document.getElementById(id);
+      Object.keys(ACCOUNT_METRICS).forEach(function(key) {
+        const btn = document.getElementById('btn-acc-' + key);
         if (btn) btn.classList.remove('active');
       });
-      const activeBtnId = acc === 'ALL' ? 'btn-acc-all' : (acc === 'CMB' ? 'btn-acc-cmb' : 'btn-acc-pa');
-      const activeBtn = document.getElementById(activeBtnId);
+      const activeBtn = document.getElementById('btn-acc-' + acc);
       if (activeBtn) activeBtn.classList.add('active');
 
       const m = ACCOUNT_METRICS[acc];
       if (!m) return;
+      const accLabel = m.label || m.short_label || acc;
 
       // 1. Update Tab 1 KPI Cards
       const tab1ScaleLbl = document.getElementById('kpi-tab1-scale-label');
-      if (tab1ScaleLbl) tab1ScaleLbl.textContent = acc === 'ALL' ? '投资组合总规模 (两账户合并)' : (acc === 'CMB' ? '投资组合总规模 (招商证券 CMB)' : '投资组合总规模 (平安证券 PA)');
+      if (tab1ScaleLbl) tab1ScaleLbl.textContent = acc === 'ALL' ? '投资组合总规模 (全账户合并)' : accLabel + ' 在场总规模';
       const tab1ScaleVal = document.getElementById('kpi-tab1-scale-val');
       if (tab1ScaleVal) tab1ScaleVal.textContent = m.mkt_str;
       const tab1ScaleSub = document.getElementById('kpi-tab1-scale-sub');
-      if (tab1ScaleSub) tab1ScaleSub.textContent = acc === 'ALL' ? '招商证券 {{CMB_MKT_W_STR}} + 平安证券 {{PA_MKT_W_STR}}' : ('在场持有 ' + m.active_syms_count + ' 标的 • ' + m.active_lots_count + ' 笔活跃批次');
+      if (tab1ScaleSub) tab1ScaleSub.textContent = acc === 'ALL' ? '{{ACCOUNT_MKT_W_SPLIT_STR}}' : ('在场持有 ' + m.active_syms_count + ' 标的 • ' + m.active_lots_count + ' 笔活跃批次');
 
       const tab1PnlLbl = document.getElementById('kpi-tab1-pnl-label');
-      if (tab1PnlLbl) tab1PnlLbl.textContent = acc === 'ALL' ? '全局整体净浮盈' : (acc === 'CMB' ? '招商证券在场净浮盈' : '平安证券在场净浮盈');
+      if (tab1PnlLbl) tab1PnlLbl.textContent = acc === 'ALL' ? '全局整体净浮盈' : accLabel + ' 在场净浮盈';
       const tab1PnlVal = document.getElementById('kpi-tab1-pnl-val');
       if (tab1PnlVal) {
         tab1PnlVal.textContent = m.pnl_str;
@@ -906,7 +918,7 @@
       const tab1CoreVal = document.getElementById('kpi-tab1-core-val');
       if (tab1CoreVal) tab1CoreVal.textContent = m.global_pnl_str;
       const tab1CoreSub = document.getElementById('kpi-tab1-core-sub');
-      if (tab1CoreSub) tab1CoreSub.textContent = acc === 'PA' ? '海外指数 ETF (纳指 + 标普 500)' : '海外核心指数 ETF + 避险黄金 ETF';
+      if (tab1CoreSub) tab1CoreSub.textContent = acc === 'ALL' ? '海外核心指数 ETF + 避险黄金 ETF' : accLabel + ' 海外核心与避险持仓';
 
       const tab1CashVal = document.getElementById('kpi-tab1-cash-val');
       if (tab1CashVal) tab1CashVal.textContent = m.withdrawn_str;
@@ -920,17 +932,17 @@
 
       // 2. Update Tab 2 KPI Cards
       const tab2CostLbl = document.getElementById('kpi-tab2-cost-label');
-      if (tab2CostLbl) tab2CostLbl.textContent = acc === 'ALL' ? '全账户在场总成本 (合并)' : (acc === 'CMB' ? '招商证券在场总成本' : '平安证券在场总成本');
+      if (tab2CostLbl) tab2CostLbl.textContent = acc === 'ALL' ? '全账户在场总成本 (合并)' : accLabel + ' 在场总成本';
       const tab2CostVal = document.getElementById('kpi-tab2-cost-val');
       if (tab2CostVal) tab2CostVal.textContent = m.cost_str;
 
       const tab2MktLbl = document.getElementById('kpi-tab2-mkt-label');
-      if (tab2MktLbl) tab2MktLbl.textContent = acc === 'ALL' ? '全账户在场总市值 (合并)' : (acc === 'CMB' ? '招商证券在场总市值' : '平安证券在场总市值');
+      if (tab2MktLbl) tab2MktLbl.textContent = acc === 'ALL' ? '全账户在场总市值 (合并)' : accLabel + ' 在场总市值';
       const tab2MktVal = document.getElementById('kpi-tab2-mkt-val');
       if (tab2MktVal) tab2MktVal.textContent = m.mkt_str;
 
       const tab2PnlLbl = document.getElementById('kpi-tab2-pnl-label');
-      if (tab2PnlLbl) tab2PnlLbl.textContent = acc === 'ALL' ? '全账户净浮动盈亏' : (acc === 'CMB' ? '招商证券净浮动盈亏' : '平安证券净浮动盈亏');
+      if (tab2PnlLbl) tab2PnlLbl.textContent = acc === 'ALL' ? '全账户净浮动盈亏' : accLabel + ' 净浮动盈亏';
       const tab2PnlVal = document.getElementById('kpi-tab2-pnl-val');
       if (tab2PnlVal) {
         tab2PnlVal.textContent = m.pnl_str;
@@ -938,7 +950,7 @@
       }
 
       const tab2HedgeLbl = document.getElementById('kpi-tab2-hedge-label');
-      if (tab2HedgeLbl) tab2HedgeLbl.textContent = acc === 'ALL' ? '双账户分层对冲结构' : (acc === 'CMB' ? '招商证券分层对冲结构' : '平安证券分层对冲结构');
+      if (tab2HedgeLbl) tab2HedgeLbl.textContent = acc === 'ALL' ? '账户分层对冲结构' : accLabel + ' 分层对冲结构';
       const tab2HedgeVal = document.getElementById('kpi-tab2-hedge-val');
       if (tab2HedgeVal) tab2HedgeVal.textContent = m.pos_count + ' 浮盈 vs ' + m.neg_count + ' 浮亏';
       const tab2HedgeSub = document.getElementById('kpi-tab2-hedge-sub');
@@ -967,12 +979,12 @@
       // 5. Update Section Titles
       const titleHoldings = document.getElementById('title-holdings');
       if (titleHoldings) {
-        const accPrefix = acc === 'ALL' ? '全账户合并 (CMB + PA)' : (acc === 'CMB' ? '招商证券 CMB' : '平安证券 PA');
+        const accPrefix = acc === 'ALL' ? '全账户合并' : accLabel;
         titleHoldings.innerHTML = '<span>📈</span> ' + accPrefix + ' ' + m.active_syms_count + ' 只在场活跃资产持仓盈亏与盈亏率全览';
       }
       const titleTargets = document.getElementById('title-targets');
       if (titleTargets) {
-        const accPrefix = acc === 'ALL' ? '双账户' : (acc === 'CMB' ? '招商证券' : '平安证券');
+        const accPrefix = acc === 'ALL' ? '全账户' : accountShortLabel(acc);
         titleTargets.innerHTML = '<span>🎯</span> Lot-Trader ' + m.active_syms_count + ' 大穿透标的操盘透视卡片 (' + accPrefix + ')';
       }
       const titleLots = document.getElementById('title-lots');
@@ -1012,7 +1024,7 @@
           const rows = tb.querySelectorAll('tr');
           let visibleLots = 0;
           rows.forEach(function(r) {
-            const rAcc = r.getAttribute('data-account') || 'CMB';
+            const rAcc = r.getAttribute('data-account') || 'DEFAULT';
             const show = (acc === 'ALL' || rAcc === acc);
             r.style.display = show ? '' : 'none';
             if (show) {
@@ -1028,7 +1040,7 @@
       const tradeRows = document.querySelectorAll('#tbody-trades tr');
       let visibleTrades = 0;
       tradeRows.forEach(function(r) {
-        const rAcc = r.getAttribute('data-account') || 'CMB';
+        const rAcc = r.getAttribute('data-account') || 'DEFAULT';
         const show = (acc === 'ALL' || rAcc === acc);
         r.style.display = show ? '' : 'none';
         if (show) {
@@ -1161,7 +1173,7 @@
         var visibleCount = 0;
         rows.forEach(function(r) {
           var rowSym = r.getAttribute('data-symbol');
-          var rAcc = r.getAttribute('data-account') || 'CMB';
+          var rAcc = r.getAttribute('data-account') || 'DEFAULT';
           var accMatch = (currentGlobalAccount === 'ALL' || rAcc === currentGlobalAccount);
           var symMatch = (sym === 'ALL' || rowSym === sym);
           if (accMatch && symMatch) {
@@ -1452,7 +1464,7 @@
         const closeDate = l.close_time ? l.close_time.slice(0, 10) : '<span style="color:#9ca3af;">持仓中</span>';
 
         tr.innerHTML = '<td>' + (idx + 1) + '</td>' +
-          '<td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">' + (l.account_id || 'CMB') + '</span></td>' +
+          '<td title="买入理由: ' + escapeAttr(l.buy_reason || '未记录') + '"><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">' + (l.account_id || 'DEFAULT') + '</span></td>' +
           '<td><code>' + l.lot_id + '</code></td>' +
           '<td><strong>' + bDate + '</strong></td>' +
           '<td>' + pBuy + '</td>' +

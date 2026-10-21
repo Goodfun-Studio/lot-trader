@@ -5,6 +5,19 @@ import { Database } from "bun:sqlite";
 import { Lot, LotStatus, SettlementMode, Trade, TradeAction } from "./models.ts";
 import { computeRealizedPnl } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
+import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
+
+/**
+ * Append a decision-thesis note onto an existing (possibly partial-close) reason column.
+ * An empty/blank note is a no-op so `--reason` stays fully optional.
+ */
+export function appendReason(existing: string | null | undefined, reason?: string | null): string | null {
+  const next = (reason ?? "").trim();
+  const prev = (existing ?? "").trim();
+  if (!next) return prev ? prev : null;
+  if (!prev) return next;
+  return `${prev}\n${next}`;
+}
 
 export class LotCloser {
   private conn: Database;
@@ -21,7 +34,8 @@ export class LotCloser {
     closeQuantity?: number,
     substituteCore: boolean = false,
     fee?: number,
-    closeTime?: Date
+    closeTime?: Date,
+    closeReason?: string | null
   ): [Lot, Trade] {
     const now = closeTime || new Date();
 
@@ -45,7 +59,7 @@ export class LotCloser {
     }
 
     const symbol = row.symbol;
-    const accountId = row.account_id || 'DEFAULT';
+    const accountId = row.account_id || DEFAULT_ACCOUNT_ID;
     const settlementMode = this.arbitrator.getSymbolSettlementMode(symbol);
 
     const bDateStr = row.buy_time.slice(0, 10);
@@ -102,6 +116,7 @@ export class LotCloser {
     const newRemainingQty = remainingQty - qtyToClose;
     const newStatus = newRemainingQty === 0 ? LotStatus.CLOSED : LotStatus.ACTIVE;
     const totalRealizedPnl = Math.round(((Number(row.realized_pnl) + realizedPnl) + Number.EPSILON) * 100) / 100;
+    const nextCloseReason = appendReason(row.close_reason, closeReason);
 
     const randSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
     const year = now.getFullYear();
@@ -123,7 +138,8 @@ export class LotCloser {
              close_avg_price = ?,
              realized_pnl = ?,
              is_day_trading = CASE WHEN ? THEN 1 ELSE is_day_trading END,
-             substituted_core_lot_id = CASE WHEN ? IS NOT NULL THEN ? ELSE substituted_core_lot_id END
+             substituted_core_lot_id = CASE WHEN ? IS NOT NULL THEN ? ELSE substituted_core_lot_id END,
+             close_reason = ?
          WHERE lot_id = ?`,
         [
           newRemainingQty,
@@ -135,13 +151,14 @@ export class LotCloser {
           isDayTrade ? 1 : 0,
           substitutedCoreLotId,
           substitutedCoreLotId,
+          nextCloseReason,
           lotId,
         ]
       );
 
       this.conn.run(
-        `INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, reason, executed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tradeId,
           accountId,
@@ -151,6 +168,7 @@ export class LotCloser {
           qtyToClose,
           closeFee.toString(),
           realizedPnl.toString(),
+          (closeReason ?? "").trim() || null,
           now.toISOString(),
         ]
       );
@@ -177,6 +195,8 @@ export class LotCloser {
       substituted_core_lot_id: updatedRow.substituted_core_lot_id,
       max_high_price: updatedRow.max_high_price ? Number(updatedRow.max_high_price) : null,
       max_low_price: updatedRow.max_low_price ? Number(updatedRow.max_low_price) : null,
+      buy_reason: updatedRow.buy_reason ?? null,
+      close_reason: updatedRow.close_reason ?? null,
       close_time: updatedRow.close_time ? new Date(updatedRow.close_time) : null,
       close_avg_price: updatedRow.close_avg_price ? Number(updatedRow.close_avg_price) : null,
       realized_pnl: Number(updatedRow.realized_pnl),
@@ -191,6 +211,7 @@ export class LotCloser {
       quantity: qtyToClose,
       fee: closeFee,
       realized_pnl: realizedPnl,
+      reason: (closeReason ?? "").trim() || null,
       executed_at: now,
     };
 

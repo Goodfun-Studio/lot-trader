@@ -18,9 +18,11 @@ description: 投资操盘与单笔批次盈亏监控工具 (lot-trader)。当用
 3. **加仓防抖守卫 (Anti-shake Guard)**：同一父批次 48 小时（2 个交易日）内仅允许加仓一次，防止急跌连续补仓过快耗尽流动性。
 4. **单标的 30% 仓位硬顶**：单标的总持仓市值在整个组合中占比超过 30% 时，系统强制拦截加仓并出具风控预警。
 5. **多证券账户独立核算与底仓代冲强隔离**：
-   - 支持多券商/多账户操盘（通过 `--account <ACC>` 标明，默认 `DEFAULT`）。
+   - 支持多券商/多账户操盘（通过 `--account <ACC>` 标明，默认 `DEFAULT`）。账户元数据（别名、券商代码、币种、启用状态）落在 `accounts` 表，可用 `trade account list/add` 维护。
    - 法定 T+1 标的日内代冲做 T 绝不允许跨券商/账户冲抵，可用底仓严格限定在同一 `(symbol, account_id)` 空间内，严防挪用裸卖空！
    - 加仓（`lot add`）默认自动继承父批次账户，亦允许显式覆盖。
+   - 未登记的 `--account` 在买入时自愈登记为 `CUSTOM` 券商，不阻断快捷录入。
+6. **买卖决策理由沉淀 (Decision Thesis)**：`lots.buy_reason` 记录建仓/加仓假设，`lots.close_reason` 记录平仓终局复盘，`trades.reason` 记录单笔买卖动机；全部可选，缺省为 `NULL`，绝不阻断正常录入。
 6. **交易机制解耦**：
    - 黄金 ETF (`518880.SH`, `159934.SZ` 等)：制度性天然 T+0，买入当日盈利可即刻平仓锁定利润；
    - 普通股票/行业 ETF：法定 T+1。若账户内持有昨日及以前交收的可用底仓，可使用底仓代冲完成日内等效 T+0 平仓锁定波段利润；首日无底仓时强拦截裸卖空。
@@ -31,18 +33,35 @@ description: 投资操盘与单笔批次盈亏监控工具 (lot-trader)。当用
 
 ### 买入建仓
 ```bash
-trade lot buy --symbol <代码> --price <成交单价> --qty <股数, 需整百> [--account <账户代码>] --json
+# 完整旗标式
+trade lot buy --symbol <代码> --price <成交单价> --qty <股数, 需整百> [--account <账户代码>] [--reason "买入理由"] --json
+# 位置参数速记
+trade lot buy <代码> <成交单价> <股数> [--account <账户代码>] [--reason "买入理由"]
 ```
 - 代码支持简写（如 `518880` 自动补全为 `518880.SH`，`600519` 补全为 `600519.SH`，`000001` 补全为 `000001.SZ`）。
- - 成功返回包含 `lot_id`、`account_id`、`cost_basis_unit`（含规费全成本）与 `can_sell_now`。
+- 成功返回包含 `lot_id`、`account_id`、`cost_basis_unit`（含规费全成本）、`can_sell_now` 与 `buy_reason`。
+- `--reason` 可选；同时写入 `lots.buy_reason` 与对应 BUY 流水的 `trades.reason`。
 
 ### 梯级加仓
 ```bash
-trade lot add --parent-lot-id <父批次ID> --price <成交单价> [--amount 10000] [--account <账户代码>] --json
+# 完整旗标式
+trade lot add --parent-lot-id <父批次ID> --price <成交单价> [--amount 10000] [--qty <股数>] [--account <账户代码>] [--reason "加仓理由"] --json
+# 位置参数速记
+trade lot add <父批次ID> <成交单价> [--reason "加仓理由"]
 ```
 - 自动绑定父子血缘关系并递增加仓层级（L1 ➔ L2 ➔ L3）。
 - 默认自动继承父批次 `account_id`，亦可通过 `--account` 显式指定覆盖。
 - 自动触发 48 小时防抖冷却与 30% 单标的仓位上限校验。
+- `--reason` 记录本轮加仓的具体触发逻辑（写入新批次的 `buy_reason` 与 BUY 流水）。
+
+### 券商账户注册与查询 (trade account)
+```bash
+trade account list [--all] [--json]
+trade account add <account_id> --name <账户别名> [--broker <券商代码>] [--currency <ISO4217>] [--json]
+```
+- `--broker` 预设：`CMB` / `CITIC` / `HTSC` / `EASTMONEY` / `GUOTAI` / `YINHE` / `GF` / `PA` / `FUTU` / `IBKR` / `CUSTOM`（默认 `CUSTOM`）。
+- `trade account list` 输出账户 ID、别名、券商代码、币种与启用状态；`--all` 包含已停用账户。
+- 重复登记、空别名、非法券商代码/币种/账户 ID 均确定性报错；买入时传入未注册账户则自动自愈登记。
 
 ### 查看三层深层聚合持仓视图 (Position / Holding View)
 ```bash
@@ -84,10 +103,20 @@ trade scan [--account <账户代码>] --json
 
 ### 指定批次平仓
 ```bash
-trade lot close --lot-id <批次ID> --price <成交单价> [--qty <数量>] [--account <账户代码>] [--substitute-core] --json
+trade lot close --lot-id <批次ID> --price <成交单价> [--qty <数量>] [--account <账户代码>] [--substitute-core] [--reason "平仓理由"] --json
+# 位置参数速记
+trade lot close <批次ID> <成交单价> [数量] [--reason "平仓理由"]
 ```
 - 支持全额平仓与部分平仓（指定 `--qty`）。
- - 股票日内做 T 代冲平仓需追加 `--substitute-core`（严格限制在同一券商账户内的交收底仓代冲）。
+- 股票日内做 T 代冲平仓需追加 `--substitute-core`（严格限制在同一券商账户内的交收底仓代冲）。
+- `--reason` 写入 `trades.reason` 并累积到 `lots.close_reason`（多次部分平仓按换行追加，不覆盖历史复盘）。
+
+### 更新批次决策理由 (lot edit)
+```bash
+trade lot edit <批次ID> [--reason "更新后的买入理由"] [--close-reason "更新后的平仓复盘"] [--append] --json
+```
+- 仅修改决策理由字段，绝不触碰价格、数量、成本与盈亏等会计字段。
+- `--append` 追加而非覆盖；传空字符串则清空为 `NULL`。
 
 ### 标的物理运动量化雷达 (Physics Momentum Radar)
 ```bash

@@ -8,6 +8,7 @@ import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
+import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 
 export interface LotListItem {
   lot_id: string;
@@ -29,6 +30,8 @@ export interface LotListItem {
   is_day_trading: boolean;
   peak_price?: number | null;
   trailing_stop_active?: boolean;
+  buy_reason?: string | null;
+  close_reason?: string | null;
   realized_pnl: number;
 }
 
@@ -233,7 +236,7 @@ export class PositionAggregator {
 
         nestedLots.push({
           lot_id: lot.lot_id,
-          account_id: lot.account_id || 'DEFAULT',
+          account_id: lot.account_id || DEFAULT_ACCOUNT_ID,
           symbol: sym,
           symbol_name: name,
           settlement_mode: settlementMode,
@@ -251,6 +254,8 @@ export class PositionAggregator {
           is_day_trading: Boolean(lot.is_day_trading),
           peak_price: lot.peak_price ? Number(lot.peak_price) : null,
           trailing_stop_active: Boolean(lot.trailing_stop_active),
+          buy_reason: lot.buy_reason ?? null,
+          close_reason: lot.close_reason ?? null,
           realized_pnl: Number(lot.realized_pnl || 0),
         });
       }

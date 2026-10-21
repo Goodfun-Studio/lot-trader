@@ -64,6 +64,10 @@ export interface Lot {
   max_low_price?: number | null;
   peak_price?: number | null;
   trailing_stop_active?: boolean;
+  /** Decision thesis written at buy time: the assumption/logic for opening or adding. */
+  buy_reason?: string | null;
+  /** Retrospective review written when closing: what actually happened. */
+  close_reason?: string | null;
   close_time?: Date | null;
   close_avg_price?: number | null;
   realized_pnl: number;
@@ -93,6 +97,8 @@ export interface Trade {
   quantity: number;
   fee: number;
   realized_pnl: number;
+  /** Per-trade motive for this specific buy/sell action. */
+  reason?: string | null;
   executed_at?: Date | null;
   created_at?: Date | null;
 }

@@ -1,4 +1,9 @@
-import sqlite3, json, subprocess, os, sys, argparse
+import sqlite3, json, subprocess, os, sys, argparse, html
+
+# Generic fallback account id (mirrors src/accounts.ts). No broker literal is hardcoded here:
+# every account is discovered from the ledger / accounts registry at generation time.
+DEFAULT_ACCOUNT_ID = "DEFAULT"
+ACC_TAG_CLASSES = ["tag-blue", "tag-amber", "tag-purple", "tag-green", "tag-red"]
 
 parser = argparse.ArgumentParser(description="Generate Lot Trader Global Dashboard")
 parser.add_argument("--out", "-o", default="lot-trader-global-dashboard.html", help="Output HTML file path (default: lot-trader-global-dashboard.html)")
@@ -32,6 +37,22 @@ curr_prices = {l["symbol"]: l["current_price"] for l in lots_active_data}
 conn = sqlite3.connect(db_path)
 c = conn.cursor()
 
+# Account registry (the `accounts` table is created by the CLI; tolerate pre-migration ledgers).
+try:
+    c.execute("SELECT account_id, name, broker_code, currency, is_active FROM accounts ORDER BY account_id")
+    account_rows = c.fetchall()
+except sqlite3.Error:
+    account_rows = []
+
+ACCOUNT_LABELS = {}
+REGISTERED_ACCOUNTS = []
+for _acc_id, _acc_name, _acc_broker, _acc_ccy, _acc_active in account_rows:
+    if not _acc_id:
+        continue
+    ACCOUNT_LABELS[_acc_id] = (_acc_name or _acc_id).strip() or _acc_id
+    if _acc_active:
+        REGISTERED_ACCOUNTS.append(_acc_id)
+
 # Get all symbols
 c.execute("SELECT symbol, name, asset_class, settlement_mode FROM symbols ORDER BY symbol")
 symbols_raw = c.fetchall()
@@ -41,7 +62,8 @@ symbols_map = {r[0]: {"symbol": r[0], "name": r[1], "asset_class": r[2], "settle
 c.execute("""
 SELECT l.lot_id, l.symbol, s.name, s.asset_class, l.buy_time, l.buy_price, 
        l.buy_quantity, l.remaining_quantity, l.cost_basis_unit, l.status,
-       l.close_time, l.close_avg_price, l.realized_pnl, l.account_id
+       l.close_time, l.close_avg_price, l.realized_pnl, l.account_id,
+       l.buy_reason, l.close_reason
 FROM lots l
 JOIN symbols s ON l.symbol = s.symbol
 ORDER BY l.buy_time DESC
@@ -50,7 +72,7 @@ all_db_lots = c.fetchall()
 
 # Get all sell trades
 c.execute("""
-SELECT t.trade_id, s.name, s.symbol, l.buy_time, l.buy_price, t.executed_at, t.price, t.quantity, t.realized_pnl, t.action, t.account_id
+SELECT t.trade_id, s.name, s.symbol, l.buy_time, l.buy_price, t.executed_at, t.price, t.quantity, t.realized_pnl, t.action, t.account_id, t.reason
 FROM trades t
 JOIN lots l ON t.lot_id = l.lot_id
 JOIN symbols s ON l.symbol = s.symbol
@@ -79,21 +101,88 @@ print(f"Dividends loaded from table: {len(_div_records)} records, {sum(sum(v.val
 
 DIVIDENDS_MAP = {sym: sum(v.values()) for sym, v in DIVIDENDS_BY_SYM_AND_ACC.items()}
 
-# Group active lots by symbol
+# Group active lots by symbol (generic per-account buckets)
+def acct_of(value):
+    """Normalize an account id read from the ledger; blank -> generic fallback."""
+    v = (value or "").strip() if isinstance(value, str) else (value or "")
+    return v or DEFAULT_ACCOUNT_ID
+
+# Discover every account that actually appears in the books, then union with the registry.
+_data_accounts = []
+for _l in lots_active_data:
+    _a = acct_of(_l.get("account_id"))
+    if _a not in _data_accounts:
+        _data_accounts.append(_a)
+for _t in closed_trades_raw:
+    _a = acct_of(_t[10])
+    if _a not in _data_accounts:
+        _data_accounts.append(_a)
+for _sym_acc in DIVIDENDS_BY_SYM_AND_ACC.values():
+    for _a in _sym_acc.keys():
+        if _a not in _data_accounts:
+            _data_accounts.append(_a)
+
+REAL_ACCOUNTS = []
+for _a in REGISTERED_ACCOUNTS + _data_accounts:
+    if _a in REAL_ACCOUNTS:
+        continue
+    # The generic fallback only earns a tab when it actually holds ledger rows.
+    if _a == DEFAULT_ACCOUNT_ID and _a not in _data_accounts:
+        continue
+    REAL_ACCOUNTS.append(_a)
+ACCOUNT_KEYS = ["ALL"] + REAL_ACCOUNTS
+
+for _a in REAL_ACCOUNTS:
+    ACCOUNT_LABELS.setdefault(_a, _a)
+
+
+def acc_tag_class(acc):
+    if acc in ("ALL", "BOTH"):
+        return "tag-purple"
+    try:
+        idx = REAL_ACCOUNTS.index(acc)
+    except ValueError:
+        idx = 0
+    return ACC_TAG_CLASSES[idx % len(ACC_TAG_CLASSES)]
+
+
+def account_label(acc):
+    if acc == "ALL":
+        return "全账户合并"
+    label = ACCOUNT_LABELS.get(acc, acc)
+    return f"{label} ({acc})" if label != acc else acc
+
+
+def account_short_label(acc):
+    if acc == "ALL":
+        return "全账户"
+    return ACCOUNT_LABELS.get(acc, acc)
+
+
+def acc_badge_html(acc_mode, compact=False):
+    cls = acc_tag_class(acc_mode)
+    if acc_mode in ("ALL", "BOTH"):
+        text = "全账户" if compact else f"{len(REAL_ACCOUNTS)} 账户合并"
+    elif compact:
+        text = acc_mode
+    else:
+        text = account_label(acc_mode)
+    return f'<span class="tag {cls}" style="font-size:10px;padding:1px 6px;">{html.escape(text)}</span>'
+
+
 active_lots_by_sym = {}
 for l in lots_active_data:
     sym = l["symbol"]
     if sym not in active_lots_by_sym:
-        active_lots_by_sym[sym] = {"ALL": [], "CMB": [], "PA": []}
+        active_lots_by_sym[sym] = {k: [] for k in ACCOUNT_KEYS}
     active_lots_by_sym[sym]["ALL"].append(l)
-    acc = l.get("account_id") or "CMB"
-    if acc in active_lots_by_sym[sym]:
-        active_lots_by_sym[sym][acc].append(l)
+    acc = acct_of(l.get("account_id"))
+    active_lots_by_sym[sym].setdefault(acc, []).append(l)
 
 # Group all lots by symbol for modal & detail
 all_lots_by_sym = {}
 for r in all_db_lots:
-    lid, sym, name, aclass, btime, bp, bqty, rqty, cbu, status, ctime, cp, rpnl, acc_id = r
+    lid, sym, name, aclass, btime, bp, bqty, rqty, cbu, status, ctime, cp, rpnl, acc_id, l_buy_reason, l_close_reason = r
     if sym not in all_lots_by_sym:
         all_lots_by_sym[sym] = []
     
@@ -137,7 +226,9 @@ for r in all_db_lots:
 
     all_lots_by_sym[sym].append({
         "lot_id": lid,
-        "account_id": acc_id or "CMB",
+        "account_id": acct_of(acc_id),
+        "buy_reason": (l_buy_reason or "").strip(),
+        "close_reason": (l_close_reason or "").strip(),
         "buy_time": btime.replace('T', ' ')[:16],
         "buy_price": bp,
         "qty": rqty if status == 'ACTIVE' else bqty,
@@ -225,36 +316,33 @@ def compute_sym_metrics(sym, lots_list, trades_list, div_val):
         "total_withdrawn": total_withdrawn,
     }
 
-# Compute target_metrics for ALL, CMB, PA
-target_metrics_all = {}
-target_metrics_cmb = {}
-target_metrics_pa = {}
+# Compute target_metrics for the merged view + every discovered account
+target_metrics = {k: {} for k in ACCOUNT_KEYS}
 
 for sym, sinfo in symbols_map.items():
-    sym_lots_group = active_lots_by_sym.get(sym, {"ALL": [], "CMB": [], "PA": []})
+    sym_lots_group = active_lots_by_sym.get(sym, {k: [] for k in ACCOUNT_KEYS})
     sym_trades_all = [t for t in closed_trades_raw if t[2] == sym]
-    sym_trades_cmb = [t for t in sym_trades_all if (t[10] or "CMB") == "CMB"]
-    sym_trades_pa = [t for t in sym_trades_all if (t[10] or "CMB") == "PA"]
-    
     div_dict = DIVIDENDS_BY_SYM_AND_ACC.get(sym, {})
-    div_all = sum(div_dict.values())
-    div_cmb = div_dict.get("CMB", 0.0)
-    div_pa = div_dict.get("PA", 0.0)
-    
-    target_metrics_all[sym] = compute_sym_metrics(sym, sym_lots_group["ALL"], sym_trades_all, div_all)
-    if sym_lots_group["CMB"] or sym_trades_cmb or div_cmb > 0:
-        target_metrics_cmb[sym] = compute_sym_metrics(sym, sym_lots_group["CMB"], sym_trades_cmb, div_cmb)
-    if sym_lots_group["PA"] or sym_trades_pa or div_pa > 0:
-        target_metrics_pa[sym] = compute_sym_metrics(sym, sym_lots_group["PA"], sym_trades_pa, div_pa)
 
-target_metrics = target_metrics_all
+    target_metrics["ALL"][sym] = compute_sym_metrics(
+        sym, sym_lots_group.get("ALL", []), sym_trades_all, sum(div_dict.values())
+    )
+
+    for acc in REAL_ACCOUNTS:
+        acc_lots = sym_lots_group.get(acc, [])
+        acc_trades = [t for t in sym_trades_all if acct_of(t[10]) == acc]
+        acc_div = div_dict.get(acc, 0.0)
+        if acc_lots or acc_trades or acc_div > 0:
+            target_metrics[acc][sym] = compute_sym_metrics(sym, acc_lots, acc_trades, acc_div)
+
+target_metrics_all = target_metrics["ALL"]
 
 # Specific tags & strategy notes for all symbols
 SYMBOL_NOTES = {
     '513300.SH': ('全球核心成长 • 美股科技慢牛', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '两账户在场 94,000 份（招商 84,000 + 平安 10,000），浮盈超 9.3 万元 (+57.0%)，做 T 净利 11,507 元；深厚利润垫完全免疫短期波动，长期跟踪止盈享受科技慢牛复利。'),
+                  '在场 94,000 份，浮盈超 9.3 万元 (+57.0%)，做 T 净利 11,507 元；深厚利润垫完全免疫短期波动，长期跟踪止盈享受科技慢牛复利。'),
     '513500.SH': ('全球核心宽基 • 美股全收益基石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '两账户在场 62,800 份（招商 59,800 + 平安 3,000），浮盈超 5.9 万元 (+55.3%)，双账户做 T 累计净利 24,380 元；作为组合第一大海外压舱石，坚定长期持有。'),
+                  '在场 62,800 份，浮盈超 5.9 万元 (+55.3%)，做 T 累计净利 24,380 元；作为组合第一大海外压舱石，坚定长期持有。'),
     '518880.SH': ('避险硬资产 • 央行去美元化底仓', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
                   '在场 18,000 份底仓平均成本 3.693 元（现价 8.46 元），浮盈超 8.5 万元 (+128.9%)，历史 63 战 58 捷盈亏比高达 100.01；守住 $3,910 硬红线底仓坚决不卖。'),
     '513880.SH': ('全球发达市场 • 亚太出口龙头', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
@@ -264,7 +352,7 @@ SYMBOL_NOTES = {
     '513030.SH': ('欧洲高端制造 • 德国工业脊梁', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
                   '在场 2,000 份浮盈 +82.0% (+1,576 元)，历史 3 战 3 捷全胜；作为极小规模全球分散配置，享受欧洲高端制造业周期复苏。'),
     '164824.SZ': ('新兴市场敞口 • 人口红利消费', '[待加仓/观察]', 'rgba(245, 158, 11, 0.4)',
-                  '双账户合并 70,000 份（招商 4.8w + 平安 2.2w），当前汇率承压磨底，浮亏 -20.8%；严禁盲目左侧接飞刀，静待宏观汇率企稳再行置换。'),
+                  '合并在场 70,000 份，当前汇率承压磨底，浮亏 -20.8%；严禁盲目左侧接飞刀，静待宏观汇率企稳再行置换。'),
     '513330.SH': ('港股科技龙头 • 深度挤估值磨底', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)',
                   '历史 7 战 7 胜做 T 净赚 463 元；在场 72,000 份底仓已完成挤估值，严禁追加外部新钱，依托底仓急跌反弹做 T 冲销历史建仓成本。'),
     '600900.SH': ('水电现金牛 • 绝对防守压舱石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
@@ -272,7 +360,7 @@ SYMBOL_NOTES = {
     '600036.SH': ('零售银行之王 • 高股息分红先锋', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
                   '在场 1,300 股浮盈 +37.7% (+1.52万)，历年分红高达 13,240 元，累计回笼 9,983 元；依托底仓波段做 T，持续收取丰厚股息。'),
     '601398.SH': ('国有特大行 • 稳健底仓避风港', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '两账户在场 1,500 股（招商 500 + 平安 1,000），丰厚浮盈 +32.3%，累计分红 784 元；设置移动止盈线，锁定利润同时持续享受高股息现金流。'),
+                  '合并在场 1,500 股，丰厚浮盈 +32.3%，累计分红 784 元；设置移动止盈线，锁定利润同时持续享受高股息现金流。'),
     '002233.SZ': ('高股息水泥 • 9战全胜现金牛', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
                   '在场 800 股，历史 9 战 9 胜做 T 净赚 766 元，分红 1,592 元，累计回笼现金 2,358 元（占市值 37%）；依托底仓急跌反弹做 T。'),
     '600276.SH': ('创新药旗舰 • 46战44捷做T标杆', '[代冲消融山顶]', 'rgba(59, 130, 246, 0.4)',
@@ -484,12 +572,7 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
 
     card_badge_html = format_physics_badge_card(p)
 
-    if acc_mode == "BOTH" or acc_mode == "ALL":
-        acc_badge = '<span class="tag tag-purple" style="font-size:10px;padding:1px 6px;">CMB + PA 双账户</span>'
-    elif acc_mode == "PA":
-        acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA 平安证券</span>'
-    else:
-        acc_badge = '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB 招商证券</span>'
+    acc_badge = acc_badge_html(acc_mode)
 
     display_style = 'display:none;' if is_hidden else ''
     total_lots_count = m['active_lots_count']
@@ -548,16 +631,15 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
 
 for sym in sorted_syms_by_mkt:
     sym_lots = active_lots_by_sym.get(sym, {})
-    has_cmb = bool(sym_lots.get("CMB"))
-    has_pa = bool(sym_lots.get("PA"))
 
     all_lots_for_sym = all_lots_by_sym.get(sym, [])
-    cmb_lots_for_sym = [l for l in all_lots_for_sym if l["account_id"] == "CMB"]
-    pa_lots_for_sym = [l for l in all_lots_for_sym if l["account_id"] == "PA"]
+    sym_accounts = [a for a in REAL_ACCOUNTS if sym_lots.get(a) or any(l["account_id"] == a for l in all_lots_for_sym)]
 
     target_js_data[sym] = {
         "ALL": {
             **target_metrics_all[sym],
+            "account_id": "ALL",
+            "account_label": account_label("ALL"),
             "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
             "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
             "physics": physics_by_sym.get(sym),
@@ -565,33 +647,32 @@ for sym in sorted_syms_by_mkt:
         }
     }
 
-    if has_cmb or cmb_lots_for_sym:
-        target_js_data[sym]["CMB"] = {
-            **(target_metrics_cmb.get(sym) or target_metrics_all[sym]),
+    for acc in sym_accounts:
+        acc_lots_for_sym = [l for l in all_lots_for_sym if l["account_id"] == acc]
+        target_js_data[sym][acc] = {
+            **(target_metrics.get(acc, {}).get(sym) or target_metrics_all[sym]),
+            "account_id": acc,
+            "account_label": account_label(acc),
             "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
             "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
             "physics": physics_by_sym.get(sym),
-            "lots": cmb_lots_for_sym
+            "lots": acc_lots_for_sym
         }
 
-    if has_pa or pa_lots_for_sym:
-        target_js_data[sym]["PA"] = {
-            **(target_metrics_pa.get(sym) or target_metrics_all[sym]),
-            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
-            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
-            "physics": physics_by_sym.get(sym),
-            "lots": pa_lots_for_sym
-        }
-
-    if has_cmb and has_pa:
-        # Overlapping symbol: generate 3 cards
+    if len(sym_accounts) > 1:
+        # Overlapping symbol held in several accounts: merged card + one card per account.
         target_cards_html.append(build_single_card(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False))
-        target_cards_html.append(build_single_card(sym, target_metrics_cmb[sym], "CMB", "CMB", is_hidden=True))
-        target_cards_html.append(build_single_card(sym, target_metrics_pa[sym], "PA", "PA", is_hidden=True))
-    elif has_cmb:
-        target_cards_html.append(build_single_card(sym, target_metrics_cmb[sym], "CMB", "ALL,CMB", is_hidden=False))
-    elif has_pa:
-        target_cards_html.append(build_single_card(sym, target_metrics_pa[sym], "PA", "ALL,PA", is_hidden=False))
+        for acc in sym_accounts:
+            acc_m = target_metrics.get(acc, {}).get(sym)
+            if acc_m:
+                target_cards_html.append(build_single_card(sym, acc_m, acc, acc, is_hidden=True))
+    elif len(sym_accounts) == 1:
+        acc = sym_accounts[0]
+        acc_m = target_metrics.get(acc, {}).get(sym)
+        if acc_m:
+            target_cards_html.append(build_single_card(sym, acc_m, acc, f"ALL,{acc}", is_hidden=False))
+    else:
+        target_cards_html.append(build_single_card(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False))
 
 target_cards_block = chr(10).join(target_cards_html)
 
@@ -641,12 +722,7 @@ def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, init
     rank250_val = p_row.get("pct_rank_250", 50.0)
     rank250_cls = "val-green" if rank250_val <= 20 else ("val-purple" if rank250_val >= 80 else "")
 
-    if acc_mode == "BOTH" or acc_mode == "ALL":
-        tbl_acc_badge = '<span class="tag tag-purple" style="font-size:10px;padding:1px 6px;">CMB+PA</span>'
-    elif acc_mode == "PA":
-        tbl_acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>'
-    else:
-        tbl_acc_badge = '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
+    tbl_acc_badge = acc_badge_html(acc_mode, compact=True)
 
     display_style = 'style="display:none;"' if is_hidden else ''
     rank_disp = str(initial_idx) if not is_hidden else '-'
@@ -674,19 +750,23 @@ def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, init
 
 for sym in holdings_active_syms:
     sym_lots = active_lots_by_sym.get(sym, {})
-    has_cmb = bool(sym_lots.get("CMB"))
-    has_pa = bool(sym_lots.get("PA"))
+    sym_accounts = [a for a in REAL_ACCOUNTS if sym_lots.get(a)]
 
-    if has_cmb and has_pa:
+    if len(sym_accounts) > 1:
         rows_holdings_html.append(build_single_holding_row(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False, initial_idx=current_initial_rank))
         current_initial_rank += 1
-        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_cmb[sym], "CMB", "CMB", is_hidden=True))
-        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_pa[sym], "PA", "PA", is_hidden=True))
-    elif has_cmb:
-        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_cmb[sym], "CMB", "ALL,CMB", is_hidden=False, initial_idx=current_initial_rank))
-        current_initial_rank += 1
-    elif has_pa:
-        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_pa[sym], "PA", "ALL,PA", is_hidden=False, initial_idx=current_initial_rank))
+        for acc in sym_accounts:
+            acc_m = target_metrics.get(acc, {}).get(sym)
+            if acc_m:
+                rows_holdings_html.append(build_single_holding_row(sym, acc_m, acc, acc, is_hidden=True))
+    elif len(sym_accounts) == 1:
+        acc = sym_accounts[0]
+        acc_m = target_metrics.get(acc, {}).get(sym)
+        if acc_m:
+            rows_holdings_html.append(build_single_holding_row(sym, acc_m, acc, f"ALL,{acc}", is_hidden=False, initial_idx=current_initial_rank))
+            current_initial_rank += 1
+    else:
+        rows_holdings_html.append(build_single_holding_row(sym, target_metrics_all[sym], "ALL", "ALL", is_hidden=False, initial_idx=current_initial_rank))
         current_initial_rank += 1
 
 tbody_holdings = chr(10).join(rows_holdings_html)
@@ -724,9 +804,10 @@ for idx, lot in enumerate(lots_active_data, 1):
     else:
         strat = '<span class="tag tag-purple">[山顶代冲消融]</span>'
 
-    lot_acc = lot.get("account_id") or "CMB"
-    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if lot_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
-    rows_time_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}">
+    lot_acc = acct_of(lot.get("account_id"))
+    acc_badge = acc_badge_html(lot_acc, compact=True)
+    buy_reason_title = f' title="买入理由: {html.escape(lot.get("buy_reason") or "未记录")}"'
+    rows_time_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}"{buy_reason_title}>
       <td class="rank-cell">{idx}</td>
       <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
@@ -776,9 +857,10 @@ for idx, lot in enumerate(lots_by_pnl, 1):
     else:
         strat = '<span class="tag tag-purple">[山顶代冲消融]</span>'
 
-    lot_acc = lot.get("account_id") or "CMB"
-    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if lot_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
-    rows_pnl_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}" data-return="{rr}">
+    lot_acc = acct_of(lot.get("account_id"))
+    acc_badge = acc_badge_html(lot_acc, compact=True)
+    buy_reason_title = f' title="买入理由: {html.escape(lot.get("buy_reason") or "未记录")}"'
+    rows_pnl_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}"{buy_reason_title} data-return="{rr}">
       <td class="rank-cell">{idx}</td>
       <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
@@ -797,7 +879,7 @@ tbody_pnl = chr(10).join(rows_pnl_html)
 # Generate Tab 4 Closed Trades rows
 rows_trades_html = []
 for idx, tr in enumerate(closed_trades_raw, 1):
-    tr_id, name, sym, buy_time, buy_p, exec_time, sell_p, qty, pnl, action, tr_acc = tr
+    tr_id, name, sym, buy_time, buy_p, exec_time, sell_p, qty, pnl, action, tr_acc, tr_reason = tr
     buy_d = buy_time[:10]
     sell_d = exec_time[:10]
     qty_unit = "份" if "ETF" in name or "LOF" in name else "股"
@@ -822,9 +904,10 @@ for idx, tr in enumerate(closed_trades_raw, 1):
     p_buy_fmt = f"¥{buy_p:.3f}" if buy_p < 2.0 else f"¥{buy_p:.2f}"
     p_sell_fmt = f"¥{sell_p:.3f}" if sell_p < 2.0 else f"¥{sell_p:.2f}"
 
-    trade_acc = tr_acc or "CMB"
-    acc_badge = '<span class="tag tag-amber" style="font-size:10px;padding:1px 6px;">PA</span>' if trade_acc == "PA" else '<span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">CMB</span>'
-    rows_trades_html.append(f"""              <tr data-symbol="{sym}" data-account="{trade_acc}">
+    trade_acc = acct_of(tr_acc)
+    acc_badge = acc_badge_html(trade_acc, compact=True)
+    trade_reason_title = f' title="平仓理由: {html.escape(tr_reason or "未记录")}"'
+    rows_trades_html.append(f"""              <tr data-symbol="{sym}" data-account="{trade_acc}"{trade_reason_title}>
       <td>{idx}</td>
       <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
@@ -848,16 +931,16 @@ symbol_select_options_html = chr(10).join(symbol_options)
 # Global Core symbols for macro KPI
 GLOBAL_CORE_SYMBOLS = {'513300.SH', '513500.SH', '518880.SH', '513880.SH', '513080.SH', '513030.SH'}
 
-# Compute complete ACCOUNT_METRICS for ALL, CMB, PA
+# Compute complete ACCOUNT_METRICS for the merged view + every discovered account
 account_metrics = {}
-for acc in ['ALL', 'CMB', 'PA']:
+for acc in ACCOUNT_KEYS:
     if acc == 'ALL':
         acc_lots = lots_active_data
         acc_trades = closed_trades_raw
         div_sum = sum(sum(v.values()) for v in DIVIDENDS_BY_SYM_AND_ACC.values())
     else:
-        acc_lots = [l for l in lots_active_data if (l.get('account_id') or 'CMB') == acc]
-        acc_trades = [t for t in closed_trades_raw if (t[10] or 'CMB') == acc]
+        acc_lots = [l for l in lots_active_data if acct_of(l.get('account_id')) == acc]
+        acc_trades = [t for t in closed_trades_raw if acct_of(t[10]) == acc]
         div_sum = sum(v.get(acc, 0.0) for v in DIVIDENDS_BY_SYM_AND_ACC.values())
 
     active_syms = set(l['symbol'] for l in acc_lots)
@@ -914,6 +997,8 @@ for acc in ['ALL', 'CMB', 'PA']:
 
     account_metrics[acc] = {
         "acc": acc,
+        "label": account_label(acc),
+        "short_label": account_short_label(acc),
         "active_syms_count": total_active_syms,
         "active_lots_count": total_active_lots,
         "cost_val": cost_val,
@@ -955,8 +1040,37 @@ with open(template_path, "r", encoding="utf-8") as tf:
 
 # Dynamic Placeholders interpolation
 m_all = account_metrics["ALL"]
-m_cmb = account_metrics["CMB"]
-m_pa = account_metrics["PA"]
+
+# ---- account switcher + split summaries (fully data-driven, zero broker literals) ----
+account_filter_buttons = [
+    f'<button id="btn-acc-all" class="subview-btn active" style="padding:6px 14px;font-size:12px;" '
+    f'onclick="setGlobalAccountFilter(\'ALL\')">🌐 全账户合并 ({m_all["active_syms_count"]} 标的 • {m_all["active_lots_count"]} 批次)</button>'
+]
+for _acc in REAL_ACCOUNTS:
+    _m = account_metrics[_acc]
+    account_filter_buttons.append(
+        f'<button id="btn-acc-{_acc}" class="subview-btn" style="padding:6px 14px;font-size:12px;" '
+        f'onclick="setGlobalAccountFilter(\'{_acc}\')">🏛 {html.escape(account_short_label(_acc))} {html.escape(_acc)} '
+        f'({_m["active_syms_count"]} 标的 • {_m["active_lots_count"]} 批次)</button>'
+    )
+account_filter_buttons_html = "\n      ".join(account_filter_buttons)
+
+if REAL_ACCOUNTS:
+    account_merge_label = " + ".join(account_label(a) for a in REAL_ACCOUNTS)
+    account_mkt_w_split = " + ".join(
+        f"{html.escape(account_short_label(a))} {account_metrics[a]['mkt_w_str']}" for a in REAL_ACCOUNTS
+    )
+    account_cost_split = " + ".join(
+        f"{html.escape(account_short_label(a))} {account_metrics[a]['cost_str']}" for a in REAL_ACCOUNTS
+    )
+    account_mkt_split = " + ".join(
+        f"{html.escape(account_short_label(a))} {account_metrics[a]['mkt_str']}" for a in REAL_ACCOUNTS
+    )
+else:
+    account_merge_label = "全账户合并"
+    account_mkt_w_split = "暂无可穿透账户"
+    account_cost_split = "暂无可穿透账户"
+    account_mkt_split = "暂无可穿透账户"
 
 html_content = html_template.replace("{{TARGET_CARDS_BLOCK}}", target_cards_block)
 html_content = html_content.replace("{{TBODY_HOLDINGS}}", tbody_holdings)
@@ -966,6 +1080,11 @@ html_content = html_content.replace("{{TBODY_TRADES}}", tbody_trades)
 html_content = html_content.replace("{{SYMBOL_OPTIONS}}", symbol_select_options_html)
 html_content = html_content.replace("{{ACCOUNT_METRICS_JSON}}", account_metrics_json)
 html_content = html_content.replace("{{TARGET_JS_JSON}}", target_js_json)
+html_content = html_content.replace("{{ACCOUNT_FILTER_BUTTONS_HTML}}", account_filter_buttons_html)
+html_content = html_content.replace("{{ACCOUNT_MERGE_LABEL}}", html.escape(account_merge_label))
+html_content = html_content.replace("{{ACCOUNT_MKT_W_SPLIT_STR}}", account_mkt_w_split)
+html_content = html_content.replace("{{ACCOUNT_COST_SPLIT_STR}}", account_cost_split)
+html_content = html_content.replace("{{ACCOUNT_MKT_SPLIT_STR}}", account_mkt_split)
 
 # Dynamic Placeholder Tokens
 html_content = html_content.replace("{{TOTAL_ACTIVE_SYMBOLS_COUNT}}", str(m_all["active_syms_count"]))
@@ -990,18 +1109,6 @@ html_content = html_content.replace("{{TOTAL_NEG_SUM_STR}}", m_all["neg_sum_str"
 html_content = html_content.replace("{{TOTAL_REALIZED_PNL_STR}}", m_all["realized_pnl_str"])
 html_content = html_content.replace("{{TOTAL_DIVIDENDS_STR}}", m_all["dividends_str"])
 html_content = html_content.replace("{{TOTAL_WITHDRAWN_CASH_STR}}", m_all["withdrawn_str"])
-
-html_content = html_content.replace("{{CMB_ACTIVE_SYMBOLS_COUNT}}", str(m_cmb["active_syms_count"]))
-html_content = html_content.replace("{{CMB_ACTIVE_LOTS_COUNT}}", str(m_cmb["active_lots_count"]))
-html_content = html_content.replace("{{CMB_COST_STR}}", m_cmb["cost_str"])
-html_content = html_content.replace("{{CMB_MKT_STR}}", m_cmb["mkt_str"])
-html_content = html_content.replace("{{CMB_MKT_W_STR}}", m_cmb["mkt_w_str"])
-
-html_content = html_content.replace("{{PA_ACTIVE_SYMBOLS_COUNT}}", str(m_pa["active_syms_count"]))
-html_content = html_content.replace("{{PA_ACTIVE_LOTS_COUNT}}", str(m_pa["active_lots_count"]))
-html_content = html_content.replace("{{PA_COST_STR}}", m_pa["cost_str"])
-html_content = html_content.replace("{{PA_MKT_STR}}", m_pa["mkt_str"])
-html_content = html_content.replace("{{PA_MKT_W_STR}}", m_pa["mkt_w_str"])
 
 out_path = os.path.abspath(args.out)
 with open(out_path, "w", encoding="utf-8") as f:

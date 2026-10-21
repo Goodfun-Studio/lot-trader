@@ -63,14 +63,20 @@ trade --help
 2. **批次独立生命周期**：每次建仓生成独立 Lot。浮亏超 -20% 属于深跌等待加仓区，绝不冻结。
 3. **加仓防抖守卫**：梯级加仓执行 `trade lot add`，系统会自动限制 48 小时同源冷却并计算整百股数。
 4. **单标的 30% 仓位硬顶**：买入前系统会自动核算组合占比，超 30% 需向用户提示风控预警。
-5. **多账户独立核算与底仓代冲强隔离**：支持多券商账户（`--account <ACC>`，默认 `DEFAULT`）。日内代冲做 T 严禁跨账户挪用底仓，加仓默认继承父批次账户。
+5. **多账户独立核算与底仓代冲强隔离**：支持多券商账户（`--account <ACC>`，默认 `DEFAULT`）。日内代冲做 T 严禁跨账户挪用底仓，加仓默认继承父批次账户。账户元数据由 `trade account list/add` 维护，未登记账户买入时自愈登记。
+6. **买卖理由必须可回溯**：建仓/加仓用 `--reason` 记录买入假设，平仓用 `--reason` 记录终局复盘；理由全部可选，不传不阻断录入。
 
 ### 命令速查字典
 - 录入买入建仓：
-  trade lot buy --symbol <代码, 如 518880.SH> --price <单价> --qty <股数, 需整百> [--account <账户代码>] --json
+  trade lot buy --symbol <代码, 如 518880.SH> --price <单价> --qty <股数, 需整百> [--account <账户代码>] [--reason "买入理由"] --json
+  （等价位置参数速记：trade lot buy <代码> <单价> <股数>）
 
 - 梯级逢低加仓：
-  trade lot add --parent-lot-id <父批次ID, 如 LOT-20261019-001> --price <当前单价> [--amount 10000] [--account <账户代码>] --json
+  trade lot add --parent-lot-id <父批次ID, 如 LOT-20261019-001> --price <当前单价> [--amount 10000] [--qty <股数>] [--account <账户代码>] [--reason "加仓理由"] --json
+
+- 账户注册与查询：
+  trade account list [--all] [--json]
+  trade account add <account_id> --name <别名> [--broker CMB|CITIC|HTSC|EASTMONEY|GUOTAI|YINHE|GF|PA|FUTU|IBKR|CUSTOM] [--currency CNY] [--json]
 
 - 查看三层深层聚合持仓全景（组合总览 + 标的双仓位与建议点位 + 活跃批次内嵌展开）：
   trade position [--symbol <代码>] [--cap <单标满仓额, 默认50000>] [--account <账户代码>] --json
@@ -83,7 +89,11 @@ trade --help
   trade scan [--account <账户代码>] --json
 
 - 指定批次平仓止盈：
-  trade lot close --lot-id <批次ID> --price <成交单价> [--qty <平仓数量>] [--account <账户代码>] [--substitute-core] --json
+  trade lot close --lot-id <批次ID> --price <成交单价> [--qty <平仓数量>] [--account <账户代码>] [--substitute-core] [--reason "平仓理由"] --json
+  （等价位置参数速记：trade lot close <批次ID> <成交单价> [数量]）
+
+- 更新批次决策理由（不动会计字段）：
+  trade lot edit <批次ID> [--reason "买入理由"] [--close-reason "平仓复盘"] [--append] --json
 
 - 查看历史战绩与多维归因：
   trade stats [--account <账户代码>] --json
@@ -189,3 +199,9 @@ trade dashboard --json
 - **查看流水**: `trade dividend list [--symbol <SYM>] [--account <ACC>] [--json]`
   - 自动输出累计分红总额及逐笔到账详情；
   - 严格支持多账户隔离过滤。
+
+### 9. 多账户注册表与买卖理由沉淀
+- **账户注册表**：`accounts(account_id, name, broker_code, currency, is_active, created_at)`。旧库首次打开自动回填历史流水里出现过的账户。
+- **买入理由**：`lots.buy_reason` + BUY 流水 `trades.reason`；**平仓复盘**：`lots.close_reason`（多次部分平仓换行累积）+ SELL 流水 `trades.reason`。
+- **容错口径**：任何未传 `--reason` 的调用均写入 `NULL`，保持完整向后兼容；`trade lot edit` 可事后补记，空字符串可清空。
+- **硬约束**：账户 ID 限 1-32 位 `[A-Za-z0-9._-]`；券商代码仅限预设枚举；币种为 3 位 ISO 4217。非法输入直接报错，不会污染账本。
