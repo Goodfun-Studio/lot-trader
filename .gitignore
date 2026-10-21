@@ -34,3 +34,6 @@ trade
 
 # macOS
 .DS_Store
+
+# Generated dashboard output (full rebuild on every run — diff noise)
+lot-trader-global-dashboard.html
