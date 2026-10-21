@@ -59,37 +59,23 @@ ORDER BY t.executed_at DESC
 """)
 closed_trades_raw = c.fetchall()
 
-# Dividends map by symbol and account
-DIVIDENDS_BY_SYM_AND_ACC = {
-    '600036.SH': {'CMB': 13240.48},
-    '600585.SH': {'CMB': 7857.00},
-    '600900.SH': {'CMB': 4539.46},
-    '002507.SZ': {'CMB': 3215.00},
-    '002233.SZ': {'CMB': 1592.00},
-    '300529.SZ': {'CMB': 1417.00},
-    '600276.SH': {'CMB': 1344.00},
-    '002191.SZ': {'CMB': 1323.00},
-    '300357.SZ': {'CMB': 1229.00},
-    '603260.SH': {'CMB': 1109.00},
-    '601398.SH': {'CMB': 309.00, 'PA': 474.90},   # CMB 309.00 + PA 474.90
-    '600390.SH': {'CMB': 767.00},
-    '300677.SZ': {'CMB': 683.00},
-    '600586.SH': {'CMB': 467.00},
-    '002466.SZ': {'CMB': 435.00},
-    '000877.SZ': {'CMB': 398.00},
-    '600064.SH': {'PA': 352.00},                   # PA
-    '603678.SH': {'CMB': 268.00},
-    '300595.SZ': {'CMB': 262.00},
-    '601012.SH': {'CMB': 211.00},
-    '000623.SZ': {'PA': 145.00},                   # PA
-    '002603.SZ': {'CMB': 134.00},
-    '002029.SZ': {'CMB': 125.00},
-    '000100.SZ': {'CMB': 122.00},
-    '300601.SZ': {'CMB': 101.00},
-    '000001.SZ': {'PA': 60.90},                    # PA
-    '000725.SZ': {'CMB': 42.00},
-    '600000.SH': {'PA': 42.00},                    # PA
-}
+# Dividends map by symbol and account.
+# Single source of truth: the `dividends` table, read through `trade dividend list --json`.
+# The CLI resolves its DB via $LOT_TRADER_DB / $TRADE_DB_PATH, so pin it to this script's db_path.
+_div_env = dict(os.environ)
+_div_env["LOT_TRADER_DB"] = db_path
+try:
+    _out_div = subprocess.check_output(["trade", "dividend", "list", "--json"], env=_div_env)
+    _div_records = json.loads(_out_div.decode("utf-8"))["data"]["dividends"]
+except Exception as _e:
+    print(f"Warning: could not load dividends from trade CLI ({_e}); continuing with zero dividends.")
+    _div_records = []
+
+DIVIDENDS_BY_SYM_AND_ACC = {}
+for _d in _div_records:
+    DIVIDENDS_BY_SYM_AND_ACC.setdefault(_d["symbol"], {}).setdefault(_d["account_id"], 0.0)
+    DIVIDENDS_BY_SYM_AND_ACC[_d["symbol"]][_d["account_id"]] += float(_d["amount"])
+print(f"Dividends loaded from table: {len(_div_records)} records, {sum(sum(v.values()) for v in DIVIDENDS_BY_SYM_AND_ACC.values()):.2f} CNY")
 
 DIVIDENDS_MAP = {sym: sum(v.values()) for sym, v in DIVIDENDS_BY_SYM_AND_ACC.items()}
 
