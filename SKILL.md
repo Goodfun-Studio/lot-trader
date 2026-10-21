@@ -176,10 +176,30 @@ trade dashboard --json
 1. **数据聚合**：单次生成即聚合全盘持仓、活跃批次明细、物理动量雷达及历史做 T 归因战绩；
 2. **严格践行第 3 节呈现规范**：
    - 标的全景卡片（总持仓、现价、浮动盈亏、年线与 60 日空间分位、有效合力与置信等级）；
+   - 穿透标的透视卡片支持一键动态排序（持仓市值 / 置信合力 F_eff 双向 / |F_eff| 绝对值 / 5 日动量速度 v / 持仓收益率双向），可与账户切换、雷达态势筛选叠加；
    - 持仓总览表（Layer 2 聚合与多空分层）；
    - 在场批次**时间维度视图**（最新买入倒序）与**盈亏率维度视图**（浮盈/回撤/击球分层透视），子切换卡物理隔离；
    - 历史平仓战绩表与标的穿透 Modal 弹窗；
 3. **单文件独立交付**：生成独立便携的深色拟态 HTML 报表，无外部依赖、无须服务端部署。
+
+
+## 5. 现金分红管理原语 (Dividends Management)
+
+支持标的级/账户级的现金分红流水录入与多维聚合，解决高股息红利资产回报核算脱节问题。
+
+```bash
+# 录入一笔现金分红 (支持指定到账金额、除息日、账户与备注)
+trade dividend add --symbol 600036.SH --amount 13240.48 --date 2026-07-15 --account CMB --notes "2025分红"
+
+# 机器管道录入
+trade dividend add --symbol 600036.SH --amount 13240.48 --account CMB --json
+
+# 查看全量或按标的/账户筛选分红流水 (自动统计总分红金额)
+trade dividend list
+trade dividend list --symbol 600036.SH
+trade dividend list --account CMB
+trade dividend list --json
+```
 
 ### 直接调用脚本（备选）
 ```bash

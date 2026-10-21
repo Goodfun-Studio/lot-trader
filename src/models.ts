@@ -96,3 +96,15 @@ export interface Trade {
   executed_at?: Date | null;
   created_at?: Date | null;
 }
+
+export interface Dividend {
+  dividend_id: string;
+  account_id: string;
+  symbol: string;
+  amount: number;
+  ex_date: string;
+  shares_count?: number | null;
+  dividend_per_share?: number | null;
+  notes?: string | null;
+  created_at?: Date | null;
+}

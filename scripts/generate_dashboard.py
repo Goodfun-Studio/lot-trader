@@ -419,6 +419,14 @@ sorted_syms_by_mkt = sorted(
 target_cards_html = []
 target_js_data = {}
 
+def _num(x, default=0.0):
+    """Coerce a physics metric into a finite float for data-* sort attributes."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return default
+    return v if v == v and abs(v) != float('inf') else default
+
 def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
     notes = SYMBOL_NOTES.get(sym, ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)', '依托底仓操盘，杜绝盲目左侧补仓。'))
     cat_tag, strat_tag, border_col, strat_desc = notes
@@ -483,6 +491,11 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
     conf_col = "#10b981" if conf_lvl == "HIGH" else ("#f59e0b" if conf_lvl == "LOW" else "#38bdf8")
     conf_badge = f'<span style="font-size:9px;color:{conf_col};font-weight:600;">[{conf_lvl}]</span>'
 
+    # Numeric values for physics-based card sorting (data-* attributes)
+    feff_num = _num(feff_val)
+    f_num = _num(f_val)
+    v_num = _num(v_val)
+
     card_badge_html = format_physics_badge_card(p)
 
     if acc_mode == "BOTH" or acc_mode == "ALL":
@@ -496,7 +509,7 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
     total_lots_count = m['active_lots_count']
 
     return f"""          <!-- Target Card: {m['name']} ({sym}) [{acc_mode}] -->
-          <div class="target-card" onclick="openTargetModal('{sym}')" data-account-visibility="{visibility}" data-account="{acc_mode}" data-brake-status="{brake_status}" data-rank-250="{p_rank250:.2f}" style="border-color: {border_col}; {display_style}">
+          <div class="target-card" onclick="openTargetModal('{sym}')" data-sym="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-brake-status="{brake_status}" data-rank-250="{p_rank250:.2f}" data-force-eff="{feff_num:.4f}" data-force-raw="{f_num:.4f}" data-v-short="{v_num:.4f}" data-pnl-rate="{m['return_rate']:.6f}" data-mkt-val="{m['market_value']:.2f}" style="border-color: {border_col}; {display_style}">
             <div class="target-card-head">
               <div>
                 <div class="target-card-name">{m['name']} <span style="font-size:11px;color:var(--text-muted);">({sym})</span></div>

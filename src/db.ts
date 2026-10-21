@@ -59,6 +59,20 @@ CREATE TABLE IF NOT EXISTS signals (
     FOREIGN KEY(lot_id) REFERENCES lots(lot_id)
 );
 
+
+CREATE TABLE IF NOT EXISTS dividends (
+    dividend_id VARCHAR(32) PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT',
+    symbol VARCHAR(20) NOT NULL,
+    amount DECIMAL(12, 2) NOT NULL,
+    ex_date DATE NOT NULL,
+    shares_count INT,
+    dividend_per_share DECIMAL(10, 4),
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(symbol) REFERENCES symbols(symbol)
+);
+
 CREATE TABLE IF NOT EXISTS trades (
     trade_id VARCHAR(32) PRIMARY KEY,
     account_id VARCHAR(50) NOT NULL DEFAULT 'DEFAULT',

@@ -2,7 +2,7 @@
  * Lot Trader engine services.
  */
 import { Database } from "bun:sqlite";
-import { Lot, LotStatus, SettlementMode, Signal, Trade } from "./models.ts";
+import { Lot, LotStatus, SettlementMode, Signal, Trade, Dividend } from "./models.ts";
 import { computeCostBasis, computeFloatingPnl, getSellFeeRate } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { SignalScanner } from "./scanner.ts";
@@ -700,4 +700,152 @@ export class TraderEngine {
       },
     };
   }
+
+  public addDividend(params: {
+    symbol: string;
+    amount: number;
+    exDate?: string;
+    accountId?: string;
+    sharesCount?: number;
+    dividendPerShare?: number;
+    notes?: string;
+  }): Dividend {
+    const [stdSymbol] = normalizeSymbol(params.symbol);
+
+    let symRow = this.conn.query<{ symbol: string }, [string]>(
+      "SELECT symbol FROM symbols WHERE symbol = ?"
+    ).get(stdSymbol);
+
+    if (!symRow) {
+      const isGoldEtf =
+        stdSymbol.includes("518880") ||
+        stdSymbol.includes("159934") ||
+        stdSymbol.includes("518800") ||
+        stdSymbol.includes("159937") ||
+        stdSymbol.includes("513");
+      const assetClass =
+        stdSymbol.includes("51") || stdSymbol.includes("15") || stdSymbol.includes("58") ? "ETF" : "STOCK";
+      const setMode = isGoldEtf ? "NATIVE_T0" : "STATUTORY_T1";
+      const name = "标的" + stdSymbol;
+      this.conn.run(
+        "INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode) VALUES (?, ?, ?, ?)",
+        [stdSymbol, name, assetClass, setMode]
+      );
+    }
+
+    const amount = Number(params.amount);
+    if (!isFinite(amount) || amount <= 0) {
+      throw new Error(`Invalid dividend amount: ${params.amount}. Must be a positive finite number.`);
+    }
+
+    const accountId = params.accountId ? params.accountId.trim().toUpperCase() : "DEFAULT";
+    const now = new Date();
+    let exDate = params.exDate ? params.exDate.trim() : "";
+    if (!exDate) {
+      exDate = now.toISOString().slice(0, 10);
+    } else {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(exDate)) {
+        throw new Error(`Invalid ex_date format: ${params.exDate}. Must be YYYY-MM-DD.`);
+      }
+    }
+
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const hours = String(now.getHours()).padStart(2, "0");
+    const mins = String(now.getMinutes()).padStart(2, "0");
+    const secs = String(now.getSeconds()).padStart(2, "0");
+    const randSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const divId = `DIV-${year}${month}${day}${hours}${mins}${secs}-${randSuffix}`;
+
+    const sharesCount = params.sharesCount !== undefined ? Number(params.sharesCount) : null;
+    const divPerShare = params.dividendPerShare !== undefined ? Number(params.dividendPerShare) : null;
+    const notes = params.notes !== undefined && params.notes !== null ? String(params.notes).trim() : null;
+
+    this.conn.run(
+      `INSERT INTO dividends (dividend_id, account_id, symbol, amount, ex_date, shares_count, dividend_per_share, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [divId, accountId, stdSymbol, amount, exDate, sharesCount, divPerShare, notes]
+    );
+
+    return {
+      dividend_id: divId,
+      account_id: accountId,
+      symbol: stdSymbol,
+      amount: amount,
+      ex_date: exDate,
+      shares_count: sharesCount,
+      dividend_per_share: divPerShare,
+      notes: notes,
+      created_at: now,
+    };
+  }
+
+  public getDividends(filter?: { symbol?: string; accountId?: string }): Dividend[] {
+    let query = "SELECT dividend_id, account_id, symbol, amount, ex_date, shares_count, dividend_per_share, notes, created_at FROM dividends WHERE 1=1";
+    const params: any[] = [];
+
+    if (filter?.symbol) {
+      const [stdSymbol] = normalizeSymbol(filter.symbol);
+      query += " AND symbol = ?";
+      params.push(stdSymbol);
+    }
+
+    if (filter?.accountId) {
+      const acc = filter.accountId.trim().toUpperCase();
+      if (acc !== "ALL") {
+        query += " AND account_id = ?";
+        params.push(acc);
+      }
+    }
+
+    query += " ORDER BY ex_date DESC, created_at DESC";
+
+    const rows = this.conn.query<{
+      dividend_id: string;
+      account_id: string;
+      symbol: string;
+      amount: number;
+      ex_date: string;
+      shares_count: number | null;
+      dividend_per_share: number | null;
+      notes: string | null;
+      created_at: string;
+    }, any[]>(query).all(...params);
+
+    return rows.map((r) => ({
+      dividend_id: r.dividend_id,
+      account_id: r.account_id,
+      symbol: r.symbol,
+      amount: Number(r.amount),
+      ex_date: r.ex_date,
+      shares_count: r.shares_count !== null ? Number(r.shares_count) : null,
+      dividend_per_share: r.dividend_per_share !== null ? Number(r.dividend_per_share) : null,
+      notes: r.notes,
+      created_at: r.created_at ? new Date(r.created_at) : null,
+    }));
+  }
+
+  public getTotalDividends(symbol?: string, accountId?: string): number {
+    let query = "SELECT COALESCE(SUM(amount), 0.0) as total FROM dividends WHERE 1=1";
+    const params: any[] = [];
+
+    if (symbol) {
+      query += " AND symbol = ?";
+      const [stdSymbol] = normalizeSymbol(symbol);
+      params.push(stdSymbol);
+    }
+
+    if (accountId) {
+      const acc = accountId.trim().toUpperCase();
+      if (acc !== "ALL") {
+        query += " AND account_id = ?";
+        params.push(acc);
+      }
+    }
+
+    const row = this.conn.query<{ total: number }, any[]>(query).get(...params);
+    return row ? Number(row.total) : 0.0;
+  }
+
 }

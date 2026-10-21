@@ -26,7 +26,7 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,position,scan,stats,physics,dashboard} ...
+  console.log(`usage: trade [-h] {lot,position,scan,stats,physics,dashboard,dividend} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
@@ -38,6 +38,7 @@ positional arguments:
     stats           Performance statistics with multi-dimensional attribution
     physics         Physics momentum radar analysis (velocity, acceleration, force, damping)
     dashboard       Render the global interactive HTML dashboard
+    dividend        Cash dividend management (add, list)
 
 options:
   -h, --help        show this help message and exit
@@ -948,7 +949,144 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
   }
 }
 
-export async function main(): Promise<void> {
+export 
+function printDividendHelp(): void {
+  console.log(`usage: trade dividend [-h] {add,list} ...
+
+Dividend Operations (Cash Dividends Management)
+
+positional arguments:
+  {add,list}        Dividend actions
+    add             Record a cash dividend
+    list            List cash dividends
+
+options:
+  -h, --help        show this help message and exit
+`);
+}
+
+async function handleDividend(engine: TraderEngine, args: string[]): Promise<void> {
+  const subAction = args[0];
+  const restArgs = args.slice(1);
+
+  if (!subAction || subAction === "-h" || subAction === "--help") {
+    printDividendHelp();
+    return;
+  }
+
+  if (subAction === "add") {
+    const { values } = parseArgs({
+      args: restArgs,
+      options: {
+        symbol: { type: "string" },
+        amount: { type: "string" },
+        date: { type: "string" },
+        account: { type: "string" },
+        shares: { type: "string" },
+        "per-share": { type: "string" },
+        notes: { type: "string" },
+        json: { type: "boolean", default: false },
+      },
+      strict: false,
+    });
+
+    const isJson = Boolean(values.json);
+    if (!values.symbol || !values.amount) {
+      if (isJson) {
+        console.error(JSON.stringify({ code: 1, msg: "Missing required --symbol or --amount" }));
+      } else {
+        console.error("❌ 错误: 录入分红必须指定 --symbol 和 --amount 参数。");
+      }
+      process.exit(1);
+    }
+
+    try {
+      const div = engine.addDividend({
+        symbol: values.symbol as string,
+        amount: parseFloat(values.amount as string),
+        exDate: values.date as string | undefined,
+        accountId: values.account as string | undefined,
+        sharesCount: values.shares ? parseInt(values.shares as string, 10) : undefined,
+        dividendPerShare: values["per-share"] ? parseFloat(values["per-share"] as string) : undefined,
+        notes: values.notes as string | undefined,
+      });
+
+      if (isJson) {
+        console.log(JSON.stringify({ code: 0, msg: "success", data: div }, null, 2));
+      } else {
+        console.log(`🎉 现金分红录入成功！流水号: ${div.dividend_id}`);
+        console.log(`标的: ${div.symbol} | 账户: ${div.account_id} | 到账金额: ¥${div.amount.toFixed(2)} | 除息日: ${div.ex_date}`);
+        if (div.notes) console.log(`备注: ${div.notes}`);
+      }
+    } catch (err: any) {
+      if (isJson) {
+        console.error(JSON.stringify({ code: 1, msg: err.message }));
+      } else {
+        console.error(`❌ 错误: ${err.message}`);
+      }
+      process.exit(1);
+    }
+  } else if (subAction === "list") {
+    const { values } = parseArgs({
+      args: restArgs,
+      options: {
+        symbol: { type: "string" },
+        account: { type: "string" },
+        json: { type: "boolean", default: false },
+      },
+      strict: false,
+    });
+
+    const isJson = Boolean(values.json);
+    const divs = engine.getDividends({
+      symbol: values.symbol as string | undefined,
+      accountId: values.account as string | undefined,
+    });
+    const totalAmount = engine.getTotalDividends(
+      values.symbol as string | undefined,
+      values.account as string | undefined
+    );
+
+    if (isJson) {
+      console.log(JSON.stringify({
+        code: 0,
+        msg: "success",
+        data: {
+          total_amount: totalAmount,
+          dividends: divs,
+        }
+      }, null, 2));
+    } else {
+      console.log(`💰 现金分红流水记录 (共 ${divs.length} 笔，累计分红: ¥${totalAmount.toFixed(2)})`);
+      console.log("-".repeat(95));
+      console.log(
+        "Dividend ID".padEnd(24) + " | " +
+        "Symbol".padEnd(10) + " | " +
+        "Account".padEnd(8) + " | " +
+        "Ex-Date".padEnd(10) + " | " +
+        "Amount (元)".padStart(12) + " | " +
+        "Notes"
+      );
+      console.log("-".repeat(95));
+      for (const d of divs) {
+        console.log(
+          d.dividend_id.padEnd(24) + " | " +
+          d.symbol.padEnd(10) + " | " +
+          d.account_id.padEnd(8) + " | " +
+          d.ex_date.padEnd(10) + " | " +
+          d.amount.toFixed(2).padStart(12) + " | " +
+          (d.notes || "--")
+        );
+      }
+      console.log("-".repeat(95));
+    }
+  } else {
+    printDividendHelp();
+    process.exit(1);
+  }
+}
+
+async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   if (rawArgs.length === 0 || rawArgs[0] === "-h" || rawArgs[0] === "--help") {
     printHelp();
@@ -999,6 +1137,8 @@ export async function main(): Promise<void> {
     await handleStats(engine, restArgs);
   } else if (command === "physics" || command === "radar") {
     await handlePhysics(engine, restArgs);
+  } else if (command === "dividend") {
+    await handleDividend(engine, restArgs);
   } else {
     printHelp();
     process.exit(1);

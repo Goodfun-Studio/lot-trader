@@ -27,7 +27,7 @@
 
 ### 1. 构建与测试
 ```bash
-# 运行 71 项全量核心测试（100% 通过）
+# 运行 76 项全量核心测试（100% 通过）
 bun test
 
 # 编译生成单一独立可执行文件 trade
@@ -53,6 +53,11 @@ bun run build
 # 批次平仓（支持全额或部分平仓、底仓代冲做 T）
 ./trade lot close --lot-id LOT-20261019-001 --price 7.050 --qty 1000 --json
 ./trade lot close --lot-id LOT-20261019-002 --price 1670.00 --substitute-core --json
+
+# 现金分红流水管理
+./trade dividend add --symbol 600036.SH --amount 13240.48 --account CMB --date 2026-07-15
+./trade dividend list
+./trade dividend list --json
 
 # 操盘战绩多维归因统计报表
 ./trade stats

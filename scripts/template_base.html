@@ -528,6 +528,15 @@
               <option value="BRAKING_BOTTOM">🛑 底部刹车 (BRAKING_BOTTOM)</option>
               <option value="BRAKING_TOP">🛑 顶部减速 (BRAKING_TOP)</option>
             </select>
+            <select id="target-sort-select" class="filter-select" onchange="sortTargetCards(this.value)">
+              <option value="mkt_desc">💰 默认：持仓市值降序</option>
+              <option value="force_desc">⚛️ 物理动量合力 F_eff 降序（多头合力最强优先）</option>
+              <option value="force_asc">⚛️ 物理动量合力 F_eff 升序（空头合力最强优先）</option>
+              <option value="force_abs_desc">⚡ 合力绝对值 |F_eff| 降序（多空对决最激烈优先）</option>
+              <option value="v_desc">🚀 5 日动量速度 v 降序（短期冲劲最强优先）</option>
+              <option value="rate_desc">🚀 持仓收益率降序（浮盈率最高优先）</option>
+              <option value="rate_asc">🛡 持仓收益率升序（浮亏最深优先）</option>
+            </select>
             <span class="tag tag-purple">点击任意卡片展开批次明细</span>
           </div>
         </div>
@@ -1207,6 +1216,26 @@
         }
         card.style.display = (accMatch && statusMatch) ? 'flex' : 'none';
       });
+    }
+
+    function sortTargetCards(mode) {
+      const grid = document.querySelector('#tab-targets .target-grid');
+      if (!grid) return;
+      const cards = Array.from(grid.querySelectorAll('.target-card'));
+      const num = function(card, attr) {
+        const v = parseFloat(card.getAttribute(attr));
+        return Number.isFinite(v) ? v : 0;
+      };
+      cards.sort(function(a, b) {
+        if (mode === 'force_desc') return num(b, 'data-force-eff') - num(a, 'data-force-eff');
+        if (mode === 'force_asc') return num(a, 'data-force-eff') - num(b, 'data-force-eff');
+        if (mode === 'force_abs_desc') return Math.abs(num(b, 'data-force-eff')) - Math.abs(num(a, 'data-force-eff'));
+        if (mode === 'v_desc') return num(b, 'data-v-short') - num(a, 'data-v-short');
+        if (mode === 'rate_desc') return num(b, 'data-pnl-rate') - num(a, 'data-pnl-rate');
+        if (mode === 'rate_asc') return num(a, 'data-pnl-rate') - num(b, 'data-pnl-rate');
+        return num(b, 'data-mkt-val') - num(a, 'data-mkt-val');
+      });
+      cards.forEach(function(card) { grid.appendChild(card); });
     }
 
     function openTargetModal(sym) {

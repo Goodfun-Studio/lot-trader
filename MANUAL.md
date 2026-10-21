@@ -182,3 +182,10 @@ trade dashboard --json
 - 等级门槛：`W_conf < 0.80` → LOW（无量虚火，强 F 只作候选）；`0.80 ≤ W_conf < 1.20` → MEDIUM（正常中枢）；`W_conf ≥ 1.20` → HIGH（天量对决，真变盘）。
 - 换手率缺失 / 0 / 负数 / 异常时安全降级：`W_abs` 取中性 1.0，`W_conf` 封顶 1.20，等级永不报 HIGH，全链路不产生 NaN。
 - 铁律：**原始 F 不被篡改**，仅新增 `effective_force` 派生字段，历史调用方（不传换手率）行为保持向后兼容。
+
+
+### 8. 现金分红管理原语 (trade dividend)
+- **录入分红**: `trade dividend add --symbol <SYM> --amount <AMOUNT> [--date <YYYY-MM-DD>] [--account <ACC>] [--shares <N>] [--per-share <P>] [--notes <TXT>] [--json]`
+- **查看流水**: `trade dividend list [--symbol <SYM>] [--account <ACC>] [--json]`
+  - 自动输出累计分红总额及逐笔到账详情；
+  - 严格支持多账户隔离过滤。
