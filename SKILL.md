@@ -209,7 +209,32 @@ trade dashboard --json
    - 持仓总览表（Layer 2 聚合与多空分层）；
    - 在场批次**时间维度视图**（最新买入倒序）与**盈亏率维度视图**（浮盈/回撤/击球分层透视），子切换卡物理隔离；
    - 历史平仓战绩表与标的穿透 Modal 弹窗；
-3. **单文件独立交付**：生成独立便携的深色拟态 HTML 报表，无外部依赖、无须服务端部署。
+3. **单文件独立交付**：生成独立便携的深色拟态 HTML 报表，无外部依赖、无须服务端部署；
+4. **双模运行（自驱 ⇄ 本地引擎）**：
+   - **轻量自驱模式**（默认）：页面内嵌标的自去重后每 5 秒批量轮询 `qt.gtimg.cn`，前端按批次成本/数量重算总市值、浮盈与收益率；现价变动红/绿呼吸高亮 1 秒；非交易时段降频 60 秒；顶栏【暂停行情刷新】可冻结。
+   - **本地引擎联动模式**：每 3 秒心跳探测 `http://127.0.0.1:8080/api/health`，联通后指示灯转绿并优先使用本地账本口径；服务关闭/超时平滑回退自驱，**绝不抛未捕获异常、不出现 NaN、不白屏**。
+   - 顶栏【启动本地服务】展开引导卡，内含 `trade serve` 命令与【一键复制】。
+
+
+## 4.1 本地微服务原语 (trade serve)
+
+```bash
+# 默认 127.0.0.1:8080
+trade serve
+trade serve --port 8090 --host 127.0.0.1 --db ~/.trade/trade.db
+trade serve --json     # 结构化就绪行：{code:0,data:{url,host,port,db_path,version}}
+```
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/health` | `{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}` |
+| `GET /api/summary` | `portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/lots?symbol=&account=&status=` | 批次明细（`ACTIVE`/`CLOSED`/`CLOSING`/`ALL`），含 `price_source` |
+
+- **只读 + 仅监听回环**：拒绝 `0.0.0.0`/局域网 IP/域名等一切非 `127.0.0.1`、`localhost`、`::1` 的 host —— 账本永不出本机；
+- 端口冲突输出可读中文文案（非崩溃堆栈）并退出码 1；`SIGINT`/`SIGTERM` 优雅停机并释放端口；
+- 行情失败按批次成本价兜底（`price_source: "cost_basis"`），全链路无 `NaN`；
+- **不要**给 `Bun.serve` 加 `development: false`：它会启用 `SO_REUSEPORT`，让第二个实例静默抢占同一端口。
 
 
 ## 5. 现金分红管理原语 (Dividends Management)

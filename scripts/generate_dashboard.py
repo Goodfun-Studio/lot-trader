@@ -227,6 +227,7 @@ for r in all_db_lots:
     all_lots_by_sym[sym].append({
         "lot_id": lid,
         "account_id": acct_of(acc_id),
+        "cost_unit": cbu,
         "buy_reason": (l_buy_reason or "").strip(),
         "close_reason": (l_close_reason or "").strip(),
         "buy_time": btime.replace('T', ' ')[:16],
@@ -578,7 +579,7 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
     total_lots_count = m['active_lots_count']
 
     return f"""          <!-- Target Card: {m['name']} ({sym}) [{acc_mode}] -->
-          <div class="target-card" onclick="openTargetModal('{sym}')" data-sym="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-brake-status="{brake_status}" data-rank-250="{p_rank250:.2f}" data-force-eff="{feff_num:.4f}" data-force-raw="{f_num:.4f}" data-v-short="{v_num:.4f}" data-pnl-rate="{m['return_rate']:.6f}" data-mkt-val="{m['market_value']:.2f}" style="border-color: {border_col}; {display_style}">
+          <div class="target-card" onclick="openTargetModal('{sym}')" data-sym="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-brake-status="{brake_status}" data-qty="{m['shares']}" data-cost-val="{m['cost_unit'] * m['shares']:.2f}" data-rank-250="{p_rank250:.2f}" data-force-eff="{feff_num:.4f}" data-force-raw="{f_num:.4f}" data-v-short="{v_num:.4f}" data-pnl-rate="{m['return_rate']:.6f}" data-mkt-val="{m['market_value']:.2f}" style="border-color: {border_col}; {display_style}">
             <div class="target-card-head">
               <div>
                 <div class="target-card-name">{m['name']} <span style="font-size:11px;color:var(--text-muted);">({sym})</span></div>
@@ -614,11 +615,11 @@ def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
             <div class="target-card-stats">
               <div>持仓: <strong>{qty_str}</strong></div>
               <div>成本: <strong>{cost_str}</strong></div>
-              <div>现价: <strong>{curr_p_str}</strong></div>
-              <div>市值: <strong>{mkt_val_str}</strong></div>
-              <div>浮动盈亏: <strong class="{fpnl_class}">{fpnl_str}</strong></div>
-              <div>持仓盈亏率: <strong class="{rr_class}">{rr_str}</strong></div>
-              <div>本息倍数: <strong class="{mult_class}">{mult_str}</strong></div>
+              <div>现价: <strong data-field="price">{curr_p_str}</strong></div>
+              <div>市值: <strong data-field="mkt">{mkt_val_str}</strong></div>
+              <div>浮动盈亏: <strong data-field="pnl" class="{fpnl_class}">{fpnl_str}</strong></div>
+              <div>持仓盈亏率: <strong data-field="rate" class="{rr_class}">{rr_str}</strong></div>
+              <div>本息倍数: <strong data-field="mult" class="{mult_class}">{mult_str}</strong></div>
               <div>做T战绩: <strong class="{win_class}">{t_stats_str}</strong></div>
             </div>
             <div style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
@@ -727,7 +728,7 @@ def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, init
     display_style = 'style="display:none;"' if is_hidden else ''
     rank_disp = str(initial_idx) if not is_hidden else '-'
 
-    return f"""              <tr data-symbol="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-pnl-rate="{rr}" data-pnl-val="{fpnl}" data-mkt-val="{mkt_val}" data-cost-val="{tot_cost}" data-rank-250="{rank250_val:.2f}" {display_style}>
+    return f"""              <tr data-symbol="{sym}" data-account-visibility="{visibility}" data-account="{acc_mode}" data-qty="{m['shares']}" data-lots="{m['active_lots_count']}" data-pnl-rate="{rr}" data-pnl-val="{fpnl}" data-mkt-val="{mkt_val}" data-cost-val="{tot_cost}" data-rank-250="{rank250_val:.2f}" {display_style}>
                 <td class="rank-cell">{rank_disp}</td>
                 <td>{tbl_acc_badge}</td>
                 <td><code>{sym}</code></td>
@@ -735,12 +736,12 @@ def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, init
                 <td><span class="tag tag-green">{cat_tag}</span></td>
                 <td>{qty_str}</td>
                 <td>{cost_str}</td>
-                <td>{curr_p_str}</td>
+                <td><strong data-field="price">{curr_p_str}</strong></td>
                 <td>{tot_cost_str}</td>
-                <td><strong>{mkt_val_str}</strong></td>
-                <td><strong class="{fpnl_class}">{fpnl_str}</strong></td>
-                <td><strong class="{rr_class}">{rr_str}</strong></td>
-                <td><strong class="{mult_class}">{mult_str}</strong></td>
+                <td><strong data-field="mkt">{mkt_val_str}</strong></td>
+                <td><strong data-field="pnl" class="{fpnl_class}">{fpnl_str}</strong></td>
+                <td><strong data-field="rate" class="{rr_class}">{rr_str}</strong></td>
+                <td><strong data-field="mult" class="{mult_class}">{mult_str}</strong></td>
                 <td>{weight_str}</td>
                 <td>{badge_table}</td>
                 <td><strong class="{rank250_cls}">{rank250_val:.1f}%</strong></td>
@@ -807,17 +808,17 @@ for idx, lot in enumerate(lots_active_data, 1):
     lot_acc = acct_of(lot.get("account_id"))
     acc_badge = acc_badge_html(lot_acc, compact=True)
     buy_reason_title = f' title="买入理由: {html.escape(lot.get("buy_reason") or "未记录")}"'
-    rows_time_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}"{buy_reason_title}>
+    rows_time_html.append(f"""              <tr data-symbol="{sym}" data-lot-id="{lot_id}" data-status="ACTIVE" data-qty="{lot['remaining_quantity']}" data-cost-unit="{lot['cost_basis_unit']}" data-account="{lot_acc}"{buy_reason_title}>
       <td class="rank-cell">{idx}</td>
       <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
       <td><code>{lot_id}</code></td>
       <td>{buy_date}</td>
       <td>{buy_p}</td>
-      <td>{curr_p}</td>
+      <td><strong data-field="price">{curr_p}</strong></td>
       <td>{qty_str}</td>
-      <td><strong class="{pnl_class}">{pnl_str}</strong></td>
-      <td><strong class="{rr_class}">{rr_str}</strong></td>
+      <td><strong data-field="pnl" class="{pnl_class}">{pnl_str}</strong></td>
+      <td><strong data-field="rate" class="{rr_class}">{rr_str}</strong></td>
       <td>{strat}</td>
     </tr>""")
 
@@ -860,17 +861,17 @@ for idx, lot in enumerate(lots_by_pnl, 1):
     lot_acc = acct_of(lot.get("account_id"))
     acc_badge = acc_badge_html(lot_acc, compact=True)
     buy_reason_title = f' title="买入理由: {html.escape(lot.get("buy_reason") or "未记录")}"'
-    rows_pnl_html.append(f"""              <tr data-symbol="{sym}" data-account="{lot_acc}"{buy_reason_title} data-return="{rr}">
+    rows_pnl_html.append(f"""              <tr data-symbol="{sym}" data-lot-id="{lot_id}" data-status="ACTIVE" data-qty="{lot['remaining_quantity']}" data-cost-unit="{lot['cost_basis_unit']}" data-account="{lot_acc}"{buy_reason_title} data-return="{rr}">
       <td class="rank-cell">{idx}</td>
       <td>{acc_badge}</td>
       <td><strong>{name}</strong> <span style="color:#94a3b8;font-size:11px;">({sym})</span></td>
       <td><code>{lot_id}</code></td>
       <td>{buy_date}</td>
       <td>{buy_p}</td>
-      <td>{curr_p}</td>
+      <td><strong data-field="price">{curr_p}</strong></td>
       <td>{qty_str}</td>
-      <td><strong class="{pnl_class}">{pnl_str}</strong></td>
-      <td><strong class="{rr_class}">{rr_str}</strong></td>
+      <td><strong data-field="pnl" class="{pnl_class}">{pnl_str}</strong></td>
+      <td><strong data-field="rate" class="{rr_class}">{rr_str}</strong></td>
       <td>{strat}</td>
     </tr>""")
 

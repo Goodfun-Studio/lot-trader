@@ -6,6 +6,7 @@ import { AppDatabase } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
+import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT, startServe } from "./serve.ts";
 import { parseArgs } from "util";
 import { existsSync, statSync } from "fs";
 import { homedir } from "os";
@@ -26,12 +27,12 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,dividend} ...
+  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,account,position,scan,stats,physics,dashboard,dividend}  Available subcommands
+  {lot,account,position,scan,stats,physics,dashboard,serve,dividend}  Available subcommands
     lot             Lot operations (buy, add, list, close, edit)
     account         Broker account registry (add, list)
     position        Position / Holding aggregated view
@@ -39,11 +40,116 @@ positional arguments:
     stats           Performance statistics with multi-dimensional attribution
     physics         Physics momentum radar analysis (velocity, acceleration, force, damping)
     dashboard       Render the global interactive HTML dashboard
+    serve           Start the local read-only HTTP engine (loopback only)
     dividend        Cash dividend management (add, list)
 
 options:
   -h, --help        show this help message and exit
 `);
+}
+
+function printServeHelp(): void {
+  console.log(`usage: trade serve [-h] [--port ${DEFAULT_SERVE_PORT}] [--host ${DEFAULT_SERVE_HOST}] [--db <path>]
+
+Local HTTP Engine (read-only JSON API, loopback only)
+
+options:
+  --port, -p PORT   TCP port to bind (default: ${DEFAULT_SERVE_PORT}; 0 = ephemeral)
+  --host HOST       Bind host, loopback only (default: ${DEFAULT_SERVE_HOST})
+  --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  --json            Emit a single machine-readable ready line instead of the banner
+  --quiet           Suppress the startup banner
+  -h, --help        show this help message and exit
+
+endpoints:
+  GET /api/health   Liveness probe: {status, version, db_path, timestamp}
+  GET /api/summary  Portfolio + multi-account + per-symbol snapshot
+  GET /api/lots     Lot detail list (?symbol= &account= &status=)
+
+notes:
+  The engine refuses to bind any non-loopback host, so the ledger never leaves this machine.
+  Stop it with Ctrl+C (SIGINT / SIGTERM are handled as graceful shutdowns).
+`);
+}
+
+async function handleServe(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      port: { type: "string", short: "p" },
+      host: { type: "string" },
+      db: { type: "string" },
+      json: { type: "boolean", default: false },
+      quiet: { type: "boolean", default: false },
+    },
+    strict: false,
+  });
+
+  const isJson = Boolean(values.json);
+  const quiet = Boolean(values.quiet);
+
+  try {
+    const started = await startServe({
+      port: (values.port as string | undefined) ?? DEFAULT_SERVE_PORT,
+      host: (values.host as string | undefined) ?? DEFAULT_SERVE_HOST,
+      dbPath: values.db as string | undefined,
+      quiet,
+    });
+
+    if (isJson) {
+      console.log(
+        JSON.stringify({
+          code: 0,
+          msg: "success",
+          data: {
+            url: started.url,
+            host: started.host,
+            port: started.port,
+            db_path: started.dbPath,
+            version: started.version,
+          },
+        }),
+      );
+    } else if (!quiet) {
+      console.log(`⚡ Lot-Trader 本地引擎已启动 (按 Ctrl+C 停止)`);
+      console.log(`   地址: ${started.url}`);
+      console.log(`   接口: GET /api/health | GET /api/summary | GET /api/lots?symbol=&account=&status=`);
+      console.log(`   账本: ${started.dbPath}`);
+      console.log(`   版本: v${started.version} • 仅监听本地回环地址，不对公网暴露`);
+      console.log(`   看板: 打开 dashboard 后顶栏指示灯将在 3 秒内转为「本地引擎已联动」`);
+    }
+
+    let stopping = false;
+    const shutdown = async (signal: string): Promise<void> => {
+      if (stopping) return;
+      stopping = true;
+      await started.stop();
+      if (isJson) {
+        console.log(JSON.stringify({ code: 0, msg: "stopped", data: { signal } }));
+      } else if (!quiet) {
+        console.log(`👋 本地引擎已优雅停止 (${signal})`);
+      }
+      process.exit(0);
+    };
+
+    process.on("SIGINT", () => {
+      void shutdown("SIGINT");
+    });
+    process.on("SIGTERM", () => {
+      void shutdown("SIGTERM");
+    });
+
+    // Keep the process alive until a signal arrives (the listener alone is not a promise).
+    await new Promise<void>(() => {});
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    if (isJson) {
+      console.log(JSON.stringify({ code: 1, msg: message, data: null }));
+    } else {
+      console.error(`❌ ${message}`);
+    }
+    process.exit(1);
+  }
 }
 
 function printDashboardHelp(): void {
@@ -1337,6 +1443,17 @@ async function main(): Promise<void> {
     }
     await handleDashboard(restArgs);
     db.close();
+    return;
+  }
+
+  // The local HTTP engine owns its own database handle (it may bind a different --db path).
+  if (command === "serve") {
+    if (restArgs[0] === "-h" || restArgs[0] === "--help") {
+      printServeHelp();
+      process.exit(0);
+    }
+    db.close();
+    await handleServe(restArgs);
     return;
   }
 

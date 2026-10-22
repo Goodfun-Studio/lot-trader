@@ -11,3 +11,4 @@ export * from "./position.ts";
 export { TraderEngine } from "./engine.ts";
 export type { LotListItem as EngineLotListItem, TradeAttribution, TradingStats } from "./engine.ts";
 export * from "./physics.ts";
+export * from "./serve.ts";

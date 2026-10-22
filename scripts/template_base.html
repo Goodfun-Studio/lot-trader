@@ -294,6 +294,34 @@
     .modal-table tr:hover td {
       background: rgba(255, 255, 255, 0.03);
     }
+    
+    /* ===== Dual-mode live engine: mode badge / onboarding card / price flash ===== */
+    .mode-indicator { display:inline-flex; align-items:center; gap:8px; padding:5px 12px; border-radius:9999px; font-size:12px; font-weight:600; letter-spacing:.2px; border:1px solid rgba(148,163,184,0.35); background:rgba(148,163,184,0.12); color:#cbd5e1; transition: background .35s ease, color .35s ease, border-color .35s ease; }
+    .mode-indicator .mode-dot { width:8px; height:8px; border-radius:50%; background:#94a3b8; transition: background .35s ease, box-shadow .35s ease; }
+    .mode-indicator.standalone .mode-dot { background:#64748b; }
+    .mode-indicator.local { background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.45); color:#34d399; }
+    .mode-indicator.local .mode-dot { background:#10b981; animation: modeBreathGreen 2s ease-in-out infinite; }
+    @keyframes modeBreathGreen { 0%,100% { box-shadow:0 0 0 0 rgba(16,185,129,0.65); } 55% { box-shadow:0 0 0 6px rgba(16,185,129,0); } }
+    .btn-live { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid rgba(59,130,246,0.45); background:rgba(59,130,246,0.15); color:#93c5fd; transition:all .2s ease; }
+    .btn-live:hover { background:rgba(59,130,246,0.28); color:#fff; }
+    .btn-live.ghost { border-color:rgba(148,163,184,0.35); background:rgba(148,163,184,0.10); color:#cbd5e1; }
+    .btn-live.ghost:hover { background:rgba(148,163,184,0.20); color:#fff; }
+    .btn-live.paused { border-color:rgba(245,158,11,0.5); background:rgba(245,158,11,0.15); color:#fbbf24; }
+    .live-status { font-size:11px; color:var(--text-muted); font-variant-numeric: tabular-nums; }
+    .live-panel { display:none; margin:-8px 0 20px; padding:16px 18px; border-radius:12px; border:1px solid rgba(59,130,246,0.35); background:linear-gradient(135deg, rgba(30,58,138,0.28), rgba(17,24,39,0.92)); }
+    .live-panel.open { display:block; animation: modalFadeIn .18s ease-out; }
+    .live-panel-title { font-size:14px; font-weight:700; color:#fff; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+    .live-panel-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); gap:8px; font-size:12px; color:#cbd5e1; margin:0 0 12px; padding:0; }
+    .live-panel-grid li { list-style:none; padding-left:18px; position:relative; line-height:1.6; }
+    .live-panel-grid li:before { content:"✓"; position:absolute; left:0; color:#34d399; font-weight:700; }
+    .cmd-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .cmd-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; background:rgba(2,6,23,0.85); border:1px solid rgba(148,163,184,0.3); color:#a7f3d0; padding:8px 12px; border-radius:8px; }
+    .copy-feedback { font-size:11px; color:#34d399; min-width:96px; }
+    /* price change breathing highlight: 1s fade-back, no layout shift */
+    .flash-up { animation: priceFlashUp 1s ease-out; }
+    .flash-down { animation: priceFlashDown 1s ease-out; }
+    @keyframes priceFlashUp { 0% { background-color: rgba(16,185,129,0.45); color:#6ee7b7; } 100% { background-color: transparent; } }
+    @keyframes priceFlashDown { 0% { background-color: rgba(239,68,68,0.45); color:#fca5a5; } 100% { background-color: transparent; } }
   </style>
 </head>
 <body>
@@ -308,7 +336,31 @@
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);">🌐 {{ACCOUNT_MERGE_LABEL}}</span>
         <span class="badge">已穿透 {{TOTAL_ACTIVE_SYMBOLS_COUNT}} 只在场标的 • {{TOTAL_ACTIVE_LOTS_COUNT}} 笔活跃批次 • {{TOTAL_CLOSED_TRADES_COUNT}} 笔平仓战绩</span>
+        <span id="mode-indicator" class="mode-indicator standalone" title="当前运行模式：纯前端自驱（未检测到本地引擎）">
+          <span class="mode-dot" id="mode-dot"></span>
+          <span id="mode-text">模式：轻量独立（纯前端自驱）</span>
+        </span>
+        <span id="live-status" class="live-status">行情自驱待命</span>
+        <button id="btn-live-toggle" class="btn-live ghost" type="button" onclick="toggleLiveQuotes()">⏸ 暂停行情刷新</button>
+        <button id="btn-local-service" class="btn-live" type="button" onclick="toggleLocalServicePanel()">⚡ 启动本地服务</button>
       </div>
+    </div>
+
+    <!-- Local engine onboarding (dual-mode: standalone <-> local engine, seamless swap) -->
+    <div id="local-service-card" class="live-panel">
+      <div class="live-panel-title"><span>⚡</span> 升级到本地引擎模式（可选，随时可回退）</div>
+      <ul class="live-panel-grid">
+        <li>多账户与全量历史批次由本机 SQLite 账本直接驱动，不再依赖页面内嵌快照</li>
+        <li>行情由本机统一抓取与缓存，看板与 CLI 共用同一套口径，杜绝前端重算漂移</li>
+        <li>仅监听 127.0.0.1 本地回环，账本不出本机；服务关闭后看板自动回退纯前端自驱</li>
+      </ul>
+      <div class="cmd-row">
+        <span style="font-size:12px;color:#94a3b8;">① 在终端执行：</span>
+        <code class="cmd-code" id="serve-command">trade serve</code>
+        <button class="btn-live" type="button" onclick="copyServeCommand()">📋 一键复制</button>
+        <span id="copy-feedback" class="copy-feedback"></span>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#64748b;">② 启动后无需刷新本页：页面每 3 秒自动心跳探测 <code style="color:#94a3b8;">http://127.0.0.1:8080/api/health</code>，一旦联通即刻无缝切换为「本地引擎已联动」绿色呼吸灯。</div>
     </div>
 
     <!-- Navigation Tabs -->
@@ -861,6 +913,433 @@
       </div>
     </div>
   </div>
+
+  <!-- =========================================================================
+       DUAL-MODE LIVE CLIENT RUNTIME (pure, dependency-free, unit-tested)
+       Everything below is side-effect free at load time and exposed on
+       window.LiveClientRuntime so the negative-path tests can drive it directly:
+         - tencent payload parsing that never yields NaN / never throws
+         - holding metric recomputation with cost-basis fallback
+         - trading-session / refresh-interval policy
+         - heartbeat probe + mode state machine (no uncaught rejection)
+       ========================================================================= -->
+  <script id="live-client-runtime">
+    (function (root) {
+      'use strict';
+
+      var LOCAL_API_BASE = 'http://127.0.0.1:8080';
+      var QUOTE_REFRESH_MS = 5000;      // 交易时段批量轮询周期
+      var HEARTBEAT_MS = 3000;          // 本地引擎心跳探针周期
+      var IDLE_REFRESH_MS = 60000;      // 非交易时段休眠降频
+      var TENCENT_QUOTE_BASE = 'https://qt.gtimg.cn/q=';
+      var DEFAULT_SELL_FEE_RATE = 0.0002;
+
+      function num(value, fallback) {
+        var parsed = typeof value === 'number' ? value : parseFloat(value);
+        var result = (typeof parsed === 'number' && isFinite(parsed)) ? parsed : undefined;
+        if (result === undefined) return fallback === undefined ? 0 : fallback;
+        return result;
+      }
+
+      function roundTo(value, decimals) {
+        var factor = Math.pow(10, decimals);
+        return Math.round((num(value) + Number.EPSILON) * factor) / factor;
+      }
+
+      function round2(value) { return roundTo(value, 2); }
+      function round4(value) { return roundTo(value, 4); }
+
+      /** "518880.SH" / "sh518880" / "518880" -> "sh518880" (qt.gtimg.cn code). */
+      function normalizeTencentCode(symbol) {
+        var raw = String(symbol === undefined || symbol === null ? '' : symbol).trim();
+        if (!raw) return '';
+        var lower = raw.toLowerCase();
+        if (/^(sh|sz|bj)\d{6}$/.test(lower)) return lower;
+        var parts = raw.toUpperCase().split('.');
+        if (parts.length === 2 && /^\d{6}$/.test(parts[0])) {
+          var market = parts[1] === 'SH' || parts[1] === 'SS' ? 'sh'
+            : parts[1] === 'SZ' ? 'sz'
+            : parts[1] === 'BJ' ? 'bj' : '';
+          if (market) return market + parts[0];
+        }
+        if (/^\d{6}$/.test(raw)) {
+          if (/^[569]/.test(raw)) return 'sh' + raw;
+          if (/^[0123]/.test(raw)) return 'sz' + raw;
+          if (/^[48]/.test(raw)) return 'bj' + raw;
+          return 'sh' + raw;
+        }
+        return lower;
+      }
+
+      function dedupeCodes(codes) {
+        var out = [];
+        var seen = {};
+        var list = Array.isArray(codes) ? codes : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var code = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toLowerCase();
+          if (!/^(sh|sz|bj)\d{6}$/.test(code) || seen[code]) continue;
+          seen[code] = true;
+          out.push(code);
+        }
+        return out;
+      }
+
+      function dedupeSymbols(symbols) {
+        var out = [];
+        var seen = {};
+        var list = Array.isArray(symbols) ? symbols : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var sym = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toUpperCase();
+          if (!sym || seen[sym]) continue;
+          seen[sym] = true;
+          out.push(sym);
+        }
+        return out;
+      }
+
+      function buildTencentQuoteUrl(codes, timestampMs) {
+        // Accept both standard symbols ("518880.SH") and ready-made codes ("sh518880").
+        var normalized = (Array.isArray(codes) ? codes : []).map(normalizeTencentCode);
+        var list = dedupeCodes(normalized);
+        if (!list.length) return '';
+        var suffix = '';
+        if (timestampMs !== undefined && timestampMs !== null) {
+          suffix = '&_=' + Math.round(num(timestampMs, 0));
+        }
+        return TENCENT_QUOTE_BASE + list.join(',') + suffix;
+      }
+
+      /** Parse one `v_shXXXXXX="..."` payload. Returns null for any unusable row. */
+      function parseTencentFields(tencentCode, dataStr) {
+        if (typeof dataStr !== 'string' || dataStr.indexOf('~') === -1) return null;
+        var fields = dataStr.split('~');
+        if (fields.length < 6) return null;
+        var price = num(fields[3], NaN);
+        if (!isFinite(price) || price <= 0) return null;
+        var prevClose = num(fields[4], NaN);
+        var high = fields.length > 33 ? num(fields[33], 0) : 0;
+        var low = fields.length > 34 ? num(fields[34], 0) : 0;
+        return {
+          code: String(tencentCode || '').toLowerCase(),
+          name: fields[1] || '',
+          price: price,
+          prev_close: isFinite(prevClose) && prevClose > 0 ? prevClose : null,
+          open: num(fields[5], 0),
+          high: high > 0 ? high : price,
+          low: low > 0 ? low : price,
+          time: fields.length > 30 ? String(fields[30] || '') : ''
+        };
+      }
+
+      /**
+       * Parse a full qt.gtimg.cn body. Anything that is not a well-formed quote row
+       * (HTML error pages, 502 text, truncated JSON, empty strings) is silently skipped.
+       */
+      function parseTencentPayload(rawText) {
+        var out = {};
+        if (typeof rawText !== 'string' || rawText.length === 0) return out;
+        var text = rawText.replace(/^\uFEFF/, '');
+        var re = /v_([a-zA-Z0-9_]+)\s*=\s*"([^"]*)"/g;
+        var match;
+        while ((match = re.exec(text)) !== null) {
+          var code = String(match[1]).toLowerCase();
+          if (!/^(sh|sz|bj)\d{6}$/.test(code)) continue;
+          var parsed = parseTencentFields(code, match[2]);
+          if (parsed) out[code] = parsed;
+        }
+        return out;
+      }
+
+      /** Join parsed quotes back onto the dashboard's standard symbols. */
+      function mapQuotesToSymbols(parsed, symbols, previousQuotes) {
+        var out = {};
+        var list = Array.isArray(symbols) ? symbols : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var sym = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toUpperCase();
+          if (!sym) continue;
+          var hit = parsed && parsed[normalizeTencentCode(sym)];
+          if (!hit) continue;
+          var price = num(hit.price, 0);
+          if (!(price > 0)) continue;
+          var prev = previousQuotes && previousQuotes[sym] ? num(previousQuotes[sym].price, 0) : 0;
+          out[sym] = {
+            symbol: sym,
+            price: price,
+            prev_close: hit.prev_close === null ? null : num(hit.prev_close, 0) || null,
+            previous_price: prev > 0 ? prev : null,
+            direction: prev > 0 ? (price > prev ? 'up' : (price < prev ? 'down' : 'flat')) : 'flat',
+            name: hit.name || sym,
+            time: hit.time || '',
+            source: 'tencent'
+          };
+        }
+        return out;
+      }
+
+      /**
+       * Recompute one holding/lot from a live price.
+       * Invariants: every returned number is finite; quantity/cost guard against
+       * null / "" / NaN inputs (a dead quote feed must not paint NaN anywhere).
+       */
+      function computeHoldingLive(input) {
+        var src = input || {};
+        var quantity = Math.max(0, num(src.quantity, 0));
+        var costUnit = Math.max(0, num(src.costUnit, 0));
+        var rawPrice = num(src.price, 0);
+        var price = rawPrice > 0 ? rawPrice : costUnit;
+        var feeRate = num(src.sellFeeRate, DEFAULT_SELL_FEE_RATE);
+        if (!isFinite(feeRate) || feeRate < 0) feeRate = DEFAULT_SELL_FEE_RATE;
+        var marketValue = round2(price * quantity);
+        var costTotal = round2(costUnit * quantity);
+        var estSellFee = marketValue * feeRate;
+        var floatingPnl = round2(marketValue - costTotal - estSellFee);
+        var returnRate = costTotal > 0 ? round4(floatingPnl / costTotal) : 0;
+        var prevClose = num(src.prevClose, 0);
+        var dayChangePct = prevClose > 0 ? round4((price - prevClose) / prevClose) : 0;
+        return {
+          price: round4(price),
+          quantity: quantity,
+          costUnit: costUnit,
+          marketValue: marketValue,
+          costTotal: costTotal,
+          floatingPnl: floatingPnl,
+          returnRate: returnRate,
+          dayChangePct: dayChangePct,
+          price_source: rawPrice > 0 ? 'live' : 'cost_basis'
+        };
+      }
+
+      /** A-share sessions: Mon-Fri 09:30-11:30 and 13:00-15:00 (local time). */
+      function isTradingSession(date) {
+        var d = date instanceof Date ? date : new Date(date === undefined || date === null ? Date.now() : date);
+        if (!(d instanceof Date) || isNaN(d.getTime())) return false;
+        var day = d.getDay();
+        if (day === 0 || day === 6) return false;
+        var minutes = d.getHours() * 60 + d.getMinutes();
+        return (minutes >= 570 && minutes < 690) || (minutes >= 780 && minutes < 900);
+      }
+
+      /** Refresh policy: 5s while trading, 60s idle, 0 when paused. */
+      function nextRefreshDelay(date, paused) {
+        if (paused) return 0;
+        return isTradingSession(date) ? QUOTE_REFRESH_MS : IDLE_REFRESH_MS;
+      }
+
+      /**
+       * Mode state machine with one-beat hysteresis: a single missed heartbeat keeps
+       * the current mode (smooth), two consecutive misses demote to standalone.
+       */
+      function nextMode(prev, probeOk, consecutiveFailures) {
+        if (probeOk) return 'LOCAL';
+        var failures = num(consecutiveFailures, 1);
+        if (failures >= 2) return 'STANDALONE';
+        return prev === 'LOCAL' ? 'LOCAL' : 'STANDALONE';
+      }
+
+      /**
+       * Heartbeat probe. Never rejects: returns { ok, reason, data }.
+       * A dead service / DNS failure / non-JSON body / timeout all become ok:false.
+       */
+      function probeLocalService(fetcher, url, timeoutMs) {
+        return new Promise(function (resolve) {
+          var timer = null;
+          var controller = null;
+          var done = false;
+          function finish(result) {
+            if (done) return;
+            done = true;
+            if (timer) { try { clearTimeout(timer); } catch (e) {} }
+            resolve(result);
+          }
+          try {
+            if (typeof fetcher !== 'function') { finish({ ok: false, reason: 'no_fetch' }); return; }
+            var init = { method: 'GET', cache: 'no-store' };
+            if (typeof AbortController === 'function') {
+              controller = new AbortController();
+              init.signal = controller.signal;
+              timer = setTimeout(function () {
+                try { controller.abort(); } catch (e) {}
+                finish({ ok: false, reason: 'timeout' });
+              }, num(timeoutMs, 2500));
+            }
+            Promise.resolve(fetcher(url, init)).then(function (resp) {
+              if (!resp || !resp.ok) { finish({ ok: false, reason: 'http_' + (resp ? resp.status : 'none') }); return undefined; }
+              return Promise.resolve(resp.json()).then(function (data) {
+                if (data && data.status === 'ok') { finish({ ok: true, reason: null, data: data }); return; }
+                finish({ ok: false, reason: 'bad_payload' });
+              });
+            }).catch(function () {
+              finish({ ok: false, reason: 'network_error' });
+            });
+          } catch (e) {
+            finish({ ok: false, reason: 'exception' });
+          }
+        });
+      }
+
+      /** JSONP-style fallback: qt.gtimg.cn answers with `v_shXXXXXX="..."` assignments. */
+      function loadTencentQuotesViaScript(url, codes, timeoutMs) {
+        return new Promise(function (resolve) {
+          var script = null;
+          var settled = false;
+          var list = dedupeCodes(codes);
+          function finish() {
+            if (settled) return;
+            settled = true;
+            var parsed = {};
+            for (var i = 0; i < list.length; i += 1) {
+              var raw = root['v_' + list[i]];
+              if (typeof raw === 'string') {
+                var item = parseTencentFields(list[i], raw);
+                if (item) parsed[list[i]] = item;
+              }
+            }
+            try { if (script && script.parentNode) script.parentNode.removeChild(script); } catch (e) {}
+            resolve(Object.keys(parsed).length ? parsed : null);
+          }
+          try {
+            if (typeof document === 'undefined' || !document.createElement) { resolve(null); return; }
+            if (!list.length || !url) { resolve(null); return; }
+            script = document.createElement('script');
+            script.src = url;
+            script.charset = 'gbk';
+            script.async = true;
+            script.onload = finish;
+            script.onerror = finish;
+            var parent = document.head || document.body || document.documentElement;
+            if (!parent) { resolve(null); return; }
+            parent.appendChild(script);
+            setTimeout(finish, num(timeoutMs, 5000));
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      }
+
+      /**
+       * Quote transport with a two-stage fallback:
+       *   1) fetch (CORS) + GBK decode  -> works when the API sends CORS headers
+       *   2) <script> tag JSONP         -> works from file:// where fetch is blocked
+       * Resolves { quotes, transport, error } and never rejects.
+       */
+      async function fetchTencentQuotes(options) {
+        var opts = options || {};
+        var codes = dedupeCodes((Array.isArray(opts.codes) ? opts.codes : []).map(normalizeTencentCode));
+        var url = opts.url || buildTencentQuoteUrl(codes, Date.now());
+        var fetcher = opts.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+        var timeoutMs = num(opts.timeoutMs, 5000);
+        var result = { quotes: {}, transport: 'none', error: null };
+        if (!url) { result.error = 'no_codes'; return result; }
+
+        if (fetcher) {
+          var timer = null;
+          try {
+            var init = { cache: 'no-store', mode: 'cors' };
+            var controller = typeof AbortController === 'function' ? new AbortController() : null;
+            if (controller) {
+              init.signal = controller.signal;
+              timer = setTimeout(function () { try { controller.abort(); } catch (e) {} }, timeoutMs);
+            }
+            var resp = await fetcher(url, init);
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (resp && resp.ok) {
+              var text = '';
+              if (typeof resp.arrayBuffer === 'function') {
+                var buffer = await resp.arrayBuffer();
+                try {
+                  text = new TextDecoder('gbk').decode(buffer);
+                } catch (e) {
+                  text = new TextDecoder('utf-8').decode(buffer);
+                }
+              } else {
+                text = await resp.text();
+              }
+              var parsed = parseTencentPayload(text);
+              if (Object.keys(parsed).length > 0) {
+                result.quotes = parsed;
+                result.transport = 'fetch';
+                return result;
+              }
+              result.error = 'empty_payload';
+            } else {
+              result.error = 'http_' + (resp ? resp.status : 'none');
+            }
+          } catch (e) {
+            if (timer) { try { clearTimeout(timer); } catch (e2) {} }
+            result.error = 'network_error';
+          }
+        }
+
+        var scriptQuotes = await loadTencentQuotesViaScript(url, codes, timeoutMs);
+        if (scriptQuotes && Object.keys(scriptQuotes).length > 0) {
+          result.quotes = scriptQuotes;
+          result.transport = 'script';
+          result.error = null;
+        }
+        return result;
+      }
+
+      function groupThousands(intPart) {
+        return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      }
+
+      function formatMoney(value) {
+        var n = num(value, 0);
+        var sign = n < 0 ? '-' : '';
+        var parts = Math.abs(n).toFixed(2).split('.');
+        return sign + '¥' + groupThousands(parts[0]) + '.' + parts[1];
+      }
+
+      function formatSignedMoney(value) {
+        var n = num(value, 0);
+        return (n > 0 ? '+' : '') + formatMoney(n);
+      }
+
+      function formatPct(rate, digits, withSign) {
+        var n = num(rate, 0) * 100;
+        var d = num(digits, 2);
+        var sign = (withSign === false) ? '' : (n > 0 ? '+' : '');
+        return sign + n.toFixed(d) + '%';
+      }
+
+      function formatMultiple(marketValue, costTotal) {
+        var cost = num(costTotal, 0);
+        var mult = cost > 0 ? num(marketValue, 0) / cost : 1;
+        return mult.toFixed(2) + 'x';
+      }
+
+      var api = {
+        LOCAL_API_BASE: LOCAL_API_BASE,
+        QUOTE_REFRESH_MS: QUOTE_REFRESH_MS,
+        HEARTBEAT_MS: HEARTBEAT_MS,
+        IDLE_REFRESH_MS: IDLE_REFRESH_MS,
+        TENCENT_QUOTE_BASE: TENCENT_QUOTE_BASE,
+        DEFAULT_SELL_FEE_RATE: DEFAULT_SELL_FEE_RATE,
+        num: num,
+        round2: round2,
+        round4: round4,
+        normalizeTencentCode: normalizeTencentCode,
+        dedupeCodes: dedupeCodes,
+        dedupeSymbols: dedupeSymbols,
+        buildTencentQuoteUrl: buildTencentQuoteUrl,
+        parseTencentFields: parseTencentFields,
+        parseTencentPayload: parseTencentPayload,
+        mapQuotesToSymbols: mapQuotesToSymbols,
+        computeHoldingLive: computeHoldingLive,
+        isTradingSession: isTradingSession,
+        nextRefreshDelay: nextRefreshDelay,
+        nextMode: nextMode,
+        probeLocalService: probeLocalService,
+        fetchTencentQuotes: fetchTencentQuotes,
+        formatMoney: formatMoney,
+        formatSignedMoney: formatSignedMoney,
+        formatPct: formatPct,
+        formatMultiple: formatMultiple
+      };
+
+      root.LiveClientRuntime = api;
+    })(typeof window !== 'undefined' && window ? window : globalThis);
+  </script>
 
   <!-- Embedded Client-side Data -->
   <script>
@@ -1489,6 +1968,617 @@
         filterLotsBySymbol(sym);
       }
     }
+    /* =====================================================================
+       DUAL-MODE LIVE ENGINE — standalone self-driving quotes + local heartbeat
+       ---------------------------------------------------------------------
+       Standalone  : the page polls qt.gtimg.cn itself (works from file://)
+       Local engine: 3s heartbeat to trade serve; prices then come from /api/summary
+       Safety contract: no uncaught exception, no NaN cell, no white screen —
+       every entry point is wrapped and every failure degrades to the last good data.
+       ===================================================================== */
+    var LCR = (typeof LiveClientRuntime !== 'undefined' && LiveClientRuntime) ? LiveClientRuntime : null;
+
+    var LIVE = {
+      mode: 'STANDALONE',
+      paused: false,
+      failCount: 0,
+      booted: false,
+      lastQuoteAt: 0,
+      lastError: '',
+      appliedQuotes: 0,
+      localBase: LCR ? LCR.LOCAL_API_BASE : 'http://127.0.0.1:8080',
+      previousPrices: {},
+      quoteTimer: null,
+      heartbeatTimer: null
+    };
+
+    function liveNum(value, fallback) {
+      try {
+        return LCR ? LCR.num(value, fallback) : (isFinite(parseFloat(value)) ? parseFloat(value) : (fallback || 0));
+      } catch (e) {
+        return fallback || 0;
+      }
+    }
+
+    function formatLivePrice(price) {
+      var p = liveNum(price, 0);
+      return '¥' + p.toFixed(p < 2 ? 3 : 2);
+    }
+
+    function formatWan(value) {
+      return (liveNum(value, 0) / 10000).toFixed(2) + ' 万';
+    }
+
+    function nowClock() {
+      try {
+        return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      } catch (e) {
+        return '--';
+      }
+    }
+
+    /** Flash a cell red/green for 1s, then let CSS transition it back to rest. */
+    function flashField(el, direction) {
+      if (!el || (direction !== 'up' && direction !== 'down')) return;
+      try {
+        var target = (el.closest && el.closest('td')) || el;
+        target.classList.remove('flash-up', 'flash-down');
+        void target.offsetWidth;
+        target.classList.add(direction === 'up' ? 'flash-up' : 'flash-down');
+        setTimeout(function () {
+          try { target.classList.remove('flash-up', 'flash-down'); } catch (e) {}
+        }, 1000);
+      } catch (e) {}
+    }
+
+    function setFieldText(el, text, direction) {
+      if (!el) return;
+      var changed = el.textContent !== text;
+      el.textContent = text;
+      if (changed) flashField(el, direction);
+    }
+
+    function setFieldMoney(el, value, direction) {
+      if (!el) return;
+      setFieldText(el, LCR.formatSignedMoney(value), direction);
+      el.className = liveNum(value, 0) >= 0 ? 'val-green' : 'val-red';
+    }
+
+    function setFieldRate(el, rate, direction) {
+      if (!el) return;
+      setFieldText(el, LCR.formatPct(rate, 2, true), direction);
+      el.className = liveNum(rate, 0) >= 0 ? 'val-green' : 'val-red';
+    }
+
+    /** Every symbol the page already knows about (dedup, from the embedded payload). */
+    function collectLiveSymbols() {
+      var raw = [];
+      try {
+        if (typeof TARGETS_DATA === 'object' && TARGETS_DATA) {
+          Object.keys(TARGETS_DATA).forEach(function (sym) { raw.push(sym); });
+        }
+      } catch (e) {}
+      try {
+        document.querySelectorAll('[data-sym]').forEach(function (el) {
+          var sym = el.getAttribute('data-sym');
+          if (sym) raw.push(sym);
+        });
+      } catch (e) {}
+      return LCR ? LCR.dedupeSymbols(raw) : [];
+    }
+
+    // ---------------------------------------------------------------- rendering
+
+    function writeCardFields(card, bucket, direction) {
+      if (!card || !bucket) return;
+      setFieldText(card.querySelector('[data-field="price"]'), formatLivePrice(bucket.current_price), direction);
+      setFieldText(card.querySelector('[data-field="mkt"]'), '¥' + Math.round(liveNum(bucket.market_value, 0)).toLocaleString('en-US'));
+      setFieldMoney(card.querySelector('[data-field="pnl"]'), bucket.floating_pnl);
+      setFieldRate(card.querySelector('[data-field="rate"]'), bucket.return_rate);
+      setFieldText(card.querySelector('[data-field="mult"]'), LCR.formatMultiple(bucket.market_value, liveNum(bucket.cost_unit, 0) * liveNum(bucket.shares, 0)));
+      card.setAttribute('data-pnl-rate', String(liveNum(bucket.return_rate, 0)));
+      card.setAttribute('data-mkt-val', String(liveNum(bucket.market_value, 0)));
+    }
+
+    function writeHoldingRowFields(row, bucket, direction) {
+      if (!row || !bucket) return;
+      setFieldText(row.querySelector('[data-field="price"]'), formatLivePrice(bucket.current_price), direction);
+      setFieldText(row.querySelector('[data-field="mkt"]'), '¥' + liveNum(bucket.market_value, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      setFieldMoney(row.querySelector('[data-field="pnl"]'), bucket.floating_pnl);
+      setFieldRate(row.querySelector('[data-field="rate"]'), bucket.return_rate);
+      setFieldText(row.querySelector('[data-field="mult"]'), LCR.formatMultiple(bucket.market_value, liveNum(bucket.cost_unit, 0) * liveNum(bucket.shares, 0)));
+      row.setAttribute('data-pnl-rate', String(liveNum(bucket.return_rate, 0)));
+      row.setAttribute('data-pnl-val', String(liveNum(bucket.floating_pnl, 0)));
+      row.setAttribute('data-mkt-val', String(liveNum(bucket.market_value, 0)));
+    }
+
+    /** Push one symbol's live quote into embedded data + every DOM surface. */
+    function updateSymbolLive(symbol, quote) {
+      var group = (typeof TARGETS_DATA === 'object' && TARGETS_DATA) ? TARGETS_DATA[symbol] : null;
+      if (!group || !quote) return false;
+      var price = liveNum(quote.price, 0);
+      if (!(price > 0)) return false;
+
+      var prevClose = liveNum(quote.prev_close, 0);
+      var prevPrice = liveNum(LIVE.previousPrices[symbol], 0);
+      var direction = prevPrice > 0 ? (price > prevPrice ? 'up' : (price < prevPrice ? 'down' : 'flat')) : 'flat';
+      LIVE.previousPrices[symbol] = price;
+
+      // 1) embedded data (drives the drill-down modal, sorts, and filters)
+      Object.keys(group).forEach(function (accKey) {
+        var bucket = group[accKey];
+        if (!bucket) return;
+        var live = LCR.computeHoldingLive({
+          quantity: bucket.shares,
+          costUnit: bucket.cost_unit,
+          price: price,
+          prevClose: prevClose
+        });
+        bucket.current_price = live.price;
+        bucket.market_value = live.marketValue;
+        bucket.floating_pnl = live.floatingPnl;
+        bucket.return_rate = live.returnRate;
+        bucket.day_change_pct = live.dayChangePct;
+        bucket.price_source = live.price_source;
+
+        (bucket.lots || []).forEach(function (lot) {
+          if (!lot || lot.status !== 'ACTIVE') return;
+          var lotLive = LCR.computeHoldingLive({
+            quantity: lot.qty,
+            costUnit: lot.cost_unit,
+            price: price,
+            prevClose: prevClose
+          });
+          lot.price_now_or_close = lotLive.price;
+          lot.pnl = lotLive.floatingPnl;
+          lot.return_rate = lotLive.returnRate;
+        });
+      });
+
+      // 2) Layer 2: target cards (one card per account bucket)
+      try {
+        document.querySelectorAll('.target-card[data-sym="' + symbol + '"]').forEach(function (card) {
+          var accKey = card.getAttribute('data-account') || 'ALL';
+          var bucket = group[accKey] || group['ALL'];
+          if (bucket) writeCardFields(card, bucket, direction);
+        });
+      } catch (e) {}
+
+      // 3) Layer 1 holdings table rows
+      try {
+        document.querySelectorAll('#tbody-holdings tr[data-symbol="' + symbol + '"]').forEach(function (row) {
+          var accKey = row.getAttribute('data-account') || 'ALL';
+          var bucket = group[accKey] || group['ALL'];
+          if (bucket) writeHoldingRowFields(row, bucket, direction);
+        });
+      } catch (e) {}
+
+      // 4) Layer 3 active lot rows (time + return-rate tables)
+      try {
+        document.querySelectorAll('tr[data-lot-id][data-symbol="' + symbol + '"]').forEach(function (row) {
+          var status = row.getAttribute('data-status') || 'ACTIVE';
+          if (status !== 'ACTIVE') return;
+          var live = LCR.computeHoldingLive({
+            quantity: row.getAttribute('data-qty'),
+            costUnit: row.getAttribute('data-cost-unit'),
+            price: price,
+            prevClose: prevClose
+          });
+          setFieldText(row.querySelector('[data-field="price"]'), formatLivePrice(live.price), direction);
+          setFieldMoney(row.querySelector('[data-field="pnl"]'), live.floatingPnl);
+          setFieldRate(row.querySelector('[data-field="rate"]'), live.returnRate);
+          row.setAttribute('data-return', String(live.returnRate));
+        });
+      } catch (e) {}
+
+      return true;
+    }
+
+    /** Aggregate live totals directly from the rendered holdings rows (authoritative set). */
+    function collectLiveAccountTotals() {
+      var totals = { ALL: { cost: 0, mkt: 0, pnl: 0, symbols: 0, lots: 0, pos: 0, neg: 0, posSum: 0, negSum: 0 } };
+      var rows = [];
+      try {
+        rows = Array.prototype.slice.call(document.querySelectorAll('#tbody-holdings tr'));
+      } catch (e) {
+        return totals;
+      }
+      var hasAllRow = {};
+      rows.forEach(function (row) {
+        if ((row.getAttribute('data-account') || 'ALL') === 'ALL') {
+          hasAllRow[row.getAttribute('data-symbol')] = true;
+        }
+      });
+      var countedAll = {};
+      rows.forEach(function (row) {
+        var acc = row.getAttribute('data-account') || 'ALL';
+        var sym = row.getAttribute('data-symbol') || '';
+        var cost = liveNum(row.getAttribute('data-cost-val'), 0);
+        var mkt = liveNum(row.getAttribute('data-mkt-val'), 0);
+        var pnl = liveNum(row.getAttribute('data-pnl-val'), 0);
+        var lots = liveNum(row.getAttribute('data-lots'), 0) || 0;
+
+        if (acc !== 'ALL') {
+          if (!totals[acc]) totals[acc] = { cost: 0, mkt: 0, pnl: 0, symbols: 0, lots: 0, pos: 0, neg: 0, posSum: 0, negSum: 0 };
+          totals[acc].cost += cost;
+          totals[acc].mkt += mkt;
+          totals[acc].pnl += pnl;
+          totals[acc].symbols += 1;
+          totals[acc].lots += lots;
+          if (pnl >= 0) { totals[acc].pos += 1; totals[acc].posSum += pnl; }
+          else { totals[acc].neg += 1; totals[acc].negSum += pnl; }
+        }
+
+        // One row per symbol feeds the merged portfolio: the merged row when it
+        // exists, otherwise the single-account row that carries visibility "ALL".
+        var contributes = (acc === 'ALL') || !hasAllRow[sym];
+        if (contributes && !countedAll[sym]) {
+          countedAll[sym] = true;
+          totals.ALL.cost += cost;
+          totals.ALL.mkt += mkt;
+          totals.ALL.pnl += pnl;
+          totals.ALL.symbols += 1;
+          totals.ALL.lots += lots;
+          if (pnl >= 0) { totals.ALL.pos += 1; totals.ALL.posSum += pnl; }
+          else { totals.ALL.neg += 1; totals.ALL.negSum += pnl; }
+        }
+      });
+      return totals;
+    }
+
+    function accountMktSplitText(totals) {
+      var parts = [];
+      try {
+        Object.keys(totals).forEach(function (key) {
+          if (key === 'ALL' || !ACCOUNT_METRICS[key]) return;
+          parts.push(accountShortLabel(key) + ' ' + formatWan(totals[key].mkt));
+        });
+      } catch (e) {}
+      return parts.length ? parts.join(' + ') : '暂无可穿透账户';
+    }
+
+    function setKpiText(id, text, className) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text;
+      if (className) el.className = 'kpi-value ' + className;
+    }
+
+    /** Refresh Layer-1 KPI cards from the live rows (never from stale template metrics). */
+    function applyLiveKpis() {
+      var totals = collectLiveAccountTotals();
+      var acc = (typeof currentGlobalAccount === 'string' && currentGlobalAccount) ? currentGlobalAccount : 'ALL';
+      var t = totals[acc] || totals.ALL;
+      if (!t) return;
+      var pnlCls = t.pnl >= 0 ? 'val-green' : 'val-red';
+      var mult = t.cost > 0 ? t.mkt / t.cost : 1;
+
+      setKpiText('kpi-tab1-scale-val', LCR.formatMoney(t.mkt));
+      var scaleSub = document.getElementById('kpi-tab1-scale-sub');
+      if (scaleSub) {
+        scaleSub.textContent = acc === 'ALL'
+          ? accountMktSplitText(totals)
+          : ('在场持有 ' + t.symbols + ' 标的 • ' + t.lots + ' 笔活跃批次');
+      }
+      setKpiText('kpi-tab1-pnl-val', LCR.formatSignedMoney(t.pnl) + ' (' + LCR.formatPct(t.cost > 0 ? t.pnl / t.cost : 0, 2, false) + ')', pnlCls);
+      var pnlSub = document.getElementById('kpi-tab1-pnl-sub');
+      if (pnlSub) {
+        pnlSub.textContent = '整体本息倍数 ' + mult.toFixed(2) + 'x • 对冲结构 ' + t.pos + ' 浮盈 vs ' + t.neg + ' 浮亏';
+      }
+
+      setKpiText('kpi-tab2-cost-val', LCR.formatMoney(t.cost));
+      setKpiText('kpi-tab2-mkt-val', LCR.formatMoney(t.mkt));
+      setKpiText('kpi-tab2-pnl-val', LCR.formatSignedMoney(t.pnl) + ' (' + LCR.formatPct(t.cost > 0 ? t.pnl / t.cost : 0, 2, false) + ')', pnlCls);
+      setKpiText('kpi-tab2-hedge-val', t.pos + ' 浮盈 vs ' + t.neg + ' 浮亏', 'val-green');
+      var hedgeSub = document.getElementById('kpi-tab2-hedge-sub');
+      if (hedgeSub) {
+        hedgeSub.textContent = '浮盈群贡献 +¥' + formatWan(t.posSum) + ' 抵消 浮亏群 ¥' + formatWan(t.negSum);
+      }
+    }
+
+    /** If the drill-down modal is open on this symbol, keep its numbers in sync. */
+    function refreshOpenModalLive() {
+      try {
+        var overlay = document.getElementById('target-modal-overlay');
+        if (!overlay || !overlay.classList.contains('active')) return;
+        var sym = (typeof currentModalSymbol === 'string') ? currentModalSymbol : null;
+        if (!sym || !TARGETS_DATA[sym]) return;
+        var group = TARGETS_DATA[sym];
+        var target = group[currentGlobalAccount] || group['ALL'];
+        if (!target) return;
+        var priceEl = document.getElementById('modal-stat-price');
+        if (priceEl) priceEl.textContent = formatLivePrice(target.current_price);
+        var mktEl = document.getElementById('modal-stat-mktval');
+        if (mktEl) mktEl.textContent = '¥' + Math.round(liveNum(target.market_value, 0)).toLocaleString('en-US');
+        var pnlEl = document.getElementById('modal-stat-pnl');
+        if (pnlEl) {
+          pnlEl.textContent = LCR.formatSignedMoney(target.floating_pnl);
+          pnlEl.className = 'modal-stat-val ' + (liveNum(target.floating_pnl, 0) >= 0 ? 'val-green' : 'val-red');
+        }
+        var rrEl = document.getElementById('modal-stat-rr');
+        if (rrEl) {
+          rrEl.textContent = LCR.formatPct(target.return_rate, 2, true);
+          rrEl.className = 'modal-stat-val ' + (liveNum(target.return_rate, 0) >= 0 ? 'val-green' : 'val-red');
+        }
+      } catch (e) {}
+    }
+
+    function updateLiveStatus() {
+      var el = document.getElementById('live-status');
+      if (!el) return;
+      if (LIVE.paused) {
+        el.textContent = '行情刷新已暂停';
+        return;
+      }
+      var interval = LCR.isTradingSession(new Date())
+        ? ((LCR.QUOTE_REFRESH_MS / 1000) + 's 轮询')
+        : '非交易时段 • 休眠降频 60s';
+      var when = LIVE.lastQuoteAt ? nowClock() : '--';
+      var srcText = LIVE.mode === 'LOCAL' ? '本地引擎' : '自驱';
+      el.textContent = srcText + '行情 • ' + interval + ' • 最近 ' + when + (LIVE.lastError ? ' • 异常已安全降级' : '');
+    }
+
+    function renderModeIndicator() {
+      var wrap = document.getElementById('mode-indicator');
+      var text = document.getElementById('mode-text');
+      if (!wrap || !text) return;
+      if (LIVE.mode === 'LOCAL') {
+        wrap.classList.add('local');
+        wrap.classList.remove('standalone');
+        text.textContent = '模式：本地引擎已联动';
+        wrap.title = '已连接本机 trade serve（' + LIVE.localBase + '）：行情与账本口径由本地引擎统一驱动';
+      } else {
+        wrap.classList.remove('local');
+        wrap.classList.add('standalone');
+        text.textContent = '模式：轻量独立（纯前端自驱）';
+        wrap.title = '未检测到本地引擎，页面以纯前端方式自驱动行情（每 5 秒批量轮询）';
+      }
+    }
+
+    // -------------------------------------------------------------- onboarding
+
+    function toggleLocalServicePanel(force) {
+      var panel = document.getElementById('local-service-card');
+      var btn = document.getElementById('btn-local-service');
+      if (!panel) return;
+      var open = (typeof force === 'boolean') ? force : !panel.classList.contains('open');
+      if (open) panel.classList.add('open');
+      else panel.classList.remove('open');
+      if (btn) btn.textContent = open ? '✕ 收起本地服务' : '⚡ 启动本地服务';
+    }
+
+    function fallbackCopyText(text) {
+      try {
+        var area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', 'readonly');
+        area.style.position = 'fixed';
+        area.style.top = '-1000px';
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(area);
+        return Boolean(ok);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function copyServeCommand() {
+      var feedback = document.getElementById('copy-feedback');
+      var command = 'trade serve';
+      function done(ok) {
+        if (!feedback) return;
+        feedback.textContent = ok ? '已复制 ✓' : '复制失败，请手动选中命令';
+        setTimeout(function () {
+          try { feedback.textContent = ''; } catch (e) {}
+        }, 1800);
+      }
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(command).then(function () {
+            done(true);
+          }).catch(function () {
+            done(fallbackCopyText(command));
+          });
+          return;
+        }
+      } catch (e) {}
+      done(fallbackCopyText(command));
+    }
+
+    function toggleLiveQuotes() {
+      LIVE.paused = !LIVE.paused;
+      var btn = document.getElementById('btn-live-toggle');
+      if (btn) {
+        btn.textContent = LIVE.paused ? '▶ 继续行情刷新' : '⏸ 暂停行情刷新';
+        if (LIVE.paused) btn.classList.add('paused');
+        else btn.classList.remove('paused');
+      }
+      if (LIVE.paused) {
+        if (LIVE.quoteTimer) {
+          clearTimeout(LIVE.quoteTimer);
+          LIVE.quoteTimer = null;
+        }
+      } else {
+        scheduleQuoteTick();
+        void performRefresh();
+      }
+      updateLiveStatus();
+    }
+
+    // ------------------------------------------------------------- quote engine
+
+    async function tryTencentQuotes() {
+      try {
+        var symbols = collectLiveSymbols();
+        if (!symbols.length) return null;
+        var codes = symbols.map(function (sym) { return LCR.normalizeTencentCode(sym); }).filter(Boolean);
+        if (!codes.length) return null;
+        var res = await LCR.fetchTencentQuotes({
+          codes: codes,
+          url: LCR.buildTencentQuoteUrl(codes, Date.now()),
+          timeoutMs: 5000
+        });
+        var mapped = LCR.mapQuotesToSymbols(res && res.quotes, symbols, LIVE.previousPrices);
+        if (res && res.error && Object.keys(mapped).length === 0) LIVE.lastError = res.error;
+        return Object.keys(mapped).length ? mapped : null;
+      } catch (e) {
+        LIVE.lastError = 'quote_exception';
+        return null;
+      }
+    }
+
+    async function tryLocalEngineQuotes() {
+      try {
+        if (typeof fetch !== 'function') return null;
+        var init = { method: 'GET', cache: 'no-store' };
+        var controller = typeof AbortController === 'function' ? new AbortController() : null;
+        var timer = null;
+        if (controller) {
+          init.signal = controller.signal;
+          timer = setTimeout(function () { try { controller.abort(); } catch (e) {} }, 4000);
+        }
+        var resp = await fetch(LIVE.localBase + '/api/summary', init);
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!resp || !resp.ok) return null;
+        var data = await resp.json();
+        var quotes = {};
+        (data && Array.isArray(data.symbols) ? data.symbols : []).forEach(function (item) {
+          var price = liveNum(item.current_price, 0);
+          if (!(price > 0)) return;
+          quotes[String(item.symbol)] = {
+            symbol: item.symbol,
+            price: price,
+            prev_close: null,
+            source: item.price_source || 'local'
+          };
+        });
+        return Object.keys(quotes).length ? quotes : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function applyQuotes(quotes) {
+      if (!quotes) return 0;
+      var applied = 0;
+      try {
+        Object.keys(quotes).forEach(function (sym) {
+          try {
+            if (updateSymbolLive(sym, quotes[sym])) applied += 1;
+          } catch (e) {
+            LIVE.lastError = 'apply_failed';
+          }
+        });
+      } catch (e) {
+        LIVE.lastError = 'apply_failed';
+      }
+      if (applied > 0) {
+        LIVE.appliedQuotes = applied;
+        LIVE.lastQuoteAt = Date.now();
+      }
+      try { applyLiveKpis(); } catch (e) {}
+      try { refreshOpenModalLive(); } catch (e) {}
+      updateLiveStatus();
+      return applied;
+    }
+
+    async function performRefresh() {
+      if (LIVE.paused) return;
+      var quotes = null;
+      if (LIVE.mode === 'LOCAL') {
+        quotes = await tryLocalEngineQuotes();
+      }
+      if (!quotes) {
+        quotes = await tryTencentQuotes();
+      }
+      if (quotes) {
+        LIVE.lastError = '';
+        applyQuotes(quotes);
+      } else {
+        updateLiveStatus();
+      }
+    }
+
+    function scheduleQuoteTick() {
+      if (LIVE.quoteTimer) {
+        clearTimeout(LIVE.quoteTimer);
+        LIVE.quoteTimer = null;
+      }
+      if (LIVE.paused) return;
+      var delay = LCR.nextRefreshDelay(new Date(), false);
+      LIVE.quoteTimer = setTimeout(function () {
+        quoteTick();
+      }, delay);
+    }
+
+    async function quoteTick() {
+      try {
+        await performRefresh();
+      } catch (e) {
+        LIVE.lastError = 'tick_exception';
+      } finally {
+        try { scheduleQuoteTick(); } catch (e) {}
+      }
+    }
+
+    async function heartbeatTick() {
+      var result = { ok: false };
+      try {
+        var fetcher = typeof fetch === 'function'
+          ? function (url, init) { return fetch(url, init); }
+          : null;
+        result = await LCR.probeLocalService(fetcher, LIVE.localBase + '/api/health', 2500);
+      } catch (e) {
+        result = { ok: false };
+      }
+      LIVE.failCount = (result && result.ok) ? 0 : (LIVE.failCount + 1);
+      var next = LCR.nextMode(LIVE.mode, Boolean(result && result.ok), LIVE.failCount);
+      if (next !== LIVE.mode) {
+        LIVE.mode = next;
+        renderModeIndicator();
+        // Local engine came online: align the data flow immediately.
+        if (next === 'LOCAL') void performRefresh();
+      }
+      updateLiveStatus();
+    }
+
+    function startHeartbeat() {
+      if (LIVE.heartbeatTimer) clearInterval(LIVE.heartbeatTimer);
+      LIVE.heartbeatTimer = setInterval(function () {
+        heartbeatTick();
+      }, LCR.HEARTBEAT_MS);
+      heartbeatTick();
+    }
+
+    function bootLiveEngine() {
+      if (LIVE.booted || !LCR) return;
+      LIVE.booted = true;
+      renderModeIndicator();
+      updateLiveStatus();
+      startHeartbeat();
+      scheduleQuoteTick();
+    }
+
+    // Patch the account switcher so switching accounts re-applies LIVE values,
+    // never the frozen values baked into ACCOUNT_METRICS at generation time.
+    try {
+      if (typeof setGlobalAccountFilter === 'function') {
+        var __originalSetGlobalAccountFilter = setGlobalAccountFilter;
+        setGlobalAccountFilter = function (acc) {
+          __originalSetGlobalAccountFilter(acc);
+          try { applyLiveKpis(); } catch (e) {}
+        };
+      }
+    } catch (e) {}
+
+    try {
+      bootLiveEngine();
+    } catch (e) {
+      LIVE.lastError = 'boot_failed';
+    }
+
   </script>
 </body>
 </html>

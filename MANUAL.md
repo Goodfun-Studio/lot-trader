@@ -106,6 +106,8 @@ trade --help
 - 生成全局交互式 HTML 看板（时间维度 / 盈亏率维度双子切换卡物理隔离）：
   trade dashboard [--out <输出路径>] [--open] --json
   （默认输出当前目录 lot-trader-global-dashboard.html；--open 生成后自动打开浏览器）
+  trade serve [--port 8080] [--host 127.0.0.1] [--db <路径>] [--json]
+  （启动只读本地 HTTP 引擎，仅监听回环；Ctrl+C / SIGTERM 优雅退出）
 ```
 
 ---
@@ -167,6 +169,40 @@ trade dashboard --json
 | `--template, -t PATH` | 前端模板路径（默认使用脚本同目录 `template_base.html`） |
 | `--db PATH` | SQLite 账本路径（默认 `$LOT_TRADER_DB` → `$TRADE_DB_PATH` → `~/.trade/trade.db`） |
 | `--json` | 返回 `{"code":0,"data":{out,script,template,db,bytes,opened}}`，失败 `code=1` 且退出码 1 |
+
+### 看板双模运行（自驱 ⇄ 本地引擎）
+
+| 模式 | 触发条件 | 行情数据源 | 响应 |
+| --- | --- | --- | --- |
+| 轻量独立（纯前端自驱，默认） | 未探测到本地引擎 | 页面内嵌标的自去重 → 每 5 秒批量请求 `qt.gtimg.cn` | 指示灯浅灰，文案「模式：轻量独立（纯前端自驱）」 |
+| 本地引擎已联动 | 3 秒心跳探测 `http://127.0.0.1:8080/api/health` 成功 | 优先用 `/api/summary` 的本地账本口径 | 指示灯绿色呼吸灯，文案「模式：本地引擎已联动」 |
+
+- 前端按每个标的/批次的成本与数量重算总市值、浮盈金额与收益率，现价变动时单元格红/绿呼吸高亮 1 秒后平滑恢复。
+- 非交易时段（15:00 后、午休或周末）自动降频到 60 秒；顶栏【暂停行情刷新】按钮可随时冻结。
+- 服务关闭 / 心跳超时 / 网络中断 / 行情接口返回异常文本时**安全降级**：不抛未捕获异常、不出现 `NaN`、不白屏（回退到最近一次有效行情或成本价）。
+- 顶栏【启动本地服务】展开轻量引导卡，内含 `trade serve` 命令与【一键复制】。
+
+### 本地微服务原语（trade serve）
+
+```bash
+trade serve                              # 默认 127.0.0.1:8080
+trade serve --port 8090 --host 127.0.0.1 --db ~/.trade/trade.db
+trade serve --json                       # 结构化就绪行（供脚本/智能体解析）
+```
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/health` | 存活探针：`{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}` |
+| `GET /api/summary` | 三层快照：`portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/lots?symbol=&account=&status=` | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` |
+
+**硬约束与容错口径**：
+1. **只读 + 只监听回环**：拒绝 `0.0.0.0` / 局域网 IP / 域名等任何非 `127.0.0.1`、`localhost`、`::1` 的 host，账本永不出本机；
+2. 端口被占用时输出可操作性中文文案并退出码 1（不是崩溃堆栈），提示确认已有实例或换端口；
+3. `SIGINT` / `SIGTERM` 优雅停机并释放端口；
+4. 行情拉取失败时按批次成本价兜底（`price_source: "cost_basis"`），任何字段都不会是 `NaN`。
+
+> 注：`trade serve` 不设置 `development: false` —— 该选项会让 Bun 启用 `SO_REUSEPORT`，导致两个引擎静默共用同一端口并互相抢占请求。
 
 **部署说明（Intel 机器同样适用）**：
 1. 把 `dist/trade-*` 与仓库 `scripts/` 目录（`generate_dashboard.py` + `template_base.html`）一起部署，`scripts/` 与 `trade` 二进制同级即可被自动发现；
