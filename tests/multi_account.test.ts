@@ -134,7 +134,7 @@ describe("Multi-Account & Core Substitution Isolation Tests", () => {
     // Attempting to close Lot B with --substitute-core must be strictly REJECTED
     expect(() => {
       engine.closeLot(lotB.lot_id, 1660.0, 500, true, undefined, today);
-    }).toThrow("底仓可用配额不足，严防裸卖空！账户 CMB 可用底仓仅 0 股");
+    }).toThrow(/底仓可用配额不足，严防裸卖空！账户 CMB 标的 600519\.SH 总底仓 0 股，今日已代冲 0 股，剩余可用配额仅 0 股，申请代冲 500 股/);
 
     // Also attempting to close Lot B without substitute-core must also be rejected due to T+1
     expect(() => {

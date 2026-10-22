@@ -224,7 +224,7 @@ describe("Cross-account core substitution: physical isolation negative guard", (
     // Physical isolation: substitution close from B is rejected hard, regardless of A's core.
     expect(() => {
       engine.closeLot(todayLot.lot_id, 1660.0, 500, true, undefined, today);
-    }).toThrow("账户 CITIC_MAIN 可用底仓仅 0 股");
+    }).toThrow(/账户 CITIC_MAIN 标的 600519\.SH 总底仓 0 股，今日已代冲 0 股，剩余可用配额仅 0 股，申请代冲 500 股/);
 
     // A's own core is untouched by the rejected attempt.
     const coreLotAfter = engine.getLot(coreLot.lot_id)!;

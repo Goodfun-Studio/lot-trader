@@ -56,8 +56,8 @@ export class SignalScanner {
       if (customThresholds.take_profit_min !== undefined) tpMin = customThresholds.take_profit_min;
       if (customThresholds.trailing_activate !== undefined) trailingActivate = customThresholds.trailing_activate;
       if (customThresholds.trailing_pullback !== undefined) trailingPullback = customThresholds.trailing_pullback;
-      if (customThresholds.dip_1 !!= undefined) dip1 = customThresholds.dip_1;
-      if (customThresholds.deep_value !!= undefined) deepValThresh = customThresholds.deep_value;
+      if (customThresholds.dip_1 != undefined) dip1 = customThresholds.dip_1;
+      if (customThresholds.deep_value != undefined) deepValThresh = customThresholds.deep_value;
     }
 
     // Dynamic peak price & trailing stop tracking
@@ -99,7 +99,7 @@ export class SignalScanner {
         signalType = SignalType.TRAILING_STOP_ALERT;
         suggestedAction = "TRAILING_STOP_CLOSE";
         payload = {
-          reason: `âdynamic trailing stop triggered: peak ${currentPeak.toFixed(4)}, pullback ${(pullbackRate * 100).toFixed(2)}%, return +${(returnRate * 100).toFixed(2)}%`,
+          reason: `dynamic trailing stop triggered: peak ${currentPeak.toFixed(4)}, pullback ${(pullbackRate * 100).toFixed(2)}%, return +${(returnRate * 100).toFixed(2)}%`,
           settlement_mode: settlementMode,
           peak_price: currentPeak,
           pullback_rate: pullbackRate,
@@ -193,7 +193,7 @@ export class SignalScanner {
       suggestedAction = "ADD_POSITION_DIP";
       const ladderName = returnRate > -0.1500 ? "LEVEL_1" : "LEVEL_2";
       payload = {
-        reason: `Regular dip ladder reached (${(returnRate * 100).toFixed(2)}%i`,
+        reason: `Regular dip ladder reached (${(returnRate * 100).toFixed(2)}%)`,
         ladder: ladderName,
         suggested_base_amount: 10000,
         pyramid_level_next: lot.pyramid_level + 1,

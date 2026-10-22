@@ -127,6 +127,25 @@ describe("Phase 2 Core Strategy Logic Tests", () => {
     const payload = JSON.parse(trailingSig.payload_json);
     expect(payload.peak_price).toBe(11.80);
     expect(payload.pullback_rate).toBeGreaterThanOrEqual(0.03);
+    // Text hygiene (mojibake guard): the reason is a clean ASCII description, never `â...`.
+    expect(payload.reason).toContain("dynamic trailing stop triggered");
+    expect(payload.reason).not.toContain("\u00e2");
+    expect(payload.reason).not.toContain("\ufffd");
+  });
+
+  it("dip ladder signal reason is well-formed (no mojibake, no stray `%i`)", async () => {
+    const { engine, mockQuotes } = createTestEngine();
+    engine.buyLot("510300.SH", 10.0, 1000, undefined, new Date(Date.now() - 24 * 3600 * 1000));
+    mockQuotes.setMockPrice("510300.SH", 8.8); // -12%: inside the regular dip ladder (-10% ~ -20%)
+
+    const signals = await engine.scanSignals();
+    const dipSig = signals.find((s) => s.signal_type === SignalType.ADD_POSITION_ALERT);
+    expect(dipSig).toBeDefined();
+    const payload = JSON.parse(dipSig!.payload_json);
+    expect(payload.reason).toContain("Regular dip ladder reached");
+    expect(payload.reason).not.toContain("%i");
+    expect(payload.reason).not.toContain("\u00e2");
+    expect(payload.reason).toMatch(/\(-?\d+\.\d{2}%\)$/);
   });
 
   it("position cap & risk guard: blocks purchases exceeding 30% single-symbol limit", () => {

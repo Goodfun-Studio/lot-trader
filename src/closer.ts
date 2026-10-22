@@ -80,9 +80,15 @@ export class LotCloser {
           throw new Error(`标的 ${symbol} 为法定 T+1，当日买入份额无法直接平仓。若有可用底仓请指定 --substitute-core`);
         }
 
-        const availCore = this.arbitrator.computeAvailableCorePosition(symbol, now, accountId);
-        if (availCore < qtyToClose) {
-          throw new Error(`底仓可用配额不足，严防裸卖空！账户 ${accountId} 可用底仓仅 ${availCore} 股，申请代冲 ${qtyToClose} 股`);
+        // T-45: the quota is NET of every substitute-core close already done today. Comparing
+        // today's request against the gross core pool alone let repeated partial closes drain an
+        // account far beyond its settled core position.
+        const core = this.arbitrator.computeCorePositionBreakdown(symbol, now, accountId);
+        if (core.available < qtyToClose) {
+          throw new Error(
+            `底仓可用配额不足，严防裸卖空！账户 ${accountId} 标的 ${symbol} 总底仓 ${core.gross} 股，` +
+            `今日已代冲 ${core.consumedToday} 股，剩余可用配额仅 ${core.available} 股，申请代冲 ${qtyToClose} 股`
+          );
         }
 
         const coreRow = this.conn.query<{ lot_id: string }, [string, string, string]>(
