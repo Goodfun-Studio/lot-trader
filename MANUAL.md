@@ -65,6 +65,7 @@ trade --help
 4. **单标的 30% 仓位硬顶**：买入前系统会自动核算组合占比，超 30% 需向用户提示风控预警。
 5. **多账户独立核算与底仓代冲强隔离**：支持多券商账户（`--account <ACC>`，默认 `DEFAULT`）。日内代冲做 T 严禁跨账户挪用底仓，加仓默认继承父批次账户。账户元数据由 `trade account list/add` 维护，未登记账户买入时自愈登记。
 6. **买卖理由必须可回溯**：建仓/加仓用 `--reason` 记录买入假设，平仓用 `--reason` 记录终局复盘；理由全部可选，不传不阻断录入。
+7. **账本隔离用 `--db`，排查帮助用 `--help`**：`--db <路径>` 对所有子命令生效且优先于环境变量（需沙箱推演时用它，不要只依赖 `TRADE_DB_PATH`，否则易形成假隔离）；任何层级的 `-h/--help` 都是零写库的纯只读操作，可安全用于排查，`trade scan --help` 也绝不会真实扫描或写 `signals`。
 
 ### 命令速查字典
 - 录入买入建仓：
@@ -108,6 +109,21 @@ trade --help
   （默认输出当前目录 lot-trader-global-dashboard.html；--open 生成后自动打开浏览器）
   trade serve [--port 8080] [--host 127.0.0.1] [--db <路径>] [--json]
   （启动只读本地 HTTP 引擎，仅监听回环；Ctrl+C / SIGTERM 优雅退出）
+```
+
+### 全局参数（所有子命令通用）
+
+| 参数 | 说明 |
+| --- | --- |
+| `--db PATH` | 指定 SQLite 账本路径，**对所有子命令生效**（`lot` / `account` / `position` / `scan` / `stats` / `physics` / `dividend` / `dashboard` / `serve`）。优先级 `--db` > `$LOT_TRADER_DB` > `$TRADE_DB_PATH` > `~/.trade/trade.db`；命令行显式传入时**必然覆盖环境变量**。支持 `--db PATH` 与 `--db=PATH` 两种写法，位置可在子命令参数之间。 |
+| `-h, --help` | 打印当前层级（含二级子命令，如 `trade lot buy --help`、`trade dividend add --help`）的用法说明，并以退出码 `0` 退出。**纯只读**：任何层级的 `--help` 都不会创建、迁移或写入任何数据库，绝不会触发真实业务逻辑（`trade scan --help` 不再扫描、不再写 `signals`）。 |
+
+```bash
+# 沙箱推演：只读写指定账本，默认库零触碰
+trade lot list --db /tmp/sandbox.db --json
+trade account list --db /tmp/sandbox.db --json
+trade scan --db /tmp/sandbox.db --json
+trade lot buy --db /tmp/sandbox.db 518880.SH 6.12 2000 --json
 ```
 
 ---

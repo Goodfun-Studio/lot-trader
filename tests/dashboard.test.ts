@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { AppDatabase } from "../src/db.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli.ts");
@@ -137,6 +138,69 @@ describe("trade dashboard CLI primitive", () => {
       expect(res.exitCode).toBe(0);
       expect(statSync(ws.out).size).toBeGreaterThan(20_000);
       expect(readFileSync(ws.out, "utf-8")).toContain(WEB_TITLE);
+    } finally {
+      rmSync(ws.dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("localizes extra asset-class pillars and keeps every pillar colour distinct (P3-1 / P3-2)", async () => {
+    const ws = makeTempWorkspace();
+    try {
+      const buy = await runCli(
+        ["lot", "buy", "--symbol", "518880.SH", "--price", "6.12", "--qty", "2000", "--json"],
+        ws,
+      );
+      expect(buy.exitCode).toBe(0);
+
+      // Grow the ledger into extra asset classes plus one unknown code the label map has never
+      // seen. Fixtures are raw SQL so the test asserts rendering, not symbol inference.
+      const ledger = new AppDatabase(ws.db);
+      const conn = ledger.getConnection();
+      const fixtures: Array<[string, string, string]> = [
+        ["019547.SH", "国债", "BOND"],
+        ["161725.SZ", "白酒基金", "FUND"],
+        ["X9.SH", "神秘资产", "WEIRDASSET"],
+      ];
+      for (const [sym, name, cls] of fixtures) {
+        conn.run(
+          `INSERT OR IGNORE INTO symbols (symbol, name, asset_class, settlement_mode, lot_size)
+           VALUES ('${sym}', '${name}', '${cls}', 'STATUTORY_T1', 100)`,
+        );
+        conn.run(
+          `INSERT INTO lots (lot_id, account_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status)
+           VALUES ('LOT-TEST-${sym}', 'DEFAULT', '${sym}', '2026-01-01T09:30:00', 10.0, 100, 100, 10.0, 'ACTIVE')`,
+        );
+      }
+      ledger.close();
+
+      const res = await runCli(["dashboard", "--out", ws.out, "--json"], ws);
+      expect(res.exitCode).toBe(0);
+      const html = readFileSync(ws.out, "utf-8");
+
+      const borders = [
+        ...html.matchAll(/data-alloc-class="([A-Z_]+)" style="border-top: 4px solid (var\(--[a-z]+\));"/g),
+      ];
+      const byClass: Record<string, string> = {};
+      for (const match of borders) byClass[match[1]] = match[2];
+
+      // P3-1: BOND / FUND must not borrow the purple owned by the CASH card.
+      expect(byClass.CASH).toBe("var(--purple)");
+      expect(byClass.BOND).not.toBe("var(--purple)");
+      expect(byClass.FUND).not.toBe("var(--purple)");
+      expect(byClass.BOND).not.toBe(byClass.FUND);
+
+      // No two pillar cards may share a border colour.
+      const usedColours = Object.values(byClass);
+      expect(usedColours.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(usedColours).size).toBe(usedColours.length);
+
+      // P3-2: titles are localized; the raw uppercase code never leaks into a card title.
+      expect(html).toContain("🏛 债券固收层");
+      expect(html).toContain("🧺 场外基金层");
+      expect(html).toContain("📁 其他资产层");
+      expect(html).not.toContain("📁 BOND 资产层");
+      expect(html).not.toContain("📁 FUND 资产层");
+      expect(html).not.toContain("📁 WEIRDASSET 资产层");
     } finally {
       rmSync(ws.dir, { recursive: true, force: true });
     }

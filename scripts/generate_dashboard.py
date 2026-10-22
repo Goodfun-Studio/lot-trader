@@ -1100,17 +1100,33 @@ PILLAR_CLASS_ORDER = ["ETF", "STOCK"]
 PILLAR_CLASS_LABELS = {
     "ETF": "📦 交易型基金（ETF/LOF）层",
     "STOCK": "🧱 个股底层",
+    "LOF": "📦 上市开放式基金（LOF）层",
+    "BOND": "🏛 债券固收层",
+    "FUND": "🧺 场外基金层",
+    "COMMODITY": "🪙 大宗商品层",
+    "GOLD": "🥇 黄金贵金属层",
+    "REIT": "🏢 公募 REITs 层",
+    "REITS": "🏢 公募 REITs 层",
+    "CRYPTO": "🪐 数字资产层",
+    "CASH": "💵 现金及等价物层",
     "UNCLASSIFIED": "❔ 未归类资产层",
 }
+# Unknown asset classes get a neutral Chinese title instead of the raw uppercase ledger code.
+PILLAR_FALLBACK_LABEL = "📁 其他资产层"
+# Canonical pillar colours: long-standing, indexed by neither position nor order, never moved.
 PILLAR_CLASS_THEMES = {
     "ETF": ("var(--green)", "val-green"),
     "STOCK": ("var(--blue)", "val-blue"),
     "UNCLASSIFIED": ("var(--amber)", "val-amber"),
 }
-# Extra asset classes (BOND / FUND / anything the ledger grows into) cycle through these.
-# They deliberately avoid the three named colours above so cards stay distinguishable.
+# Rotation for every other asset class (BOND / FUND / COMMODITY / …). It deliberately excludes
+# `--purple` — owned exclusively by the CASH card — and the three canonical colours above, so no
+# two pillar cards can ever share a colour.
 PILLAR_FALLBACK_THEMES = [
-    ("var(--purple)", "val-purple"),
+    ("var(--cyan)", "val-cyan"),
+    ("var(--indigo)", "val-indigo"),
+    ("var(--teal)", "val-teal"),
+    ("var(--rose)", "val-rose"),
     ("var(--red)", "val-red"),
 ]
 
@@ -1163,12 +1179,10 @@ def _stat_cell(label, value, klass=None):
     return f"<div>{label}: <strong{cls_attr}>{value}</strong></div>"
 
 
-def render_class_card(code, bucket, total_mkt, theme_index):
+def render_class_card(code, bucket, total_mkt):
     """Render one asset-class pillar card, always from the caller's live numbers."""
-    label = PILLAR_CLASS_LABELS.get(code, f"📁 {html.escape(code)} 资产层")
-    border, ratio_cls = PILLAR_CLASS_THEMES.get(
-        code, PILLAR_FALLBACK_THEMES[theme_index % len(PILLAR_FALLBACK_THEMES)]
-    )
+    label = PILLAR_CLASS_LABELS.get(code, PILLAR_FALLBACK_LABEL)
+    border, ratio_cls = PILLAR_THEME_OF.get(code, PILLAR_FALLBACK_THEMES[0])
     bucket = bucket or {"mkt": 0.0, "cost": 0.0, "pnl": 0.0, "lots": 0, "syms": {}}
     mkt = float(bucket["mkt"])
     cost = float(bucket["cost"])
@@ -1286,15 +1300,31 @@ ALL_CLASS_CODES.sort(
     key=lambda c: (PILLAR_CLASS_ORDER.index(c) if c in PILLAR_CLASS_ORDER else 99, c)
 )
 
+# One colour per rendered class, resolved once and deterministically from the real class set:
+# canonical classes keep their fixed theme, every extra class takes the next rotation slot.
+# This guarantees two pillar cards can never collide — in particular BOND never borrows the
+# purple that the CASH card owns.
+PILLAR_THEME_OF = {}
+_extra_theme_cursor = 0
+for _code in ALL_CLASS_CODES:
+    _fixed_theme = PILLAR_CLASS_THEMES.get(_code)
+    if _fixed_theme is not None:
+        PILLAR_THEME_OF[_code] = _fixed_theme
+    else:
+        PILLAR_THEME_OF[_code] = PILLAR_FALLBACK_THEMES[
+            _extra_theme_cursor % len(PILLAR_FALLBACK_THEMES)
+        ]
+        _extra_theme_cursor += 1
+
 alloc_pillars_cards = []
 alloc_class_metrics = {}
 for _acc_key in ACCOUNT_KEYS:
     _buckets = aggregate_by_class(target_metrics.get(_acc_key, {}))
     _total_mkt = sum(b["mkt"] for b in _buckets.values())
     _acc_payload = {}
-    for _idx, _code in enumerate(ALL_CLASS_CODES):
+    for _code in ALL_CLASS_CODES:
         _card_html, _card_payload = render_class_card(
-            _code, _buckets.get(_code), _total_mkt, _idx
+            _code, _buckets.get(_code), _total_mkt
         )
         if _acc_key == "ALL":
             alloc_pillars_cards.append(_card_html)

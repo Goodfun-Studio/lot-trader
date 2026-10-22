@@ -34,6 +34,8 @@
 - **批次部分平仓与战绩多维归因**：
   - 支持指定数量部分平仓，状态保持 `ACTIVE` 持续监控；
   - `trade stats` 提供按标的明细、按操盘类型（普通波段、天然 T+0、底仓代冲做 T）的多维战绩归因。
+- **`--db` 全局参数全链路隔离**：`--db <path>` 在 CLI 最顶层统一提取并贯穿**全部子命令**（`lot` / `account` / `position` / `scan` / `stats` / `physics` / `dividend` / `dashboard` / `serve`），优先级 `--db` > `$LOT_TRADER_DB` > `$TRADE_DB_PATH` > `~/.trade/trade.db`；支持位置穿插与 `--db=PATH` 写法，不再有「传了 `--db` 但被静默忽略、实际仍读写默认库」的假隔离。
+- **`--help` 零写库守卫**：顶级与全部一级/二级子命令（含 `trade scan --help`、`trade lot buy --help`、`trade dividend add --help`）在执行任何参数解析之前短路 `-h/--help`，打印用法后以退出码 `0` 退出，绝不实例化数据库、绝不建库/迁移/写入（`trade scan --help` 不再扫描、不再写 `signals`）。
 
 ## 快速使用
 

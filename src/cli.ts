@@ -2,7 +2,7 @@
 /**
  * Command line interface for Lot Trader (Executable: trade).
  */
-import { AppDatabase } from "./db.ts";
+import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
@@ -19,6 +19,63 @@ import { homedir } from "os";
 import { dirname, isAbsolute, join, resolve } from "path";
 
 const DASHBOARD_DEFAULT_OUT = "lot-trader-global-dashboard.html";
+
+const HELP_FLAGS = new Set(["-h", "--help"]);
+
+/** True when `-h` / `--help` appears anywhere in the token list. */
+function hasHelpFlag(args: string[]): boolean {
+  return args.some((token) => HELP_FLAGS.has(token));
+}
+
+/** Whether a single token is a help request (`undefined` is never a help request). */
+function isHelpToken(token: string | undefined): boolean {
+  return token !== undefined && HELP_FLAGS.has(token);
+}
+
+/**
+ * Ledger path precedence, applied identically by every subcommand:
+ *
+ *   explicit `--db <path>`  >  $LOT_TRADER_DB  >  $TRADE_DB_PATH  >  ~/.trade/trade.db
+ *
+ * A command-line `--db` always beats the environment, so `trade scan --db /tmp/sandbox.db`
+ * can never be silently redirected to the default ledger.
+ */
+export function resolveCliDbPath(explicitDb?: string): string {
+  const explicit = (explicitDb ?? "").trim();
+  return explicit || process.env.LOT_TRADER_DB || process.env.TRADE_DB_PATH || DEFAULT_DB_PATH;
+}
+
+/**
+ * Pull a GLOBAL `--name <value>` / `--name=<value>` option out of the raw argv, wherever it
+ * appears. Every occurrence (and its value) is removed from the returned token list so a
+ * downstream subcommand parser can never mistake the global option for a positional argument.
+ * The first occurrence wins.
+ */
+export function extractGlobalOption(args: string[], name: string): { value?: string; rest: string[] } {
+  const long = `--${name}`;
+  const eqPrefix = `--${name}=`;
+  const rest: string[] = [];
+  let value: string | undefined;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === long) {
+      const next = args[i + 1];
+      if (next !== undefined) {
+        if (value === undefined) value = next;
+        i += 1; // consume the value: drop both tokens from the subcommand argv
+      }
+      continue;
+    }
+    if (token.startsWith(eqPrefix)) {
+      if (value === undefined) value = token.slice(eqPrefix.length);
+      continue;
+    }
+    rest.push(token);
+  }
+
+  return { value, rest };
+}
 
 function formatCurrency(val: number): string {
   return val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -50,6 +107,8 @@ positional arguments:
     dividend        Cash dividend management (add, list)
 
 options:
+  --db PATH         SQLite database path, honoured by EVERY subcommand (global option).
+                    Precedence: --db > $LOT_TRADER_DB > $TRADE_DB_PATH > ~/.trade/trade.db
   -h, --help        show this help message and exit
 `);
 }
@@ -87,7 +146,7 @@ notes:
 `);
 }
 
-async function handleServe(args: string[]): Promise<void> {
+async function handleServe(args: string[], explicitDb?: string): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
@@ -109,7 +168,7 @@ async function handleServe(args: string[]): Promise<void> {
     const started = await startServe({
       port: (values.port as string | undefined) ?? DEFAULT_SERVE_PORT,
       host: (values.host as string | undefined) ?? DEFAULT_SERVE_HOST,
-      dbPath: values.db as string | undefined,
+      dbPath: explicitDb ?? (values.db as string | undefined),
       token: values.token as string | undefined,
       tokenFile: values["token-file"] as string | undefined,
       quiet,
@@ -205,6 +264,248 @@ notes:
 `);
 }
 
+function printLotBuyHelp(): void {
+  console.log(`usage: trade lot buy [-h] [--symbol <SYM>] [--price <NUM>] [--qty <N>]
+                     [--account <ACC>] [--reason <TEXT>] [--fee <NUM>] [--time <ISO>]
+                     [--parent <LOT_ID>] [--skip-risk] [--json] [--db <path>]
+
+Buy / create a new initial lot.
+
+positional shorthand:
+  trade lot buy <symbol> <price> <qty>
+
+options:
+  --symbol SYM      Instrument code, e.g. 518880.SH
+  --price NUM       Fill price
+  --qty N           Share / unit count
+  --account ACC     Broker account id (unknown ids are auto-registered as CUSTOM)
+  --reason TEXT     Decision thesis stored on the lot
+  --fee NUM         Commission and fees
+  --time ISO        Explicit fill timestamp
+  --parent LOT_ID   Parent lot id when this buy inherits a core position
+  --skip-risk       Skip the pre-trade full-position budget check
+  --json            Emit machine-readable JSON
+  --db PATH         SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help        show this help message and exit
+`);
+}
+
+function printLotAddHelp(): void {
+  console.log(`usage: trade lot add [-h] [--parent-lot-id <LOT_ID>] [--price <NUM>] [--amount <NUM>]
+                     [--qty <N>] [--account <ACC>] [--reason <TEXT>] [--fee <NUM>]
+                     [--time <ISO>] [--skip-risk] [--json] [--db <path>]
+
+Pyramid dip add to an existing lot (with anti-shake guard).
+
+positional shorthand:
+  trade lot add <lot_id> <price>
+
+options:
+  --parent-lot-id ID  Parent lot id (alias: --parent)
+  --price NUM         Fill price
+  --amount NUM        Cash amount to deploy (converted to shares)
+  --qty N             Explicit share / unit count
+  --account ACC       Broker account id
+  --reason TEXT       Decision thesis for this add
+  --fee NUM           Commission and fees
+  --time ISO          Explicit fill timestamp
+  --skip-risk         Skip the pre-trade full-position budget check
+  --json              Emit machine-readable JSON
+  --db PATH           SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help          show this help message and exit
+`);
+}
+
+function printLotListHelp(): void {
+  console.log(`usage: trade lot list [-h] [--status ACTIVE|CLOSED|ALL] [--symbol <SYM>] [--account <ACC>]
+                      [--json] [--db <path>]
+
+List lots with live price, return rate and action advice.
+
+options:
+  --status STATUS   Lot status filter (default: ACTIVE)
+  --symbol SYM      Filter by instrument code
+  --account ACC     Filter by broker account
+  --json            Emit machine-readable JSON
+  --db PATH         SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help        show this help message and exit
+`);
+}
+
+function printLotCloseHelp(): void {
+  console.log(`usage: trade lot close [-h] [--lot-id <LOT_ID>] [--price <NUM>] [--qty <N>]
+                       [--account <ACC>] [--reason <TEXT>] [--substitute-core]
+                       [--fee <NUM>] [--time <ISO>] [--json] [--db <path>]
+
+Close a lot (full or partial) and record the realized PnL.
+
+positional shorthand:
+  trade lot close <lot_id> <price> [qty]
+
+options:
+  --lot-id LOT_ID   Lot to close
+  --price NUM       Fill price
+  --qty N           Partial quantity (omit to close the whole remaining position)
+  --account ACC     Expected owning account (mismatch is rejected)
+  --reason TEXT     Close thesis
+  --substitute-core Reverse-T+0 core substitution
+  --fee NUM         Commission and fees
+  --time ISO        Explicit fill timestamp
+  --json            Emit machine-readable JSON
+  --db PATH         SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help        show this help message and exit
+`);
+}
+
+function printLotEditHelp(): void {
+  console.log(`usage: trade lot edit [-h] [<lot_id> | --lot-id <LOT_ID>] [--reason <TEXT>]
+                      [--buy-reason <TEXT>] [--close-reason <TEXT>] [--append]
+                      [--json] [--db <path>]
+
+Update the decision thesis (buy / close rationale) of a lot.
+
+options:
+  --lot-id LOT_ID     Target lot id (or pass it as the first positional)
+  --reason TEXT       Buy thesis (alias of --buy-reason)
+  --buy-reason TEXT   Buy thesis
+  --close-reason TEXT Close thesis
+  --append            Append to the existing thesis instead of overwriting
+  --json              Emit machine-readable JSON
+  --db PATH           SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help          show this help message and exit
+`);
+}
+
+function printLotSubcommandHelp(subCmd: string | undefined): void {
+  switch (subCmd) {
+    case "buy":
+      printLotBuyHelp();
+      return;
+    case "add":
+      printLotAddHelp();
+      return;
+    case "list":
+      printLotListHelp();
+      return;
+    case "close":
+      printLotCloseHelp();
+      return;
+    case "edit":
+      printLotEditHelp();
+      return;
+    default:
+      printLotHelp();
+  }
+}
+
+function printPositionHelp(): void {
+  console.log(`usage: trade position [-h] [list] [--symbol <SYM>] [--cap <NUM>]
+                       [--full-position-cap <NUM>] [--account <ACC>] [--json] [--db <path>]
+
+Hierarchical position / holding view with per-symbol aggregation.
+
+options:
+  --symbol SYM              Restrict to a single instrument
+  --cap NUM                 Override the per-symbol full-position budget
+  --full-position-cap NUM   Alias of --cap
+  --account ACC             Filter by broker account
+  --json                    Emit machine-readable JSON
+  --db PATH                 SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help                show this help message and exit
+`);
+}
+
+function printScanHelp(): void {
+  console.log(`usage: trade scan [-h] [--thresholds <JSON>] [--account <ACC>] [--json] [--db <path>]
+
+Scan active lots for pyramid-add / trailing-stop signals.
+
+options:
+  --thresholds JSON   Override signal thresholds, e.g. '{"add":-0.1,"take":0.1}'
+  --account ACC       Filter by broker account
+  --json              Emit machine-readable JSON
+  --db PATH           SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help          show this help message and exit
+`);
+}
+
+function printStatsHelp(): void {
+  console.log(`usage: trade stats [-h] [--days <N>] [--symbol <SYM>] [--account <ACC>] [--json] [--db <path>]
+
+Performance statistics with multi-dimensional attribution.
+
+options:
+  --days N        Only count trades from the last N days
+  --symbol SYM    Filter by instrument code
+  --account ACC   Filter by broker account
+  --json          Emit machine-readable JSON
+  --db PATH       SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help      show this help message and exit
+`);
+}
+
+function printPhysicsHelp(): void {
+  console.log(`usage: trade physics [-h] [<symbol> | --symbol <SYM>] [--json] [--db <path>]
+                        (alias: trade radar)
+
+Physics momentum radar: velocity, acceleration, mass, force, damping.
+
+options:
+  --symbol SYM    Instrument code, e.g. 600519 or 518880.SH
+  --json          Emit machine-readable JSON
+  --db PATH       SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help      show this help message and exit
+`);
+}
+
+function printDividendAddHelp(): void {
+  console.log(`usage: trade dividend add [-h] --symbol <SYM> --amount <NUM> [--date <YYYY-MM-DD>]
+                           [--account <ACC>] [--shares <N>] [--per-share <NUM>]
+                           [--notes <TEXT>] [--json] [--db <path>]
+
+Record one cash dividend.
+
+options:
+  --symbol SYM       Instrument code
+  --amount NUM       Cash amount received
+  --date DATE        Ex-dividend date (default: today)
+  --account ACC      Broker account id
+  --shares N         Shares held on the ex-date
+  --per-share NUM    Dividend per share
+  --notes TEXT       Free-form note
+  --json             Emit machine-readable JSON
+  --db PATH          SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help         show this help message and exit
+`);
+}
+
+function printDividendListHelp(): void {
+  console.log(`usage: trade dividend list [-h] [--symbol <SYM>] [--account <ACC>] [--json] [--db <path>]
+
+List cash dividends and the accumulated total.
+
+options:
+  --symbol SYM    Filter by instrument code
+  --account ACC   Filter by broker account
+  --json          Emit machine-readable JSON
+  --db PATH       SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help      show this help message and exit
+`);
+}
+
+function printDividendSubcommandHelp(subCmd: string | undefined): void {
+  switch (subCmd) {
+    case "add":
+      printDividendAddHelp();
+      return;
+    case "list":
+      printDividendListHelp();
+      return;
+    default:
+      printDividendHelp();
+  }
+}
+
 /**
  * Locate the dashboard generator script + template shipped with the repo / skill bundles.
  * Resolution order: explicit env override -> executable sibling dirs -> source tree -> agent skill dirs.
@@ -278,7 +579,7 @@ function openWithSystemBrowser(target: string): void {
   proc.unref();
 }
 
-async function handleDashboard(args: string[]): Promise<void> {
+async function handleDashboard(args: string[], explicitDb?: string): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
@@ -296,7 +597,7 @@ async function handleDashboard(args: string[]): Promise<void> {
 
   const isJson = Boolean(values.json);
   const outPath = resolve((values.out as string | undefined) || DASHBOARD_DEFAULT_OUT);
-  const dbPath = resolveDashboardDb(values.db as string | undefined);
+  const dbPath = resolveDashboardDb(explicitDb ?? (values.db as string | undefined));
 
   try {
     const { scriptPath, templatePath } = resolveDashboardScripts(values["scripts-dir"] as string | undefined);
@@ -413,7 +714,7 @@ async function handleDashboard(args: string[]): Promise<void> {
 }
 
 function printLotHelp(): void {
-  console.log(`usage: trade lot {buy,add,list,close,edit} ...
+  console.log(`usage: trade lot [-h] {buy,add,list,close,edit} ...
 
 Lot actions:
   buy               Buy / create a new initial lot [--account <ACC>] [--reason <TEXT>]
@@ -427,6 +728,10 @@ Positional shorthand (equivalent to the flags):
   trade lot add <lot_id> <price>
   trade lot close <lot_id> <price> [qty]
   trade lot edit <lot_id>
+
+Global options (also accepted by every sub-action above):
+  --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help        show this help message (also: trade lot <action> --help)
 `);
 }
 
@@ -439,6 +744,10 @@ Broker account registry:
 
 Broker presets: CMB | CITIC | HTSC | EASTMONEY | GUOTAI | YINHE | GF | PA | FUTU | IBKR | CUSTOM
 Unknown accounts passed to 'trade lot buy --account' are auto-registered as CUSTOM.
+
+Global options:
+  --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  -h, --help        show this help message and exit
 `);
 }
 
@@ -1378,6 +1687,9 @@ positional arguments:
 
 options:
   -h, --help        show this help message and exit
+
+Global options:
+  --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
 `);
 }
 
@@ -1504,23 +1816,31 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
-  if (rawArgs.length === 0 || rawArgs[0] === "-h" || rawArgs[0] === "--help") {
+
+  // `--db <path>` is a GLOBAL option: it is extracted from wherever it appears in argv — even
+  // before the subcommand token — and stripped before dispatch, so it can never be swallowed as
+  // a positional argument. Precedence: --db > $LOT_TRADER_DB > $TRADE_DB_PATH > ~/.trade/trade.db.
+  const { value: explicitDbArg, rest: argv } = extractGlobalOption(rawArgs, "db");
+  const explicitDb = (explicitDbArg ?? "").trim() || undefined;
+  const resolvedDbPath = resolveCliDbPath(explicitDb);
+
+  if (argv.length === 0 || isHelpToken(argv[0])) {
     printHelp();
     process.exit(0);
   }
 
-  const command = rawArgs[0];
-  const restArgs = rawArgs.slice(1);
+  const command = argv[0];
+  const restArgs = argv.slice(1);
 
-  // The default ledger is opened LAZILY, and only by the subcommands that truly need it.
-  // Constructing `AppDatabase` eagerly here used to mkdir + create + WAL ~/.trade/trade.db
-  // before a single argument was inspected: `trade serve --db /other.db` still refreshed
-  // the default ledger's -shm, and a typo'd path silently created an empty database.
+  // The ledger is opened LAZILY, and only by the subcommands that truly need it. Constructing
+  // `AppDatabase` eagerly here used to mkdir + create + WAL the ledger before a single argument
+  // was inspected: `trade scan --help` silently created ~/.trade/trade.db and even wrote
+  // derived rows into `signals`.
   let db: AppDatabase | null = null;
   let engine: TraderEngine | null = null;
   const getEngine = (): TraderEngine => {
     if (!engine) {
-      db = new AppDatabase();
+      db = new AppDatabase(resolvedDbPath);
       engine = new TraderEngine(db.getConnection());
     }
     return engine;
@@ -1531,33 +1851,42 @@ async function main(): Promise<void> {
     engine = null;
   };
 
+  // ==== ZERO-LEDGER-TOUCH HELP GUARDS ====================================================
+  // Every `-h` / `--help` (top level, first level and second level) prints usage and exits 0
+  // BEFORE getEngine() is ever called. Nothing here may open, create, migrate or WAL a
+  // database file.
+
   // The dashboard primitive renders from the ledger directly; it needs no engine instance.
   // It brings its own (explicit) `--db` handle, so it must never open the default ledger.
   if (command === "dashboard") {
-    if (restArgs[0] === "-h" || restArgs[0] === "--help") {
+    if (hasHelpFlag(restArgs)) {
       printDashboardHelp();
       process.exit(0);
     }
-    await handleDashboard(restArgs);
+    await handleDashboard(restArgs, explicitDb);
     return;
   }
 
   // The local HTTP engine owns its own database handle (it may bind a different --db path).
   if (command === "serve") {
-    if (restArgs[0] === "-h" || restArgs[0] === "--help") {
+    if (hasHelpFlag(restArgs)) {
       printServeHelp();
       process.exit(0);
     }
-    await handleServe(restArgs);
+    await handleServe(restArgs, explicitDb);
     return;
   }
 
   if (command === "lot") {
-    if (restArgs.length === 0 || restArgs[0] === "-h" || restArgs[0] === "--help") {
+    const subCmd = restArgs[0];
+    if (subCmd === undefined || isHelpToken(subCmd)) {
       printLotHelp();
       process.exit(0);
     }
-    const subCmd = restArgs[0];
+    if (hasHelpFlag(restArgs.slice(1))) {
+      printLotSubcommandHelp(subCmd);
+      process.exit(0);
+    }
     const subArgs = restArgs.slice(1);
     if (subCmd === "buy") {
       await handleLotBuy(getEngine(), subArgs);
@@ -1574,16 +1903,54 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   } else if (command === "account") {
+    const subAction = restArgs[0];
+    if (subAction === undefined || isHelpToken(subAction) || hasHelpFlag(restArgs.slice(1))) {
+      printAccountHelp();
+      process.exit(0);
+    }
+    if (subAction !== "list" && subAction !== "add") {
+      printAccountHelp();
+      process.exit(1);
+    }
     await handleAccount(getEngine(), restArgs);
   } else if (command === "position") {
+    if (hasHelpFlag(restArgs)) {
+      printPositionHelp();
+      process.exit(0);
+    }
     await handlePosition(getEngine(), restArgs);
   } else if (command === "scan") {
+    if (hasHelpFlag(restArgs)) {
+      printScanHelp();
+      process.exit(0);
+    }
     await handleScan(getEngine(), restArgs);
   } else if (command === "stats") {
+    if (hasHelpFlag(restArgs)) {
+      printStatsHelp();
+      process.exit(0);
+    }
     await handleStats(getEngine(), restArgs);
   } else if (command === "physics" || command === "radar") {
+    if (hasHelpFlag(restArgs)) {
+      printPhysicsHelp();
+      process.exit(0);
+    }
     await handlePhysics(getEngine(), restArgs);
   } else if (command === "dividend") {
+    const subAction = restArgs[0];
+    if (subAction === undefined || isHelpToken(subAction)) {
+      printDividendHelp();
+      process.exit(0);
+    }
+    if (hasHelpFlag(restArgs.slice(1))) {
+      printDividendSubcommandHelp(subAction);
+      process.exit(0);
+    }
+    if (subAction !== "add" && subAction !== "list") {
+      printDividendHelp();
+      process.exit(1);
+    }
     await handleDividend(getEngine(), restArgs);
   } else {
     printHelp();

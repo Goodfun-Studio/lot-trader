@@ -31,6 +31,20 @@ description: 投资操盘与单笔批次盈亏监控工具 (lot-trader)。当用
 
 ## 2. 智能体命令速查
 
+### 全局参数（所有子命令通用）
+
+| 参数 | 说明 |
+| --- | --- |
+| `--db PATH` | 指定 SQLite 账本路径，**对所有子命令生效**（`lot` / `account` / `position` / `scan` / `stats` / `physics` / `dividend` / `dashboard` / `serve`）。优先级 `--db` > `$LOT_TRADER_DB` > `$TRADE_DB_PATH` > `~/.trade/trade.db`；命令行显式传入时**必然覆盖环境变量**，不会再出现「假隔离」。 |
+| `-h, --help` | 打印当前层级（含二级子命令，如 `trade lot buy --help`）的用法并以退出码 0 退出。**纯只读**：任何层级的 `--help` 都不创建 / 不迁移 / 不写入任何数据库，`trade scan --help` 也绝不触发真实扫描或写 `signals`。 |
+
+```bash
+# 沙箱推演：只读写指定账本，默认库零触碰
+trade lot list --db /tmp/sandbox.db --json
+trade scan --db /tmp/sandbox.db --json
+trade scan --help          # 只打印用法，不碰任何账本
+```
+
 ### 买入建仓
 ```bash
 # 完整旗标式
