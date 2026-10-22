@@ -234,6 +234,9 @@ trade serve --token <固定令牌> | --token-file <凭证文件>
 
 - **本地协议凭证门（0600 Session Token）**：令牌默认每次启动随机生成 32 字节（64 hex）并写入 `~/.lot-trader/session.token`（`chmod 0600`），退出即删；调用方用 `Authorization: Bearer <token>` 或 `?token=`；无/错令牌 → 401 `UNAUTHORIZED` 且无任何账本字段（鉴权在查库之前）。`Origin: null` 的沙箱 iframe 也因此彻底失效；
 - **看板无感注入**：`trade dashboard` 读同一凭证文件注入 `window.__LOT_TRADER_SESSION_TOKEN__`；本地引擎返回 401 时看板留在「轻量自驱」并提示未授权，不影响行情轮询。
+- **看板文件 0600**：看板 HTML 内嵌同一令牌，写入时强制 `chmod 0600`（不受 umask 影响）并自校验权限位，同机其他本地用户无法读取。
+- **“查不到 ≠ 没有”降级防线**：`/api/summary` 与 `/api/lots` 额外返回 `degraded` / `degraded_reason`；「有历史流水但批次表为空 / 活跃批次为 0 / 成交流水表被清空 / 标的元数据被清空」等反常空态标记 `degraded: true`，看板顶栏高亮黄色告警条；全新空账本保持 `degraded: false`（防空警报误报）。
+- **三大支柱全动态**：支柱卡片按账本 `asset_class`（ETF/STOCK/LOF…）与账户切片实时聚合，零硬编码历史数值与私人标的字面量。
 
 - **只读 + 仅监听回环**：拒绝 `0.0.0.0`/局域网 IP/域名等一切非 `127.0.0.1`、`localhost`、`::1` 的 host —— 账本永不出本机；
 - 端口冲突输出可读中文文案（非崩溃堆栈）并退出码 1；`SIGINT`/`SIGTERM` 优雅停机并释放端口；

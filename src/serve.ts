@@ -186,7 +186,21 @@ export interface ApiPortfolioSummary {
   win_rate: number;
 }
 
-export interface ApiSummary {
+/**
+ * "查不到 ≠ 没有": an honest read on the ledger's own integrity.
+ *
+ * `degraded: true` never means the request failed — it means the numbers below are
+ * *suspicious* and must be treated as "unknown", not as a legitimate empty book. The
+ * classic silent failure is a `lots` table that was wiped (or a serve pointed at a fresh
+ * empty file) while the `trades` history is still intact: that used to answer HTTP 200 +
+ * `status: "ok"` with market value / holdings all 0, dressing data loss up as "flat today".
+ */
+export interface LedgerHealth {
+  degraded: boolean;
+  degraded_reason: string | null;
+}
+
+export interface ApiSummary extends LedgerHealth {
   status: "ok";
   version: string;
   db_path: string;
@@ -197,7 +211,7 @@ export interface ApiSummary {
   symbols: ApiSymbolSummary[];
 }
 
-export interface ApiLots {
+export interface ApiLots extends LedgerHealth {
   status: "ok";
   version: string;
   db_path: string;
@@ -643,6 +657,89 @@ export function readLedgerLots(db: Database): LedgerLotRow[] {
 }
 
 /**
+ * Count rows in a bookkeeping table, tolerating only the documented "not migrated yet" case.
+ * A genuine query failure (`SQLITE_BUSY`, corruption, I/O) must stay loud — silently reading
+ * it as "0 rows" is exactly the class of lie this health probe exists to prevent.
+ */
+function countRows(db: Database, table: string): { count: number; schemaMissing: boolean } {
+  try {
+    const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get();
+    return { count: Number(row?.n ?? 0), schemaMissing: false };
+  } catch (err: unknown) {
+    if (!isMissingSchemaError(err)) throw err;
+    return { count: 0, schemaMissing: true };
+  }
+}
+
+/**
+ * Decide whether the ledger can be trusted at all — "查不到 ≠ 没有".
+ *
+ * The negative half is just as important as the positive half: a brand-new, schema-only
+ * database (no trades, no lots) is a legitimate empty book and MUST stay `degraded: false`.
+ * Only inside-inconsistent states are flagged:
+ *
+ *  1. `trades` carries history but `lots` is 0 rows  -> the lot book was wiped / switched to
+ *     a wrong (empty) file; market value and holdings are unknown, not zero.
+ *  2. `trades` carries history but there are no ACTIVE lots -> abnormal empty state; ask the
+ *     owner to verify before reading it as "flat today".
+ *  3. CLOSED lots exist but `trades` is empty -> the executed-trade journal was lost.
+ *  4. `symbols` exists but was emptied while lots remain -> asset classification is gone.
+ */
+export function assessLedgerHealth(db: Database, rows: LedgerLotRow[]): LedgerHealth {
+  const totalLots = rows.length;
+  const activeLots = rows.filter((r) => String(r.status ?? "").toUpperCase() === "ACTIVE").length;
+  const closedLots = rows.filter((r) => String(r.status ?? "").toUpperCase() === "CLOSED").length;
+
+  const trades = countRows(db, "trades");
+
+  // 1. History exists but the lot book is structurally empty: the dangerous silent-empty case.
+  if (trades.count > 0 && totalLots === 0) {
+    return {
+      degraded: true,
+      degraded_reason:
+        `成交流水表(trades) 有 ${trades.count} 笔历史记录，但批次表(lots)为 0 行：` +
+        `账本结构疑似被清空或误切空库，当前持仓与市值不可信，请核验数据库文件完整性。`,
+    };
+  }
+
+  // 2. History exists but nothing is on the books any more: do not read this as a flat book.
+  if (trades.count > 0 && activeLots === 0) {
+    return {
+      degraded: true,
+      degraded_reason:
+        `成交流水表(trades) 有 ${trades.count} 笔历史记录与 ${closedLots} 笔已平仓批次，` +
+        `但当前活跃批次为 0 笔：疑似误清空或误切空库，请在确认前将当前市值视为未知，` +
+        `并核验数据库文件完整性。`,
+    };
+  }
+
+  // 3. Executed-trade journal lost while CLOSED lots remain.
+  if (!trades.schemaMissing && trades.count === 0 && closedLots > 0) {
+    return {
+      degraded: true,
+      degraded_reason:
+        `存在 ${closedLots} 笔已平仓批次，但成交流水表(trades)为 0 行：平仓流水疑似丢失，` +
+        `已实现盈亏与现金口径不可信，请核验数据库文件完整性。`,
+    };
+  }
+
+  // 4. Symbol metadata table exists but was emptied: classification is unresolvable.
+  if (activeLots > 0 && tableColumns(db, "symbols").size > 0) {
+    const symbols = countRows(db, "symbols");
+    if (!symbols.schemaMissing && symbols.count === 0) {
+      return {
+        degraded: true,
+        degraded_reason:
+          `存在 ${activeLots} 笔活跃批次，但标的元数据表(symbols)为 0 行：资产分类与名称不可信，` +
+          `请核验数据库文件完整性。`,
+      };
+    }
+  }
+
+  return { degraded: false, degraded_reason: null };
+}
+
+/**
  * Every account id the ledger or the registry knows about, normalized to the canonical key.
  * Used to reject `?account=NOPE` with a 400 instead of a misleading 200 + empty list.
  * Only a missing table / column is tolerated; real database errors propagate.
@@ -762,7 +859,11 @@ export async function buildLotsPayload(
     throw new Error(`非法账户代码: "${rawAccount}"。该账户未在系统中登记。`);
   }
 
-  const rows = readLedgerLots(db).filter((row) => {
+  // Health is judged on the *whole* ledger, never on the filtered slice: `?symbol=X` with no
+  // match is a legitimate empty result, not a degraded book.
+  const allRows = readLedgerLots(db);
+  const health = assessLedgerHealth(db, allRows);
+  const rows = allRows.filter((row) => {
     if (status !== "ALL" && String(row.status ?? "").toUpperCase() !== status) return false;
     if (symbolFilter && row.symbol.toUpperCase() !== symbolFilter) return false;
     if (accountFilter && normalizeAccountKey(row.account_id) !== accountFilter) return false;
@@ -780,6 +881,8 @@ export async function buildLotsPayload(
     version: TOOL_VERSION,
     db_path: options.dbPath,
     generated_at: now.getTime(),
+    degraded: health.degraded,
+    degraded_reason: health.degraded_reason,
     filters: { symbol: symbolFilter, account: accountFilter, status },
     total: lots.length,
     lots,
@@ -848,6 +951,9 @@ export async function buildSummaryPayload(
   const now = options.now ?? new Date();
   const cap = resolveFullPositionCap(options.fullPositionCap);
   const allRows = readLedgerLots(db);
+  // "查不到 ≠ 没有": a structurally emptied book must be reported as degraded, never as a
+  // legitimate flat portfolio. A brand-new schema-only ledger keeps `degraded: false`.
+  const health = assessLedgerHealth(db, allRows);
   const activeRows = allRows.filter((r) => String(r.status ?? "").toUpperCase() === "ACTIVE");
   const prices = await options.priceBook.load(activeRows.map((r) => r.symbol));
   const tradeStats = readTradeStats(db);
@@ -992,6 +1098,8 @@ export async function buildSummaryPayload(
     version: TOOL_VERSION,
     db_path: options.dbPath,
     generated_at: now.getTime(),
+    degraded: health.degraded,
+    degraded_reason: health.degraded_reason,
     currency: "CNY",
     portfolio: {
       total_cost: portfolioCost,

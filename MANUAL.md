@@ -196,7 +196,7 @@ trade serve --json                       # 结构化就绪行（含 token_file /
 | --- | --- | --- |
 | `GET /api/health` | 公开 | 存活探针：`{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}`，不含任何账本字段 |
 | `GET /api/summary` | 需令牌 | 三层快照：`portfolio`（总成本/市值/浮盈；`full_position_cap` 为**单标的**满仓参考额度 `full_position_cap_scope:"per_symbol"`，组合层不输出全局剩余预算，`remaining_budget`/`budget_utilization_rate` 恒为 `null`）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率，含 `cost_position_rate`/`current_position_rate` 单标的额度占用率） |
-| `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` |
+| `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` 与 `degraded`/`degraded_reason` |
 
 **本地协议凭证门禁（第三道门，0600 Session Token）**：
 - **令牌来源**：默认每次启动用 32 字节 CSPRNG 随机生成（64 hex），也可用 `--token` 固定；写入凭证文件（默认 `$LOT_TRADER_TOKEN_FILE` → `~/.lot-trader/session.token`），写入后 `chmod 0600`，即只有当前操作系统用户可读写。
@@ -204,6 +204,13 @@ trade serve --json                       # 结构化就绪行（含 token_file /
 - **拒绝口径**：无令牌或令牌不匹配 → `401` `{"status":"error","code":"UNAUTHORIZED","message":"未授权：请提供合法的本地会话 Token。"}`，响应**不含任何账本字段**，且鉴权发生在路由与查库之前（因此连非法筛选参数也只会得到 401）。
 - **生命周期**：自动生成的令牌在 `SIGINT`/`SIGTERM` 优雅退出时随进程删除；`--token` 显式指定的令牌由老板自己保管，不删除；端口被占用导致启动失败时，不会覆盖/删除正在运行实例的凭证文件。
 - **看板无感注入**：`trade dashboard` 读取同一凭证文件并注入 `window.__LOT_TRADER_SESSION_TOKEN__`，看板请求自动带 `Bearer` 头（同时附 `?token=` 备用）；若本地引擎返回 401，看板保持「轻量独立（纯前端自驱）」并提示「本地服务未授权/Token不匹配」，行情轮询不受影响、控制台零未捕获异常。
+- **看板文件自身权限（0600）**：看板 HTML 内嵌同一会话令牌，因此 `generate_dashboard.py` 写入时强制 `chmod 0600`（`os.open(O_WRONLY|O_CREAT|O_TRUNC, 0o600)` 创建 + 写入后无条件 `os.chmod` 双保险，覆盖已存在的宽权限文件），生成后自校验权限位必须为 `0o600`，否则直接报错退出。这样即便 umask 允许，同机其他本地用户也无法通过看板文件旁路拿到令牌。
+
+**“查不到 ≠ 没有”降级防线（`degraded`）**：
+- `/api/summary` 与 `/api/lots` 均额外返回 `degraded: boolean` 与 `degraded_reason: string | null`；`degraded: true` 表示账本自身状态可疑，此时 0 市值/0 持仓应被读作“未知”，而不是“当前合法空仓”。
+- 触发条件：① `trades` 有历史流水但 `lots` 为 0 行（批次表被清空/误切空库）；② `trades` 有历史流水但活跃批次为 0；③ 存在 `CLOSED` 批次但 `trades` 为空（成交流水丢失）；④ `symbols` 表存在但被清空而仍有活跃批次（分类元数据丢失）。
+- 负向防误杀：全新的白板空库（无流水、无批次）标记 `degraded: false`，正常渲染空账本。
+- 看板前端收到 `degraded: true` 时，顶栏高亮黄色告警条并展示具体原因，坚决不允许静默粉饰。
 
 **硬约束与容错口径**：
 1. **只读 + 只监听回环**：拒绝 `0.0.0.0` / 局域网 IP / 域名等任何非 `127.0.0.1`、`localhost`、`::1` 的 host，账本永不出本机；

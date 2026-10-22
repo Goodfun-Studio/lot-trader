@@ -42,6 +42,7 @@ import {
   isAllowedOrigin,
   isSensitiveRoute,
   isTokenAuthorized,
+  assessLedgerHealth,
   normalizeAccountKey,
   readLedgerLots,
   readSessionTokenFile,
@@ -321,6 +322,21 @@ function fixtureTargets() {
   };
 }
 
+/** Per-account, per-asset-class pillar payload (mirrors generate_dashboard.py's shape). */
+function fixtureAllocClasses() {
+  const card = (label: string) => ({
+    ratio_str: "50.0%",
+    ratio_cls: "val-green",
+    desc: `${label} 动态聚合示例`,
+    stats_html: '<div>持仓市值: <strong>¥1.00 万元</strong></div>',
+  });
+  return {
+    ALL: { ETF: card("ETF"), STOCK: card("STOCK"), CASH: card("CASH") },
+    DEFAULT: { ETF: card("ETF"), STOCK: card("STOCK"), CASH: card("CASH") },
+    ACC2: { ETF: card("ETF"), STOCK: card("STOCK"), CASH: card("CASH") },
+  };
+}
+
 function fixtureMetrics() {
   const base = {
     label: "默认账户",
@@ -377,6 +393,7 @@ function createHarness(options: {
   const runtimeScript = extractRuntimeScript(template);
   const dashboardScript = extractDashboardScript(template)
     .replace("{{ACCOUNT_METRICS_JSON}}", JSON.stringify(fixtureMetrics()))
+    .replace("{{ALLOC_CLASS_METRICS_JSON}}", JSON.stringify(fixtureAllocClasses()))
     .replace("{{TARGET_JS_JSON}}", JSON.stringify(fixtureTargets()))
     .replace(/\{\{[A-Z_]+\}\}/g, "");
 
@@ -579,7 +596,11 @@ function createHarness(options: {
        collectLiveSymbols: typeof collectLiveSymbols === 'function' ? collectLiveSymbols : null,
        renderModeIndicator: typeof renderModeIndicator === 'function' ? renderModeIndicator : null,
        heartbeatTick: typeof heartbeatTick === 'function' ? heartbeatTick : null,
-       performRefresh: typeof performRefresh === 'function' ? performRefresh : null
+       performRefresh: typeof performRefresh === 'function' ? performRefresh : null,
+       renderAllocPillars: typeof renderAllocPillars === 'function' ? renderAllocPillars : null,
+       showDegradedBanner: typeof showDegradedBanner === 'function' ? showDegradedBanner : null,
+       hideDegradedBanner: typeof hideDegradedBanner === 'function' ? hideDegradedBanner : null,
+       setGlobalAccountFilter: typeof setGlobalAccountFilter === 'function' ? setGlobalAccountFilter : null
      };`,
   );
   scriptFactory(
@@ -905,10 +926,168 @@ describe("trade serve: local HTTP engine contract", () => {
     expect(summary.portfolio.overall_return_rate).toBe(0);
     expect(summary.symbols).toEqual([]);
     assertNoNaN(summary, "empty summary");
+    // "查不到 ≠ 没有" anti-false-positive: a brand-new schema-only book is a legitimate
+    // empty portfolio, NOT a degraded one. The alert must not cry wolf here.
+    expect(summary.degraded).toBe(false);
+    expect(summary.degraded_reason).toBeNull();
 
     const lots = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
     expect(lots.total).toBe(0);
     expect(lots.lots).toEqual([]);
+    expect(lots.degraded).toBe(false);
+    expect(lots.degraded_reason).toBeNull();
+  });
+});
+
+// ===========================================================================
+// 1c. "查不到 ≠ 没有": a degraded ledger must be loud, never a silent flat book
+// ===========================================================================
+
+describe("trade serve: degraded ledger guards (empty book is never assumed)", () => {
+  /** Wipe the lot book while the trade journal survives: the exact silent-data-loss shape. */
+  function wipeLotBook(dbPath: string): void {
+    const db = new AppDatabase(dbPath);
+    try {
+      db.getConnection().run("DELETE FROM lots");
+    } finally {
+      db.close();
+    }
+  }
+
+  function exec(dbPath: string, sql: string): void {
+    const db = new AppDatabase(dbPath);
+    try {
+      db.getConnection().run(sql);
+    } finally {
+      db.close();
+    }
+  }
+
+  it("NEGATIVE anti-false-positive: a healthy seeded ledger is not degraded", async () => {
+    const dbPath = trackDir(tempDbPath("healthy"));
+    seedLedger(dbPath);
+    const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({ "518880.SH": 6.6 }) });
+    openServers.push(srv);
+
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
+    expect(summary.degraded).toBe(false);
+    expect(summary.degraded_reason).toBeNull();
+    expect(summary.portfolio.total_active_lots).toBeGreaterThan(0);
+
+    const lots = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
+    expect(lots.degraded).toBe(false);
+    expect(lots.degraded_reason).toBeNull();
+  });
+
+  it("flags degraded when trades survive but the lot book was emptied", async () => {
+    const dbPath = trackDir(tempDbPath("degraded_wipe"));
+    seedLedger(dbPath);
+    wipeLotBook(dbPath);
+
+    const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
+    openServers.push(srv);
+
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
+    // Still HTTP 200 / status ok — but it must never claim the empty book is the truth.
+    expect(summary.status).toBe("ok");
+    expect(summary.degraded).toBe(true);
+    expect(typeof summary.degraded_reason).toBe("string");
+    expect(summary.degraded_reason).toContain("trades");
+    expect(summary.degraded_reason).toContain("lots");
+    expect(summary.portfolio.total_market_value).toBe(0);
+
+    const lots = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
+    expect(lots.degraded).toBe(true);
+    expect(lots.degraded_reason).toBe(summary.degraded_reason);
+  });
+
+  it("flags degraded when trades exist but no ACTIVE lot remains", async () => {
+    const dbPath = trackDir(tempDbPath("degraded_noactive"));
+    seedLedger(dbPath);
+    exec(dbPath, "UPDATE lots SET status = 'CLOSED'");
+
+    const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
+    openServers.push(srv);
+
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
+    expect(summary.degraded).toBe(true);
+    expect(summary.degraded_reason).toContain("活跃批次为 0");
+    expect(summary.portfolio.total_active_lots).toBe(0);
+  });
+
+  it("flags degraded when CLOSED lots exist but the trade journal was emptied", async () => {
+    const dbPath = trackDir(tempDbPath("degraded_notrades"));
+    seedLedger(dbPath);
+    exec(dbPath, "DELETE FROM trades");
+
+    const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({ "518880.SH": 6.6 }) });
+    openServers.push(srv);
+
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
+    expect(summary.degraded).toBe(true);
+    expect(summary.degraded_reason).toContain("trades");
+  });
+
+  it("unit: an emptied symbols metadata table is degraded (raw ledger, no reseed)", () => {
+    const dbPath = trackDir(tempDbPath("degraded_nosyms"));
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE symbols (symbol TEXT PRIMARY KEY, name TEXT, asset_class TEXT, settlement_mode TEXT);
+      CREATE TABLE trades (
+        trade_id TEXT PRIMARY KEY, account_id TEXT, lot_id TEXT, action TEXT,
+        price REAL, quantity INTEGER, fee REAL, realized_pnl REAL, executed_at TEXT
+      );
+    `);
+    raw.run(
+      `INSERT INTO trades VALUES ('T-1','DEFAULT','L1','SELL_REGULAR',7.0,100,0,10,'2025-01-02T09:30:00')`,
+    );
+    const lotRow = {
+      lot_id: "L1",
+      account_id: "DEFAULT",
+      symbol: "518880.SH",
+      symbol_name: "黄金ETF",
+      asset_class: "ETF",
+      settlement_mode: "NATIVE_T0",
+      buy_time: "2025-01-02T09:30:00",
+      buy_price: 6.1,
+      buy_quantity: 1000,
+      remaining_quantity: 1000,
+      cost_basis_unit: 6.1,
+      status: "ACTIVE",
+      pyramid_level: 0,
+      is_day_trading: 0,
+      peak_price: null,
+      trailing_stop_active: 0,
+      buy_reason: null,
+      close_reason: null,
+      close_time: null,
+      close_avg_price: null,
+      realized_pnl: 0,
+    };
+    const verdict = assessLedgerHealth(raw, [lotRow] as any);
+    expect(verdict.degraded).toBe(true);
+    expect(verdict.degraded_reason).toContain("symbols");
+    raw.close();
+  });
+
+  it("unit: assessLedgerHealth is a pure read over rows + row counts", () => {
+    const dbPath = trackDir(tempDbPath("health_unit"));
+    createEmptyLedger(dbPath);
+    const db = new AppDatabase(dbPath);
+    try {
+      const conn = db.getConnection();
+      // Schema-only ledger: nothing to distrust yet.
+      expect(assessLedgerHealth(conn, [])).toEqual({ degraded: false, degraded_reason: null });
+      conn.run(
+        `INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
+         VALUES ('T-1', 'DEFAULT', 'LOT-X', 'SELL_REGULAR', 7.0, 100, 0, 10, '2025-01-02T09:30:00')`,
+      );
+      const verdict = assessLedgerHealth(conn, []);
+      expect(verdict.degraded).toBe(true);
+      expect(verdict.degraded_reason).not.toBeNull();
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -2360,6 +2539,146 @@ describe("dashboard dual-mode contract", () => {
 });
 
 // ===========================================================================
+// 4b. Zero hardcoded history: template + generated-output negative assertions
+//
+// The three-pillar cards used to be static prose ("60.2%", "¥75.2 万元", 纳指/标普/长江电力…).
+// These are regression tripwires: any reintroduced literal fails the build.
+// ===========================================================================
+
+describe("dashboard: zero hardcoded history (P0 anti-regression)", () => {
+  const template = readFileSync(templatePath, "utf-8");
+
+  /** Stale phrases that were baked into template_base.html's pillar cards / narrative. */
+  const STALE_TEMPLATE_LITERALS = [
+    "60.2%",
+    "12.5%",
+    "27.3%",
+    "¥75.2 万元",
+    "+¥21.93 万元",
+    "+8.89 万",
+    "+8.57 万",
+    "¥13.6 万元",
+    "+¥4.01 万元",
+    "+2.29 万",
+    "+1.52 万",
+    "2.29x",
+    "1.57x",
+    "+33.54 万元",
+    "-34.75 万元",
+    "1.8 万元",
+  ];
+
+  /** Private position names that must never live inside a *template*. */
+  const PRIVATE_SYMBOL_LITERALS = [
+    "纳指 ETF",
+    "标普 500",
+    "日经",
+    "长江电力",
+    "招商银行",
+    "塔牌集团",
+    "工商银行",
+    "恒瑞",
+    "我武",
+    "海螺",
+    "榨菜",
+    "*ST美芝",
+    "合盛",
+    "恒生互联",
+    "劲嘉",
+    "天山",
+  ];
+
+  /** Unambiguous stale numbers that must never reappear verbatim in a generated page. */
+  const STALE_GENERATED_LITERALS = [
+    "¥75.2 万元",
+    "+¥21.93 万元",
+    "+8.89 万",
+    "+8.57 万",
+    "¥13.6 万元",
+    "+¥4.01 万元",
+    "+2.29 万",
+    "+1.52 万",
+    "+33.54 万元",
+    "-34.75 万元",
+    "1.8 万元",
+    "13 只核心资产",
+    "34 只 A 股赛道",
+  ];
+
+  it("NEGATIVE: the template carries no stale numbers and no private symbol names", () => {
+    for (const literal of STALE_TEMPLATE_LITERALS) {
+      expect(template.includes(literal), `template leaked stale literal ${literal}`).toBe(false);
+    }
+    for (const literal of PRIVATE_SYMBOL_LITERALS) {
+      expect(template.includes(literal), `template leaked private symbol ${literal}`).toBe(false);
+    }
+    // The pillar section must be a data-driven placeholder, not prose.
+    expect(template).toContain("{{ALLOC_PILLARS_HTML}}");
+    expect(template).toContain("{{ALLOC_CLASS_METRICS_JSON}}");
+  });
+
+  it("NEGATIVE: the generator carries no hardcoded per-symbol history either", () => {
+    const generator = readFileSync(join(repoRoot, "scripts", "generate_dashboard.py"), "utf-8");
+    // Old per-symbol narratives such as `在场 18,000 份…浮盈超 8.5 万元 (+128.9%)`.
+    for (const literal of ["浮盈超 9.3 万元", "浮盈超 8.5 万元", "豪取 12,094 元", "+1.52万"]) {
+      expect(generator.includes(literal), `generator leaked stale narrative ${literal}`).toBe(false);
+    }
+    // The whole narrative is now derived from metrics, not from a lookup table.
+    expect(generator).toContain("def build_strategy_note(m, strat_tag)");
+  });
+
+  it("generated HTML is fully ledger-driven and written with mode 0600", async () => {
+    const dbPath = trackDir(tempDbPath("zero_hardcode"));
+    seedLedger(dbPath);
+    const outPath = join(dirname(dbPath), "zero-hardcode.html");
+    const binDir = join(dirname(dbPath), "bin");
+    mkdirSync(binDir, { recursive: true });
+    const shim = join(binDir, "trade");
+    writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} run ${JSON.stringify(cliPath)} "$@"\n`);
+    chmodSync(shim, 0o755);
+
+    const proc = Bun.spawn(
+      [process.execPath, "run", cliPath, "dashboard", "--out", outPath, "--db", dbPath, "--json"],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          LOT_TRADER_DB: dbPath,
+          TRADE_DB_PATH: dbPath,
+          LOT_TRADER_TOKEN_FILE: join(dirname(dbPath), "zero-hardcode.token"),
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited, stderr).toBe(0);
+    expect(existsSync(outPath)).toBe(true);
+
+    // P0: the page embeds the 0600 session credential, so the file itself must be 0600
+    // (owner-only). A umask-inherited 0644 leaks the token to every local user.
+    expect(statSync(outPath).mode & 0o777).toBe(0o600);
+
+    const html = readFileSync(outPath, "utf-8");
+    for (const literal of STALE_GENERATED_LITERALS) {
+      expect(html.includes(literal), `generated page leaked stale literal ${literal}`).toBe(false);
+    }
+    expect(/\{\{[A-Z_]+\}\}/.test(html)).toBe(false);
+
+    // The pillars are rendered from real asset classes plus the cash-recycling layer.
+    expect(html).toContain('id="alloc-grid"');
+    expect(html).toContain('data-alloc-class="ETF"');
+    expect(html).toContain('data-alloc-class="STOCK"');
+    expect(html).toContain('data-alloc-class="CASH"');
+    expect(html).toContain('id="alloc-class-ETF-ratio"');
+    expect(html).toContain("const ALLOC_CLASS_METRICS = {");
+    // Both seeded symbols are ETFs => the STOCK card must be a neutral placeholder, no guess.
+    expect(html).toContain("当前账本暂无 asset_class=STOCK 的在场持仓");
+  }, 60_000);
+});
+
+// ===========================================================================
 // 5. Front-end negative guards (deterministic DOM sandbox)
 // ===========================================================================
 
@@ -2708,6 +3027,69 @@ describe("dashboard front-end: heartbeat upgrade and degradation", () => {
     // No navigator.clipboard in the sandbox -> the textarea fallback must not throw.
     expect(() => h.hooks.copyServeCommand()).not.toThrow();
     await Bun.sleep(10);
+    expect(h.errors).toEqual([]);
+  });
+
+  it("surfaces the degraded-ledger alert bar when /api/summary says degraded", async () => {
+    const h = createHarness({
+      healthProbe: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok", version: "0.1.0", db_path: "/tmp/x.db", timestamp: Date.now() }),
+      }),
+      summaryBody: {
+        status: "ok",
+        degraded: true,
+        degraded_reason: "测试：批次表(lots)为 0 行",
+        symbols: [{ symbol: "518880.SH", current_price: 6.66, price_source: "live" }],
+      },
+    });
+    harness = h;
+
+    h.runTimers(3000);
+    await Bun.sleep(30);
+    h.runTimers(5000);
+    await Bun.sleep(30);
+
+    expect(h.element("ledger-degraded-banner").classList.contains("open")).toBe(true);
+    expect(h.element("ledger-degraded-reason").textContent).toContain("批次表(lots)为 0 行");
+    expect(h.errors).toEqual([]);
+    expect(h.rejections).toEqual([]);
+  });
+
+  it("NEGATIVE anti-false-positive: a healthy ledger keeps the alert bar hidden", async () => {
+    const h = createHarness({
+      healthProbe: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok", version: "0.1.0", db_path: "/tmp/x.db", timestamp: Date.now() }),
+      }),
+      summaryBody: {
+        status: "ok",
+        degraded: false,
+        degraded_reason: null,
+        symbols: [{ symbol: "518880.SH", current_price: 6.66, price_source: "live" }],
+      },
+    });
+    harness = h;
+
+    h.runTimers(3000);
+    await Bun.sleep(30);
+    h.runTimers(5000);
+    await Bun.sleep(30);
+
+    expect(h.element("ledger-degraded-banner").classList.contains("open")).toBe(false);
+    expect(h.errors).toEqual([]);
+  });
+
+  it("account switching re-renders the dynamic pillar cards from the payload", () => {
+    const h = createHarness({ healthProbe: async () => ({ ok: false, status: 0 }) });
+    harness = h;
+
+    h.hooks.renderAllocPillars("ALL");
+    expect(h.element("alloc-class-ETF-ratio").textContent).toBe("50.0%");
+    expect(h.element("alloc-class-ETF-desc").textContent).toContain("动态聚合示例");
+    expect(h.element("alloc-class-CASH-stats").innerHTML).toContain("持仓市值");
     expect(h.errors).toEqual([]);
   });
 });

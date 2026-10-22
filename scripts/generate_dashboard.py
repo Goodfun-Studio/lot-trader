@@ -369,103 +369,126 @@ for sym, sinfo in symbols_map.items():
 
 target_metrics_all = target_metrics["ALL"]
 
-# Specific tags & strategy notes for all symbols
+# Strategy classification for every known symbol.
+# NOTE: this table is *classification only* (category / strategy tag / card border).
+# It deliberately carries NO numbers and NO narrative: every share count, P&L, return
+# rate, T-trade record and dividend figure is derived from the ledger at generation
+# time by `build_strategy_note()`. A stale literal here would silently leak an old
+# number into the rendered HTML, so the rule is: methodology yes, numbers never.
 SYMBOL_NOTES = {
-    '513300.SH': ('全球核心成长 • 美股科技慢牛', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 94,000 份，浮盈超 9.3 万元 (+57.0%)，做 T 净利 11,507 元；深厚利润垫完全免疫短期波动，长期跟踪止盈享受科技慢牛复利。'),
-    '513500.SH': ('全球核心宽基 • 美股全收益基石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 62,800 份，浮盈超 5.9 万元 (+55.3%)，做 T 累计净利 24,380 元；作为组合第一大海外压舱石，坚定长期持有。'),
-    '518880.SH': ('避险硬资产 • 央行去美元化底仓', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 18,000 份底仓平均成本 3.693 元（现价 8.46 元），浮盈超 8.5 万元 (+128.9%)，历史 63 战 58 捷盈亏比高达 100.01；守住 $3,910 硬红线底仓坚决不卖。'),
-    '513880.SH': ('全球发达市场 • 亚太出口龙头', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 38,500 份浮盈 3.4 万元 (+72.4%)，历史 22 战 21 捷全波段落袋 2,049 元，盈亏比 586.43；全球配置有效分散单一市场风险。'),
-    '513080.SH': ('欧洲跨国巨头 • 奢侈品及工业航母', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 4,000 份浮盈 +13.6%，历史 4 战净赚 +35 元；CAC 40 多为跨国营收巨头，弱势欧元反而增厚外币收益，底仓安心持有。'),
-    '513030.SH': ('欧洲高端制造 • 德国工业脊梁', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 2,000 份浮盈 +82.0% (+1,576 元)，历史 3 战 3 捷全胜；作为极小规模全球分散配置，享受欧洲高端制造业周期复苏。'),
-    '164824.SZ': ('新兴市场敞口 • 人口红利消费', '[待加仓/观察]', 'rgba(245, 158, 11, 0.4)',
-                  '合并在场 70,000 份，当前汇率承压磨底，浮亏 -20.8%；严禁盲目左侧接飞刀，静待宏观汇率企稳再行置换。'),
-    '513330.SH': ('港股科技龙头 • 深度挤估值磨底', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)',
-                  '历史 7 战 7 胜做 T 净赚 463 元；在场 72,000 份底仓已完成挤估值，严禁追加外部新钱，依托底仓急跌反弹做 T 冲销历史建仓成本。'),
-    '600900.SH': ('水电现金牛 • 绝对防守压舱石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 2,400 股底仓成本 19.95 元（浮盈 +47.9%），做 T 47 战 45 捷豪取 12,094 元，分红 4,539 元，盈亏比高达 550.73；核心高股息资产长期持有。'),
-    '600036.SH': ('零售银行之王 • 高股息分红先锋', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 1,300 股浮盈 +37.7% (+1.52万)，历年分红高达 13,240 元，累计回笼 9,983 元；依托底仓波段做 T，持续收取丰厚股息。'),
-    '601398.SH': ('国有特大行 • 稳健底仓避风港', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '合并在场 1,500 股，丰厚浮盈 +32.3%，累计分红 784 元；设置移动止盈线，锁定利润同时持续享受高股息现金流。'),
-    '002233.SZ': ('高股息水泥 • 9战全胜现金牛', '[底仓做T]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 800 股，历史 9 战 9 胜做 T 净赚 766 元，分红 1,592 元，累计回笼现金 2,358 元（占市值 37%）；依托底仓急跌反弹做 T。'),
-    '600276.SH': ('创新药旗舰 • 46战44捷做T标杆', '[代冲消融山顶]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 1,060 股，做 T 46 战 44 捷豪取 +11,760 元，分红 1,344 元，累计回笼现金超 1.3 万元，盈亏比达 1117.85；依托底仓继续消融山顶。'),
-    '600585.SH': ('水泥行业龙头 • 17战全胜分红王', '[分红现金牛]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 1,200 股，历史做 T 17 战 17 胜净赚 3,833 元，累计分红 7,857 元，已回笼安全资金 11,690 元（占市值 54%）；依托底仓持续做 T。'),
-    '300357.SZ': ('脱敏诊疗龙头 • 21战全胜波段标杆', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)',
-                  '在场 1,500 股，做 T 21 战 21 胜豪取 6,628 元，分红 1,229 元，累计已提取 7,857 元；严禁外部新钱加仓，依托底仓反弹做 T 冲销山顶。'),
-    '002507.SZ': ('大众消费龙头 • 19战18捷稳健做T', '[底仓做T]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 1,860 股，做 T 19 战 18 捷净落袋 2,962 元，分红 3,215 元，累计提取现金 6,177 元，盈亏比 44.03；依托底仓急跌反弹锁定差价。'),
-    '603260.SH': ('工业硅龙头 • 5战全胜底仓对冲', '[代冲消融山顶]', 'rgba(239, 68, 68, 0.4)',
-                  '在场 600 股，历史 5 战 5 胜做 T 净赚 1,737 元，分红 1,109 元，累计提取 2,846 元；严禁盲目抄底，坚决执行底仓代冲策略。'),
-    '002191.SZ': ('烟标与新材料 • 4战全胜高分红', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)',
-                  '在场 1,500 股，做 T 4 战 4 胜净利 +485 元，分红 1,323 元，累计提现 1,808 元；依托底仓急跌反弹做 T 冲销 17.54 元历史山顶。'),
-    '300595.SZ': ('眼科医疗龙头 • 4战全胜代冲消融', '[代冲消融山顶]', 'rgba(6, 182, 212, 0.4)',
-                  '在场 300 股，历史做 T 4 战全胜净赚 +951 元，分红 262 元，累计回笼 1,213 元；绝对禁止外部新钱补仓，依托底仓对冲山顶。'),
-    '601012.SH': ('光伏单晶硅龙头 • 周期底部磨底', '[代冲消融山顶]', 'rgba(34, 197, 94, 0.4)',
-                  '在场 300 股，做 T 落袋 +104 元，分红 211 元；光伏周期磨底，严禁外部新钱补仓，依托底仓急跌反弹做 T，定向冲销 56 元山顶批次。'),
-    '300529.SZ': ('血液灌流龙头 • 14战全胜利润垫', '[代冲消融山顶]', 'rgba(236, 72, 153, 0.4)',
-                  '在场 400 股，做 T 14 战全胜豪取 +8,952 元，分红 1,417 元，已落袋安全现金 +10,369 元！彻底对冲建仓成本，现持仓已被提现利润完全吸收。'),
-    '002310.SZ': ('综合工业龙头 • 63战高频做T', '[高频做T防守]', 'rgba(249, 115, 22, 0.4)',
-                  '在场 4,100 股，历史做 T 63 战 39 捷总盈利 5,677 元；标的历经多次重组与波动，依托 4,100 股底仓急跌脉冲高频做 T，不追加外部资金。'),
-    '600390.SH': ('央企多元金融 • 40战做T极低残仓', '[极小残仓静置]', 'rgba(148, 163, 184, 0.4)',
-                  '在场仅剩 120 股残存筹码（市值仅 559 元），历史平仓 40 笔，分红 767 元；占百万总盘比重微乎其微，建议完全静置观望或脉冲清仓。'),
-    '000877.SZ': ('西北水泥龙头 • 3战全胜底仓静置', '[代冲消融山顶]', 'rgba(14, 165, 233, 0.4)',
-                  '在场 700 股，历史做 T 3 战全胜净赚 +205 元，分红 398 元；水泥周期筑底，严格禁止外部新钱补仓，依托底仓急跌反弹做 T。'),
-    '300601.SZ': ('创新疫苗龙头 • 周期筑底静置', '[代冲消融山顶]', 'rgba(239, 68, 68, 0.4)',
-                  '在场 仅 200 股底仓，历史做 T 1 战全胜落袋 +159 元，分红 101 元；严格杜绝新钱左侧加仓，依托底仓急跌反弹做 T 定向冲销成本。'),
-    '000632.SZ': ('低价重组标的 • 9战波段小额防守', '[微仓波段防守]', 'rgba(245, 158, 11, 0.4)',
-                  '在场仅 100 股（市值 340 元），历史 9 战 5 捷平分秋色，盈亏比 0.97；仓位极低完全不影响大局，等待退市警示解除或反弹平仓。'),
-    '600586.SH': ('超白玻璃龙头 • 14战全胜安全现金', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 1,600 股，做 T 14 战 14 捷豪取 +2,705 元，分红 +467 元，累计提取安全现金 +3,172 元；依托底仓反弹做 T，定向冲销山顶批次。'),
-    '002466.SZ': ('全球锂矿壁垒 • 周期底部持仓观察', '[周期底部观察]', 'rgba(59, 130, 246, 0.4)',
-                  '在场仅 100 股底仓，做 T 1 战全胜 +336 元，分红 +435 元，已回笼安全现金 +771 元（市值 3,625 元）；手握底仓等待锂周期供需反转。'),
-    '002393.SZ': ('特色制药龙头 • 20战波段微仓防守', '[微仓波段防守]', 'rgba(168, 85, 247, 0.4)',
-                  '在场仅 168 股（市值 2,283 元），历史 20 战做 T，止损控仓有效；市值极微对组合无扰动，维持观察。'),
-    '002603.SZ': ('现代中药龙头 • 4战全胜底仓防守', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 300 股底仓，做 T 4 战 4 胜净赚 +797 元，分红 134 元；依托底仓脉冲做 T 锁定利润，禁止追加新钱。'),
-    '000100.SZ': ('半导体显示龙头 • 4战全胜底仓做T', '[底仓代冲做T]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 2,530 股，做 T 4 战 4 胜净赚 +865 元，分红 122 元；面板周期震荡，依托底仓反弹做 T，逐步消融建仓成本。'),
-    '300677.SZ': ('医疗手套龙头 • 5战全胜底仓做T', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 500 股，做 T 5 战 5 胜净赚 +1,357 元，分红 683 元，累计提现 2,040 元；依托底仓急跌反弹做 T，完全不增加敞口。'),
-    '002029.SZ': ('男装品牌消费 • 5战3捷残仓观察', '[微仓观察]', 'rgba(245, 158, 11, 0.4)',
-                  '在场仅 100 股（市值 829 元），做 T 5 战 3 捷净利 +365 元，盈亏比 6.29；极微持仓静置，等待反弹减仓。'),
-    '600326.SH': ('基建与民爆龙头 • 50战做T残存筹码', '[极小残仓静置]', 'rgba(148, 163, 184, 0.4)',
-                  '在场仅 130 股（市值 820 元），历史 50 战做 T 累计总盈利 3,763 元；占总盘比重微乎其微，静置观望即可。'),
-    '603678.SH': ('军工电子龙头 • 30战做T利润丰厚', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 500 股浮盈 +88.2% (+8,255 元)，历史 30 战 17 捷做 T 净赚 6,816 元，分红 268 元，盈亏比 1.53；设置移动止盈线锁定丰厚收益。'),
-    '000725.SZ': ('面板双雄之一 • 17战做T浮盈观察', '[持仓观察]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 2,800 股浮盈 +9.7% (+1,243 元)，历史 17 战做 T；面板周期回暖，浮盈状态持仓观察，伺机移动止盈。'),
-    '000792.SZ': ('钾肥锂资源龙头 • 周期回升底仓', '[持仓观察]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 300 股成本 24.19 元（现价 22.76 元），浮亏仅 -5.9%，历史做 T 1 战全胜 +277 元；优质资源底仓，耐心等待周期回暖。'),
-    '002856.SZ': ('ST 重组概念 • 游资高弹性脉冲', '[高位止盈]', 'rgba(239, 68, 68, 0.4)',
-                  '在场 1,600 股单标的浮盈超 +10,500 元 (+50.3%)，一人平抑全部 ST 亏损；建议高位挂移动条件单分批止盈锁定暴利。'),
-    '002883.SZ': ('ST 基础设施工程 • 浅套观察', '[微仓观察]', 'rgba(245, 158, 11, 0.4)',
-                  '在场 1,300 股浅套 -14.2%，严禁盲目加仓，等待工程与重组题材右侧脉冲减亏。'),
-    '002719.SZ': ('ST 食品乳业 • 风险警示震荡', '[死水静置]', 'rgba(239, 68, 68, 0.4)',
-                  '在场 1,400 股深套 -38.5%，消费退潮与 ST 风险压制，坚决不加新钱，脉冲异动择机离场。'),
-    '002193.SZ': ('ST 纺织服装 • 阴跌出清区', '[死水静置]', 'rgba(239, 68, 68, 0.4)',
-                  '在场 2,200 股深套 -34.6%，死水无量阴跌，严格焊死仓位上限，耐心等待题材脉冲。'),
-    '600822.SH': ('商业贸易与旧物资 • 历史老仓', '[微仓观察]', 'rgba(245, 158, 11, 0.4)',
-                  '在场 800 股历史老仓浮亏 -36.7%，不追加资金，逢板块活跃择机减仓。'),
-    '000623.SZ': ('医药健康与广发证券大股东', '[持仓观察]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 500 股浮亏 -8.3%，享 145 元现金分红；兼具中药与券商牛市影子股属性，安心持有。'),
-    '600064.SH': ('区域园区综合开发 • 红利收息', '[红利底仓]', 'rgba(59, 130, 246, 0.4)',
-                  '在场 1,100 股享有 352 元现金分红，抵扣分红实际仅微亏；高红利防守标的，持有收息。'),
-    '000001.SZ': ('全国股份制零售银行 • 稳健分红', '[红利底仓]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 100 股浮盈 +10.7%，累计派息 60.9 元；低估值银行蓝筹，稳健收息。'),
-    '600000.SH': ('全国股份制商业银行 • 破净修复', '[红利底仓]', 'rgba(16, 185, 129, 0.4)',
-                  '在场 100 股浮盈 +3.3%，累计派息 42 元；深度破净国资银行，稳健防守。'),
-    '300538.SZ': ('新材料工程塑料 • 残仓底仓观察', '[微仓观察]', 'rgba(245, 158, 11, 0.4)',
-                  '在场仅 100 股（市值 1,350 元，成本 20.40 元）；持仓极小，静置观望，杜绝追加任何外部资金。'),
+    '513300.SH': ('全球核心成长 • 美股科技慢牛', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '513500.SH': ('全球核心宽基 • 美股全收益基石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '518880.SH': ('避险硬资产 • 央行去美元化底仓', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '513880.SH': ('全球发达市场 • 亚太出口龙头', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '513080.SH': ('欧洲跨国巨头 • 奢侈品及工业航母', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '513030.SH': ('欧洲高端制造 • 德国工业脊梁', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '164824.SZ': ('新兴市场敞口 • 人口红利消费', '[待加仓/观察]', 'rgba(245, 158, 11, 0.4)'),
+    '513330.SH': ('港股科技龙头 • 深度挤估值磨底', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)'),
+    '600900.SH': ('水电现金牛 • 绝对防守压舱石', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '600036.SH': ('零售银行之王 • 高股息分红先锋', '[底仓做T]', 'rgba(16, 185, 129, 0.4)'),
+    '601398.SH': ('国有特大行 • 稳健底仓避风港', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '002233.SZ': ('高股息水泥板块', '[底仓做T]', 'rgba(16, 185, 129, 0.4)'),
+    '600276.SH': ('创新药旗舰', '[代冲消融山顶]', 'rgba(59, 130, 246, 0.4)'),
+    '600585.SH': ('水泥行业龙头', '[分红现金牛]', 'rgba(59, 130, 246, 0.4)'),
+    '300357.SZ': ('脱敏诊疗龙头', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)'),
+    '002507.SZ': ('大众消费龙头', '[底仓做T]', 'rgba(59, 130, 246, 0.4)'),
+    '603260.SH': ('工业硅龙头', '[代冲消融山顶]', 'rgba(239, 68, 68, 0.4)'),
+    '002191.SZ': ('烟标与新材料', '[代冲消融山顶]', 'rgba(139, 92, 246, 0.4)'),
+    '300595.SZ': ('眼科医疗龙头', '[代冲消融山顶]', 'rgba(6, 182, 212, 0.4)'),
+    '601012.SH': ('光伏单晶硅龙头 • 周期底部磨底', '[代冲消融山顶]', 'rgba(34, 197, 94, 0.4)'),
+    '300529.SZ': ('血液灌流龙头', '[代冲消融山顶]', 'rgba(236, 72, 153, 0.4)'),
+    '002310.SZ': ('综合工业龙头', '[高频做T防守]', 'rgba(249, 115, 22, 0.4)'),
+    '600390.SH': ('央企多元金融', '[极小残仓静置]', 'rgba(148, 163, 184, 0.4)'),
+    '000877.SZ': ('西北水泥龙头', '[代冲消融山顶]', 'rgba(14, 165, 233, 0.4)'),
+    '300601.SZ': ('创新疫苗龙头 • 周期筑底静置', '[代冲消融山顶]', 'rgba(239, 68, 68, 0.4)'),
+    '000632.SZ': ('低价重组标的', '[微仓波段防守]', 'rgba(245, 158, 11, 0.4)'),
+    '600586.SH': ('超白玻璃龙头', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)'),
+    '002466.SZ': ('全球锂矿壁垒 • 周期底部持仓观察', '[周期底部观察]', 'rgba(59, 130, 246, 0.4)'),
+    '002393.SZ': ('特色制药龙头', '[微仓波段防守]', 'rgba(168, 85, 247, 0.4)'),
+    '002603.SZ': ('现代中药龙头', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)'),
+    '000100.SZ': ('半导体显示龙头', '[底仓代冲做T]', 'rgba(59, 130, 246, 0.4)'),
+    '300677.SZ': ('医疗手套龙头', '[底仓代冲做T]', 'rgba(16, 185, 129, 0.4)'),
+    '002029.SZ': ('男装品牌消费', '[微仓观察]', 'rgba(245, 158, 11, 0.4)'),
+    '600326.SH': ('基建与民爆龙头', '[极小残仓静置]', 'rgba(148, 163, 184, 0.4)'),
+    '603678.SH': ('军工电子龙头', '[跟踪止盈]', 'rgba(16, 185, 129, 0.4)'),
+    '000725.SZ': ('面板双雄之一', '[持仓观察]', 'rgba(16, 185, 129, 0.4)'),
+    '000792.SZ': ('钾肥锂资源龙头 • 周期回升底仓', '[持仓观察]', 'rgba(59, 130, 246, 0.4)'),
+    '002856.SZ': ('ST 重组概念 • 游资高弹性脉冲', '[高位止盈]', 'rgba(239, 68, 68, 0.4)'),
+    '002883.SZ': ('ST 基础设施工程 • 浅套观察', '[微仓观察]', 'rgba(245, 158, 11, 0.4)'),
+    '002719.SZ': ('ST 食品乳业 • 风险警示震荡', '[死水静置]', 'rgba(239, 68, 68, 0.4)'),
+    '002193.SZ': ('ST 纺织服装 • 阴跌出清区', '[死水静置]', 'rgba(239, 68, 68, 0.4)'),
+    '600822.SH': ('商业贸易与旧物资 • 历史老仓', '[微仓观察]', 'rgba(245, 158, 11, 0.4)'),
+    '000623.SZ': ('医药健康与广发证券大股东', '[持仓观察]', 'rgba(59, 130, 246, 0.4)'),
+    '600064.SH': ('区域园区综合开发 • 红利收息', '[红利底仓]', 'rgba(59, 130, 246, 0.4)'),
+    '000001.SZ': ('全国股份制零售银行 • 稳健分红', '[红利底仓]', 'rgba(16, 185, 129, 0.4)'),
+    '600000.SH': ('全国股份制商业银行 • 破净修复', '[红利底仓]', 'rgba(16, 185, 129, 0.4)'),
+    '300538.SZ': ('新材料工程塑料 • 残仓底仓观察', '[微仓观察]', 'rgba(245, 158, 11, 0.4)'),
 }
+
+DEFAULT_SYMBOL_NOTE = ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)')
+
+# Methodology guidance per strategy tag. Deliberately numeric-free: the concrete figures
+# are always appended from the live ledger by `build_strategy_note()`.
+STRATEGY_GUIDANCE = {
+    '[跟踪止盈]': '深厚利润垫下长期跟踪止盈，享受复利，不追高、不恐慌割肉。',
+    '[底仓做T]': '依托昨日及以前可用底仓做 T 锁定波段差价，不新增任何外部资金。',
+    '[底仓代冲做T]': '依托底仓急跌反弹做 T，定向冲销历史建仓成本，不扩大敞口。',
+    '[代冲消融山顶]': '严禁外部新钱左侧补仓，仅依托底仓急跌反弹做 T，逐步消融历史山顶成本。',
+    '[高频做T防守]': '依托底仓脉冲做 T 摊薄成本，严守仓位上限，绝不追加外部资金。',
+    '[分红现金牛]': '依托高分红现金流持续回笼现金，逢急跌做 T，不追高。',
+    '[红利底仓]': '高股息防守底仓，持有收息，跌深再评估，不做无差别补仓。',
+    '[持仓观察]': '维持现有仓位观察，等待信号与年报口径确认后再动。',
+    '[待加仓/观察]': '严禁盲目左侧接飞刀，待宏观/行业信号企稳再考虑置换。',
+    '[周期底部观察]': '周期底部保留底仓观察，等待供需反转信号，左侧不追加新钱。',
+    '[高位止盈]': '高位挂条件单分批止盈，锁定利润，不因单日脉冲继续加仓。',
+    '[微仓观察]': '仓位极小，对组合无实质影响，静置观察等待右侧脉冲。',
+    '[微仓波段防守]': '微仓防守，严格焊死仓位上限，不做无依据摊薄。',
+    '[极小残仓静置]': '极小残仓静置，避免频繁交易抬升摩擦成本。',
+    '[死水静置]': '无量阴跌标的静置不动，坚决不进新钱，等待题材脉冲。',
+}
+DEFAULT_STRATEGY_GUIDANCE = '严格执行批次独立核算，依托底仓做 T，严禁盲目左侧补仓。'
+
+
+def build_strategy_note(m, strat_tag):
+    """Derive a per-symbol strategy narrative from the *live ledger metrics*.
+
+    Zero hardcoded numbers: shares / P&L / return rate / T record / dividends / withdrawn
+    cash all come from the same `compute_sym_metrics` row that feeds every other panel.
+    """
+    shares = m.get('shares', 0) or 0
+    unit = m.get('qty_unit', '份')
+    mkt = m.get('market_value', 0) or 0
+    pnl = m.get('floating_pnl', 0) or 0
+    rr = m.get('return_rate', 0) or 0
+
+    parts = []
+    if shares > 0:
+        parts.append(
+            f"在场 {shares:,.0f} {unit}，市值 ¥{mkt:,.0f}，"
+            f"浮动盈亏 {'+' if pnl > 0 else ('-' if pnl < 0 else '')}¥{abs(pnl):,.0f}"
+            f"（{'+' if rr > 0 else ''}{rr * 100:.1f}%）"
+        )
+    else:
+        parts.append("当前无在场持仓")
+
+    trades = m.get('total_trades', 0) or 0
+    if trades > 0:
+        net = m.get('net_t_pnl', 0) or 0
+        parts.append(
+            f"历史做 T {trades} 战 {m.get('win_trades', 0)} 胜"
+            f"（净 {'+' if net >= 0 else '-'}¥{abs(net):,.0f}）"
+        )
+
+    dividends = m.get('dividends', 0) or 0
+    if dividends:
+        parts.append(f"累计分红 +¥{dividends:,.0f}")
+
+    withdrawn = m.get('total_withdrawn', 0) or 0
+    if withdrawn:
+        parts.append(f"累计回笼现金 {'+' if withdrawn >= 0 else '-'}¥{abs(withdrawn):,.0f}")
+
+    return "；".join(parts) + "。" + STRATEGY_GUIDANCE.get(strat_tag, DEFAULT_STRATEGY_GUIDANCE)
+
 
 def format_physics_badge_card(p):
     if not p:
@@ -534,8 +557,8 @@ def _num(x, default=0.0):
     return v if v == v and abs(v) != float('inf') else default
 
 def build_single_card(sym, m, acc_mode, visibility, is_hidden=False):
-    notes = SYMBOL_NOTES.get(sym, ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)', '依托底仓操盘，杜绝盲目左侧补仓。'))
-    cat_tag, strat_tag, border_col, strat_desc = notes
+    cat_tag, strat_tag, border_col = SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)
+    strat_desc = build_strategy_note(m, strat_tag)
 
     qty_str = f"{m['shares']:,} {m['qty_unit']}"
     cost_str = f"¥{m['cost_unit']:.3f}" if m['cost_unit'] < 2.0 else f"¥{m['cost_unit']:.2f}"
@@ -672,8 +695,8 @@ for sym in sorted_syms_by_mkt:
             **target_metrics_all[sym],
             "account_id": "ALL",
             "account_label": account_label("ALL"),
-            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
-            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
+            "category": SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)[0],
+            "strategy": build_strategy_note(target_metrics_all[sym], SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)[1]),
             "physics": physics_by_sym.get(sym),
             "lots": all_lots_for_sym
         }
@@ -685,8 +708,11 @@ for sym in sorted_syms_by_mkt:
             **(target_metrics.get(acc, {}).get(sym) or target_metrics_all[sym]),
             "account_id": acc,
             "account_label": account_label(acc),
-            "category": SYMBOL_NOTES.get(sym, ('A 股赛道标的',))[0],
-            "strategy": SYMBOL_NOTES.get(sym, ('', '', '', '依托底仓操盘'))[3],
+            "category": SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)[0],
+            "strategy": build_strategy_note(
+                target_metrics.get(acc, {}).get(sym) or target_metrics_all[sym],
+                SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)[1],
+            ),
             "physics": physics_by_sym.get(sym),
             "lots": acc_lots_for_sym
         }
@@ -722,8 +748,8 @@ current_initial_rank = 1
 
 def build_single_holding_row(sym, m, acc_mode, visibility, is_hidden=False, initial_idx=1):
     name = m["name"]
-    notes = SYMBOL_NOTES.get(sym, ('A 股赛道标的', '[持仓观察]', 'rgba(59, 130, 246, 0.4)', '依托底仓操盘，杜绝盲目左侧补仓。'))
-    cat_tag, strat_tag, border_col, strat_desc = notes
+    cat_tag, strat_tag, border_col = SYMBOL_NOTES.get(sym, DEFAULT_SYMBOL_NOTE)
+    strat_desc = build_strategy_note(m, strat_tag)
 
     qty_str = f"{m['shares']:,} {m['qty_unit']}"
     cost_str = f"¥{m['cost_unit']:.3f}" if m['cost_unit'] < 2.0 else f"¥{m['cost_unit']:.2f}"
@@ -1060,6 +1086,227 @@ for acc in ACCOUNT_KEYS:
         "global_pnl_str": f"+¥{global_pnl/10000:.2f} 万" if global_pnl >= 0 else f"-¥{abs(global_pnl)/10000:.2f} 万",
     }
 
+# ---------------------------------------------------------------------------
+# 三大支柱（全动态）
+#
+# Everything below is derived from the ledger's *real* asset classification
+# (`symbols.asset_class`) and the caller's account slice. The template owns nothing but the
+# card skeleton: no historical number, no private symbol literal, no fixed percentage is
+# baked in here or in template_base.html. An empty / unclassified book renders a neutral,
+# structured placeholder instead of guessing.
+# ---------------------------------------------------------------------------
+
+PILLAR_CLASS_ORDER = ["ETF", "STOCK"]
+PILLAR_CLASS_LABELS = {
+    "ETF": "📦 交易型基金（ETF/LOF）层",
+    "STOCK": "🧱 个股底层",
+    "UNCLASSIFIED": "❔ 未归类资产层",
+}
+PILLAR_CLASS_THEMES = {
+    "ETF": ("var(--green)", "val-green"),
+    "STOCK": ("var(--blue)", "val-blue"),
+    "UNCLASSIFIED": ("var(--amber)", "val-amber"),
+}
+PILLAR_FALLBACK_THEMES = [
+    ("var(--purple)", "val-purple"),
+    ("var(--red)", "val-red"),
+    ("var(--green)", "val-green"),
+]
+
+
+def asset_class_of(sym):
+    """Real asset class from the ledger's `symbols` table; blank -> UNCLASSIFIED."""
+    info = symbols_map.get(sym) or {}
+    raw = str(info.get("asset_class") or "").strip().upper()
+    return raw or "UNCLASSIFIED"
+
+
+def aggregate_by_class(metrics_map):
+    """Bucket active in-book positions by their real asset class. No hardcoded symbol list."""
+    buckets = {}
+    for sym, m in metrics_map.items():
+        shares = float(m.get("shares") or 0)
+        if shares <= 0:
+            continue  # only positions actually on the book count toward allocation
+        code = asset_class_of(sym)
+        b = buckets.setdefault(code, {"mkt": 0.0, "cost": 0.0, "pnl": 0.0, "lots": 0, "syms": {}})
+        mkt = float(m.get("market_value") or 0)
+        b["mkt"] += mkt
+        b["cost"] += float(m.get("cost_unit") or 0) * shares
+        b["pnl"] += float(m.get("floating_pnl") or 0)
+        b["lots"] += int(m.get("active_lots_count") or 0)
+        b["syms"][sym] = b["syms"].get(sym, 0.0) + mkt
+    return buckets
+
+
+def money_wan(v, signed=False):
+    v = float(v or 0)
+    sign = "+" if (signed and v > 0) else ("-" if v < 0 else "")
+    return f"{sign}¥{abs(v) / 10000:,.2f} 万元"
+
+
+def money_yuan(v):
+    v = float(v or 0)
+    sign = "+" if v > 0 else ("-" if v < 0 else "")
+    return f"{sign}¥{abs(v):,.2f}"
+
+
+def _pct(v):
+    if v is None:
+        return "--"
+    return f"{v * 100:+.2f}%" if v < 0 or v > 0 else "0.00%"
+
+
+def _stat_cell(label, value, klass=None):
+    cls_attr = f' class="{klass}"' if klass else ""
+    return f"<div>{label}: <strong{cls_attr}>{value}</strong></div>"
+
+
+def render_class_card(code, bucket, total_mkt, theme_index):
+    """Render one asset-class pillar card, always from the caller's live numbers."""
+    label = PILLAR_CLASS_LABELS.get(code, f"📁 {html.escape(code)} 资产层")
+    border, ratio_cls = PILLAR_CLASS_THEMES.get(
+        code, PILLAR_FALLBACK_THEMES[theme_index % len(PILLAR_FALLBACK_THEMES)]
+    )
+    bucket = bucket or {"mkt": 0.0, "cost": 0.0, "pnl": 0.0, "lots": 0, "syms": {}}
+    mkt = float(bucket["mkt"])
+    cost = float(bucket["cost"])
+    pnl = float(bucket["pnl"])
+    has_position = mkt > 0 or bool(bucket["syms"])
+
+    ratio = (mkt / total_mkt) if total_mkt > 0 else None
+    ratio_str = f"{ratio * 100:.1f}%" if ratio is not None else "--"
+    pnl_cls = "val-green" if pnl >= 0 else "val-red"
+    rate = (pnl / cost) if cost > 0 else None
+    rate_cls = "val-green" if (rate or 0) >= 0 else "val-red"
+
+    if has_position:
+        desc = (
+            f"按账本 asset_class={html.escape(code)} 动态聚合：共 {len(bucket['syms'])} 只在场标的、"
+            f"{bucket['lots']} 笔在场批次，全部数值实时取自本机 SQLite 账本。"
+        )
+        leaders = sorted(bucket["syms"].items(), key=lambda kv: kv[1], reverse=True)[:3]
+        leader_bits = []
+        for sym, value in leaders:
+            weight = (value / total_mkt * 100) if total_mkt > 0 else 0.0
+            name = (symbols_map.get(sym) or {}).get("name") or sym
+            leader_bits.append(f"{html.escape(str(name))} ({html.escape(sym)}) {weight:.1f}%")
+        desc += " 市值权重前三：" + " • ".join(leader_bits) + "。"
+        stats = [
+            _stat_cell("持仓市值", money_wan(mkt)),
+            _stat_cell("组合占比", f"{ratio * 100:.2f}%" if ratio is not None else "--"),
+            _stat_cell("累计浮盈", money_wan(pnl, signed=True), pnl_cls),
+            _stat_cell("浮盈率", _pct(rate), rate_cls),
+        ]
+    else:
+        desc = (
+            f"当前账本暂无 asset_class={html.escape(code)} 的在场持仓。此处保持中性结构化占位："
+            f"不推测、不沿用任何历史数字，待账本出现该类持仓后自动填充。"
+        )
+        stats = [
+            _stat_cell("持仓市值", "¥0.00 万元"),
+            _stat_cell("组合占比", "--"),
+            _stat_cell("累计浮盈", "¥0.00 万元"),
+            _stat_cell("浮盈率", "--"),
+        ]
+
+    stats_html = "\n              ".join(stats)
+    card_html = f'''          <div class="alloc-card" data-alloc-class="{html.escape(code)}" style="border-top: 4px solid {border};">
+            <div class="alloc-head">
+              <div class="alloc-title">{label}</div>
+              <div class="alloc-ratio {ratio_cls}" id="alloc-class-{html.escape(code)}-ratio">{ratio_str}</div>
+            </div>
+            <div class="alloc-desc" id="alloc-class-{html.escape(code)}-desc">{desc}</div>
+            <div class="alloc-stats" id="alloc-class-{html.escape(code)}-stats">
+              {stats_html}
+            </div>
+          </div>'''
+    return card_html, {
+        "ratio_str": ratio_str,
+        "ratio_cls": ratio_cls,
+        "desc": desc,
+        "stats_html": stats_html,
+    }
+
+
+def render_cash_card(acc_m, total_mkt):
+    """批次消融与现金回收层：cash recycling from the trades / dividends journals."""
+    real = float(acc_m.get("realized_pnl_val") or 0)
+    dividends = float(acc_m.get("dividends_val") or 0)
+    withdrawn = float(acc_m.get("withdrawn_val") or 0)
+    base = withdrawn + float(total_mkt or 0)
+    ratio = (withdrawn / base) if base > 0 else None
+    ratio_str = f"{ratio * 100:.1f}%" if ratio is not None else "--"
+    desc = (
+        "批次消融与现金回收层：由账本 trades / dividends 表实时汇总。"
+        f"已提现现金 {money_yuan(withdrawn)}，在场市值 {money_wan(total_mkt)}；"
+        "占比 = 已落袋现金 ÷（已落袋现金 + 在场市值），衡量现金回收程度。"
+    )
+    stats = [
+        _stat_cell("做T净利", acc_m["realized_pnl_str"], "val-green" if real >= 0 else "val-red"),
+        _stat_cell("累计分红", acc_m["dividends_str"], "val-green"),
+        _stat_cell("已提现现金", acc_m["withdrawn_str"], "val-green" if withdrawn >= 0 else "val-red"),
+        _stat_cell(
+            "平仓战绩",
+            f"{acc_m['closed_trades_count']}战{acc_m['win_trades_count']}胜 ({acc_m['win_rate_str']})",
+            "val-green",
+        ),
+    ]
+    stats_html = "\n              ".join(stats)
+    card_html = f'''          <div class="alloc-card" data-alloc-class="CASH" style="border-top: 4px solid var(--purple);">
+            <div class="alloc-head">
+              <div class="alloc-title">🎯 批次消融与现金回收层</div>
+              <div class="alloc-ratio val-purple" id="alloc-class-CASH-ratio">{ratio_str}</div>
+            </div>
+            <div class="alloc-desc" id="alloc-class-CASH-desc">{desc}</div>
+            <div class="alloc-stats" id="alloc-class-CASH-stats">
+              {stats_html}
+            </div>
+          </div>'''
+    return card_html, {
+        "ratio_str": ratio_str,
+        "ratio_cls": "val-purple",
+        "desc": desc,
+        "stats_html": stats_html,
+    }
+
+
+# Union of every class that appears in any account slice, then the canonical ones, so the
+# card layout is stable across the account switcher without ever inventing a category.
+ALL_CLASS_CODES = []
+for _acc_key in ACCOUNT_KEYS:
+    for _code in aggregate_by_class(target_metrics.get(_acc_key, {})).keys():
+        if _code not in ALL_CLASS_CODES:
+            ALL_CLASS_CODES.append(_code)
+for _code in PILLAR_CLASS_ORDER:
+    if _code not in ALL_CLASS_CODES:
+        ALL_CLASS_CODES.append(_code)
+ALL_CLASS_CODES.sort(
+    key=lambda c: (PILLAR_CLASS_ORDER.index(c) if c in PILLAR_CLASS_ORDER else 99, c)
+)
+
+alloc_pillars_cards = []
+alloc_class_metrics = {}
+for _acc_key in ACCOUNT_KEYS:
+    _buckets = aggregate_by_class(target_metrics.get(_acc_key, {}))
+    _total_mkt = sum(b["mkt"] for b in _buckets.values())
+    _acc_payload = {}
+    for _idx, _code in enumerate(ALL_CLASS_CODES):
+        _card_html, _card_payload = render_class_card(
+            _code, _buckets.get(_code), _total_mkt, _idx
+        )
+        if _acc_key == "ALL":
+            alloc_pillars_cards.append(_card_html)
+        _acc_payload[_code] = _card_payload
+    _cash_html, _cash_payload = render_cash_card(account_metrics[_acc_key], _total_mkt)
+    if _acc_key == "ALL":
+        alloc_pillars_cards.append(_cash_html)
+    _acc_payload["CASH"] = _cash_payload
+    alloc_class_metrics[_acc_key] = _acc_payload
+
+alloc_pillars_html = "\n".join(alloc_pillars_cards)
+alloc_class_metrics_json = json.dumps(alloc_class_metrics, ensure_ascii=False)
+
 # Convert data to JSON string for client-side embedding
 account_metrics_json = json.dumps(account_metrics, ensure_ascii=False)
 target_js_json = json.dumps(target_js_data, ensure_ascii=False)
@@ -1111,6 +1358,8 @@ html_content = html_content.replace("{{TBODY_PNL}}", tbody_pnl)
 html_content = html_content.replace("{{TBODY_TRADES}}", tbody_trades)
 html_content = html_content.replace("{{SYMBOL_OPTIONS}}", symbol_select_options_html)
 html_content = html_content.replace("{{ACCOUNT_METRICS_JSON}}", account_metrics_json)
+html_content = html_content.replace("{{ALLOC_CLASS_METRICS_JSON}}", alloc_class_metrics_json)
+html_content = html_content.replace("{{ALLOC_PILLARS_HTML}}", alloc_pillars_html)
 html_content = html_content.replace("{{TARGET_JS_JSON}}", target_js_json)
 html_content = html_content.replace("{{ACCOUNT_FILTER_BUTTONS_HTML}}", account_filter_buttons_html)
 html_content = html_content.replace("{{ACCOUNT_MERGE_LABEL}}", html.escape(account_merge_label))
@@ -1150,8 +1399,37 @@ html_content = html_content.replace(
     "{{SESSION_TOKEN_CONFIGURED}}", "true" if session_token else "false"
 )
 
-out_path = os.path.abspath(args.out)
-with open(out_path, "w", encoding="utf-8") as f:
-    f.write(html_content)
+# ---------------------------------------------------------------------------
+# Secure write: the page embeds the 0600 local session credential, so the file itself must
+# never be group/world-readable (a default `open(..., "w")` inherits the umask -> 0644 and
+# leaks the token to every local user on the box).
+# ---------------------------------------------------------------------------
 
-print(f"Global dashboard successfully generated: {out_path} (Size: {os.path.getsize(out_path):,} bytes)")
+def write_private_file(path, content, mode=0o600):
+    """Atomically-ish write `content` with an exact `mode`, ignoring the umask.
+
+    `os.open(..., mode)` only applies at *creation*; a pre-existing wider file keeps its
+    old permission bits, so an unconditional `os.chmod` afterwards is required.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+    finally:
+        # Hard-enforce the exact bit pattern even when the file already existed.
+        os.chmod(path, mode)
+    actual = os.stat(path).st_mode & 0o777
+    if actual != mode:
+        raise PermissionError(
+            f"生成的看板权限位为 {oct(actual)}，但契约要求 {oct(mode)}（同机其他用户不可读）。"
+        )
+    return actual
+
+
+out_path = os.path.abspath(args.out)
+out_mode = write_private_file(out_path, html_content, 0o600)
+
+print(
+    f"Global dashboard successfully generated: {out_path} "
+    f"(Size: {os.path.getsize(out_path):,} bytes, Mode: {oct(out_mode)})"
+)

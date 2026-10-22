@@ -295,6 +295,13 @@
       background: rgba(255, 255, 255, 0.03);
     }
     
+    /* ===== "查不到 ≠ 没有": ledger-degraded alert bar ===== */
+    .degraded-banner { display:none; align-items:flex-start; gap:10px; margin:0 0 16px; padding:12px 16px; border-radius:10px; border:1px solid rgba(245,158,11,0.65); background:linear-gradient(135deg, rgba(180,83,9,0.35), rgba(120,53,15,0.28)); color:#fde68a; font-size:13px; font-weight:600; line-height:1.6; box-shadow:0 0 0 1px rgba(245,158,11,0.18), 0 6px 18px rgba(0,0,0,0.25); }
+    .degraded-banner.open { display:flex; animation: degradedPulse 2.4s ease-in-out infinite; }
+    .degraded-banner .degraded-icon { flex:0 0 auto; font-size:16px; line-height:1.4; }
+    .degraded-banner .degraded-reason { font-weight:400; color:#fcd34d; }
+    @keyframes degradedPulse { 0%,100% { border-color:rgba(245,158,11,0.65); } 55% { border-color:rgba(245,158,11,0.25); } }
+
     /* ===== Dual-mode live engine: mode badge / onboarding card / price flash ===== */
     .mode-indicator { display:inline-flex; align-items:center; gap:8px; padding:5px 12px; border-radius:9999px; font-size:12px; font-weight:600; letter-spacing:.2px; border:1px solid rgba(148,163,184,0.35); background:rgba(148,163,184,0.12); color:#cbd5e1; transition: background .35s ease, color .35s ease, border-color .35s ease; }
     .mode-indicator .mode-dot { width:8px; height:8px; border-radius:50%; background:#94a3b8; transition: background .35s ease, box-shadow .35s ease; }
@@ -344,6 +351,15 @@
         <button id="btn-live-toggle" class="btn-live ghost" type="button" onclick="toggleLiveQuotes()">⏸ 暂停行情刷新</button>
         <button id="btn-local-service" class="btn-live" type="button" onclick="toggleLocalServicePanel()">⚡ 启动本地服务</button>
       </div>
+    </div>
+
+    <!-- Ledger degraded alert: /api/summary degraded=true => "查不到 ≠ 没有", never a silent flat book -->
+    <div id="ledger-degraded-banner" class="degraded-banner" role="alert" aria-live="polite">
+      <span class="degraded-icon">⚠️</span>
+      <span>
+        <strong>警告：当前账本数据处于降级状态</strong>，页面显示的市值与持仓可能不是真实的空仓，而是账本读取异常。
+        <span id="ledger-degraded-reason" class="degraded-reason"></span>
+      </span>
     </div>
 
     <!-- Local engine onboarding (dual-mode: standalone <-> local engine, seamless swap) -->
@@ -414,48 +430,12 @@
           <div class="section-title">
             <span>🛡️</span> 全局资产配置三大支柱协同对冲体系
           </div>
-          <span class="tag tag-blue">战略反差印证资产配置价值</span>
+          <span class="tag tag-blue">按账本真实资产分类动态聚合（零硬编码）</span>
         </div>
-        <div class="alloc-grid">
-          <div class="alloc-card" style="border-top: 4px solid var(--green);">
-            <div class="alloc-head">
-              <div class="alloc-title">🌍 全球核心成长与对冲层</div>
-              <div class="alloc-ratio val-green">60.2%</div>
-            </div>
-            <div class="alloc-desc">包括纳指 ETF、标普 500、日经、法国、德国 ETF 及黄金 ETF。充分享受美股科技慢牛与央行去美元化黄金牛市。</div>
-            <div class="alloc-stats">
-              <div>持仓市值: <strong>¥75.2 万元</strong></div>
-              <div>累计净赚: <strong class="val-green">+¥21.93 万元</strong></div>
-              <div>纳指收益: <span class="val-green">+8.89 万 (+61%)</span></div>
-              <div>黄金收益: <span class="val-green">+8.57 万 (+129%)</span></div>
-            </div>
-          </div>
-          <div class="alloc-card" style="border-top: 4px solid var(--blue);">
-            <div class="alloc-head">
-              <div class="alloc-title">🧱 A 股高股息红利防守层</div>
-              <div class="alloc-ratio val-blue">12.5%</div>
-            </div>
-            <div class="alloc-desc">包括长江电力、招商银行、塔牌集团、工商银行。充裕现金分红与强劲底仓提供极佳避险缓冲。</div>
-            <div class="alloc-stats">
-              <div>持仓市值: <strong>¥13.6 万元</strong></div>
-              <div>累计浮盈: <strong class="val-green">+¥4.01 万元</strong></div>
-              <div>长江电力: <span class="val-green">+2.29 万 (+48%)</span></div>
-              <div>招商银行: <span class="val-green">+1.52 万 (+38%)</span></div>
-            </div>
-          </div>
-          <div class="alloc-card" style="border-top: 4px solid var(--purple);">
-            <div class="alloc-head">
-              <div class="alloc-title">🎯 Lot-Trader 批次消融层</div>
-              <div class="alloc-ratio val-purple">27.3%</div>
-            </div>
-            <div class="alloc-desc">涵盖恒瑞、我武、海螺、榨菜、*ST美芝、合盛、恒生互联、劲嘉、天山等标的，通过 {{TOTAL_ACTIVE_LOTS_COUNT}} 笔在场活跃批次代冲做 T 与分红回笼。</div>
-            <div class="alloc-stats">
-              <div>做T净利: <strong id="alloc-p3-tpnl" class="val-green">{{TOTAL_REALIZED_PNL_STR}}</strong></div>
-              <div>累计分红: <strong id="alloc-p3-div" class="val-green">{{TOTAL_DIVIDENDS_STR}}</strong></div>
-              <div>已提现现金: <strong id="alloc-p3-withdrawn" class="val-green">{{TOTAL_WITHDRAWN_CASH_STR}}</strong></div>
-              <div>平仓战绩: <span id="alloc-p3-trades" class="val-green">{{TOTAL_CLOSED_TRADES_COUNT}}战{{TOTAL_WIN_TRADES_COUNT}}胜 ({{TOTAL_WIN_RATE_STR}})</span></div>
-            </div>
-          </div>
+        <!-- 三大支柱由 generate_dashboard.py 依据账本实际标的与 asset_class 动态渲染，
+             模板中绝不内联任何历史数值 / 私人标的字面量。 -->
+        <div class="alloc-grid" id="alloc-grid">
+{{ALLOC_PILLARS_HTML}}
         </div>
       </div>
     </div>
@@ -524,8 +504,8 @@
         <div style="padding: 12px 16px; background: rgba(59, 130, 246, 0.08); border-left: 4px solid var(--blue); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1; line-height: 1.6;">
           <strong>指标定义说明</strong>：<br>
           • <strong>持仓盈亏率（净收益率）</strong> = (持仓市值 - 持仓成本) ÷ 持仓成本，直接反映该标的自建仓以来的净回报率；<br>
-          • <strong>本息倍数（净值）</strong> = 持仓市值 ÷ 持仓成本 = 1 + 持仓盈亏率。例如黄金 ETF 为 2.29x（本息翻倍有余），标普 500 为 1.57x；<br>
-          • <strong>双极对冲分层</strong>：13 只核心资产（全球指数、黄金、红利龙头与 *ST美芝）重仓逾 90 万元，净赚 <strong>+33.54 万元</strong>；彻底吸收 34 只 A 股赛道与港股个股的 <strong>-34.75 万元</strong> 浮亏，全盘保持在平衡线上。
+          • <strong>本息倍数（净值）</strong> = 持仓市值 ÷ 持仓成本 = 1 + 持仓盈亏率，逐标的由本页数据实时推算；<br>
+          • <strong>双极对冲分层</strong>：在场浮盈群贡献 <strong>{{TOTAL_POS_SUM_STR}}</strong>，抵消在场浮亏群 <strong>{{TOTAL_NEG_SUM_STR}}</strong>，两者均按账本实时聚合，不做任何历史数值复用。
         </div>
 
         <div class="table-container">
@@ -744,7 +724,7 @@
               <span class="tag tag-purple">代冲消融</span>
             </div>
             <div class="radar-body">
-              对于我武生物、合盛硅业、恒瑞医药等历史山顶建仓标的，<strong>坚决严禁注入任何外部新资金抄底</strong>！仅依托底仓急跌反弹进行日内/波段代冲做 T，用已实现的差价收益与现金分红逐步削减底仓全成本。
+              对于账本中 <strong>浮亏（成本倒挂）的已建仓标的</strong>，<strong>坚决严禁注入任何外部新资金抄底</strong>！仅依托底仓急跌反弹进行日内/波段代冲做 T，用已实现的差价收益与现金分红逐步削减底仓全成本。
             </div>
           </div>
           <div class="radar-card" style="border-left: 4px solid var(--blue);">
@@ -753,7 +733,7 @@
               <span class="tag tag-blue">现金复利</span>
             </div>
             <div class="radar-body">
-              长江电力与招商银行已累计贡献现金分红近 1.8 万元。高股息底仓不仅提供了坚固的净值防空洞，持续派发的现金红利更为全局提供了宝贵的逆周期流动性补给。
+              账本累计现金分红已达 <strong>{{TOTAL_DIVIDENDS_STR}}</strong>（由 dividends 表实时汇总）。高股息底仓不仅提供了坚固的净值防空洞，持续派发的现金红利更为全局提供了宝贵的逆周期流动性补给。
             </div>
           </div>
           <div class="radar-card" style="border-left: 4px solid var(--amber);">
@@ -1395,6 +1375,45 @@
   <script>
     const ACCOUNT_METRICS = {{ACCOUNT_METRICS_JSON}};
     const TARGETS_DATA = {{TARGET_JS_JSON}};
+    // Per-account, per-asset-class pillar metrics (generated from the ledger). The template
+    // only owns the card skeleton; every number/word comes from here.
+    const ALLOC_CLASS_METRICS = {{ALLOC_CLASS_METRICS_JSON}};
+
+    /** Swap the three-pillar cards to the selected account view (never stale ALL numbers). */
+    function renderAllocPillars(acc) {
+      const book = (ALLOC_CLASS_METRICS && typeof ALLOC_CLASS_METRICS === 'object') ? ALLOC_CLASS_METRICS : null;
+      if (!book) return;
+      const payload = book[acc] || book.ALL;
+      if (!payload) return;
+      Object.keys(payload).forEach(function (code) {
+        const card = payload[code];
+        if (!card) return;
+        const ratio = document.getElementById('alloc-class-' + code + '-ratio');
+        if (ratio) {
+          ratio.textContent = card.ratio_str;
+          ratio.className = 'alloc-ratio ' + card.ratio_cls;
+        }
+        const desc = document.getElementById('alloc-class-' + code + '-desc');
+        if (desc) desc.textContent = card.desc;
+        const stats = document.getElementById('alloc-class-' + code + '-stats');
+        if (stats && typeof card.stats_html === 'string') stats.innerHTML = card.stats_html;
+      });
+    }
+
+    /** "查不到 ≠ 没有": surface a degraded ledger instead of painting a silent flat book. */
+    function showDegradedBanner(reason) {
+      const bar = document.getElementById('ledger-degraded-banner');
+      if (!bar) return;
+      const slot = document.getElementById('ledger-degraded-reason');
+      if (slot) slot.textContent = reason ? String(reason) : '';
+      bar.classList.add('open');
+    }
+
+    function hideDegradedBanner() {
+      const bar = document.getElementById('ledger-degraded-banner');
+      if (!bar) return;
+      bar.classList.remove('open');
+    }
 
     function accountShortLabel(acc) {
       const m = ACCOUNT_METRICS[acc];
@@ -1421,6 +1440,8 @@
       });
       const activeBtn = document.getElementById('btn-acc-' + acc);
       if (activeBtn) activeBtn.classList.add('active');
+
+      try { renderAllocPillars(acc); } catch (e) {}
 
       const m = ACCOUNT_METRICS[acc];
       if (!m) return;
@@ -1485,15 +1506,8 @@
       const tab2HedgeSub = document.getElementById('kpi-tab2-hedge-sub');
       if (tab2HedgeSub) tab2HedgeSub.textContent = '浮盈群贡献 ' + m.pos_sum_str + ' 抵消 浮亏群 ' + m.neg_sum_str;
 
-      // 3. Update Alloc Card Pillar 3
-      const p3Tpnl = document.getElementById('alloc-p3-tpnl');
-      if (p3Tpnl) p3Tpnl.textContent = m.realized_pnl_str;
-      const p3Div = document.getElementById('alloc-p3-div');
-      if (p3Div) p3Div.textContent = m.dividends_str;
-      const p3Withdrawn = document.getElementById('alloc-p3-withdrawn');
-      if (p3Withdrawn) p3Withdrawn.textContent = m.withdrawn_str;
-      const p3Trades = document.getElementById('alloc-p3-trades');
-      if (p3Trades) p3Trades.textContent = m.closed_trades_count + '战' + m.win_trades_count + '胜 (' + m.win_rate_str + ')';
+      // 3. Allocation pillars are re-rendered from ALLOC_CLASS_METRICS (see renderAllocPillars)
+      //    — never from baked-in template literals, which no longer exist.
 
       // 4. Update Nav Buttons Text
       const navHoldings = document.getElementById('nav-btn-holdings');
@@ -2544,6 +2558,9 @@
         if (!resp || !resp.ok) return null;
         LIVE.authRejected = false;
         var data = await resp.json();
+        // "查不到 ≠ 没有": a degraded ledger must be loud, never a silent 0-value flat book.
+        if (data && data.degraded === true) showDegradedBanner(data.degraded_reason);
+        else hideDegradedBanner();
         var quotes = {};
         (data && Array.isArray(data.symbols) ? data.symbols : []).forEach(function (item) {
           var price = liveNum(item.current_price, 0);
