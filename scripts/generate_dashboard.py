@@ -1107,10 +1107,11 @@ PILLAR_CLASS_THEMES = {
     "STOCK": ("var(--blue)", "val-blue"),
     "UNCLASSIFIED": ("var(--amber)", "val-amber"),
 }
+# Extra asset classes (BOND / FUND / anything the ledger grows into) cycle through these.
+# They deliberately avoid the three named colours above so cards stay distinguishable.
 PILLAR_FALLBACK_THEMES = [
     ("var(--purple)", "val-purple"),
     ("var(--red)", "val-red"),
-    ("var(--green)", "val-green"),
 ]
 
 
