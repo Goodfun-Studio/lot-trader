@@ -202,6 +202,14 @@ trade serve --json                       # 结构化就绪行（供脚本/智能
 3. `SIGINT` / `SIGTERM` 优雅停机并释放端口；
 4. 行情拉取失败时按批次成本价兜底（`price_source: "cost_basis"`），任何字段都不会是 `NaN`。
 
+**浏览器安全门（两道，均在路由前生效）**：
+1. **Host 校验（防 DNS rebinding）**：`Host`（HTTP/2 的 `:authority`）主机部分必须精确等于 `127.0.0.1` / `localhost` / `[::1]`（可带端口），否则一律 403 `HOST_NOT_ALLOWED`。仅绑回环不够——攻击者可用 DNS rebinding 把恶意域名解析到 127.0.0.1 从而变成同源；
+2. **Origin 白名单（防 CORS 窃取）**：只放行 `Origin: null`（`file://` 打开的本地看板）与回环 origin（`http(s)://127.0.0.1[:port]`、`localhost[:port]`、`[::1][:port]`），并回显该 origin + `Vary: Origin`；其它 origin（含 `file://` 之外的任意第三方站点、`chrome-extension://`）直接 403 `ORIGIN_NOT_ALLOWED`，且**响应里不出现任何 `Access-Control-Allow-Origin`**；无 `Origin`（curl / 本机脚本）正常放行且不带 CORS 头。
+
+> 显式禁止：`Access-Control-Allow-Origin: *`。它会让任何开着 trade serve 的浏览器标签页（广告脚本、恶意页面）静默读走完整账本。
+
+> 已知残余风险：`Origin: null` 无法与沙箱化 iframe 区分（`<iframe sandbox>` 也发 `Origin: null`）。若需更严，可改用 `--token` 或只在专用浏览器 profile 里打开看板。
+
 > 注：`trade serve` 不设置 `development: false` —— 该选项会让 Bun 启用 `SO_REUSEPORT`，导致两个引擎静默共用同一端口并互相抢占请求。
 
 **部署说明（Intel 机器同样适用）**：

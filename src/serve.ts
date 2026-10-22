@@ -6,6 +6,12 @@
  *    hard-restricted to `127.0.0.1` / `localhost` / `::1`; any other `--host` value is a
  *    hard error rather than a silent external exposure.
  *  - Read-only JSON API. `serve` never mutates the ledger; writes stay on the CLI.
+ *  - Browser-hardened. Two independent gates run before any routing:
+ *      1. `Host` must name a loopback literal (blocks DNS rebinding, which would
+ *         otherwise let `attacker.example -> 127.0.0.1` read the ledger as same-origin);
+ *      2. `Origin` must be absent (curl / local script), `null` (dashboard opened from
+ *         `file://`) or a loopback origin. Anything else is a flat 403 with **no** CORS
+ *         headers, so a hostile page can never read the response.
  *  - Every handler is defensive: a broken quote feed / missing table degrades the payload
  *    (cost-basis fallback) instead of throwing a 500 or emitting NaN.
  */
@@ -700,21 +706,164 @@ export async function buildSummaryPayload(
 // HTTP layer
 // ---------------------------------------------------------------------------
 
-const CORS_HEADERS: Record<string, string> = {
-  // The dashboard is opened from file:// (Origin: null) or a different port, so a
-  // permissive read-only CORS policy is exactly what a local, loopback-only API needs.
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Max-Age": "600",
-  "Cache-Control": "no-store",
-};
+//
+// SECURITY GATE 1 — DNS-rebinding guard on the `Host` header.
+//
+// Binding to 127.0.0.1 is NOT sufficient on its own: a hostile domain that resolves to
+// 127.0.0.1 (DNS rebinding) makes the browser treat `http://evil.example/api/summary` as
+// same-origin, so the CORS layer is bypassed entirely. The only reliable discriminator is
+// the request's own `Host` (HTTP/1.1) / `:authority` (HTTP/2+) header, so every request
+// must name a loopback literal. Exact-match only: no suffix, wildcard or substring rules.
 
-function jsonResponse(body: unknown, status = 200): Response {
+/** Loopback names accepted in the `Host` header (bracketed and bare IPv6 forms). */
+export const ALLOWED_HOST_HEADER_NAMES = [
+  "127.0.0.1",
+  "localhost",
+  "[::1]",
+  "::1",
+  "[0:0:0:0:0:0:0:1]",
+  "0:0:0:0:0:0:0:1",
+] as const;
+
+/** Origins may only point back at the loopback interface (same set as the Host guard). */
+export const ALLOWED_ORIGIN_HOSTS = ALLOWED_HOST_HEADER_NAMES;
+
+const ALLOWED_HOST_HEADER_SET: ReadonlySet<string> = new Set(ALLOWED_HOST_HEADER_NAMES);
+
+/** Split `host[:port]`, tolerating the bracket form `[::1]:8080`. Null when malformed. */
+function splitHostAndPort(raw: string): { host: string; port: string | null } | null {
+  // A single trailing dot is DNS-equivalent (`localhost.` === `localhost`).
+  const value = raw.trim().toLowerCase().replace(/\.$/, "");
+  if (!value) return null;
+
+  if (value.startsWith("[")) {
+    const close = value.indexOf("]");
+    if (close < 0) return null;
+    const bracketHost = value.slice(0, close + 1);
+    const rest = value.slice(close + 1);
+    if (!rest) return { host: bracketHost, port: null };
+    if (!rest.startsWith(":")) return null;
+    return { host: bracketHost, port: rest.slice(1) };
+  }
+
+  const firstColon = value.indexOf(":");
+  if (firstColon < 0) return { host: value, port: null };
+  // Two or more colons => a bare IPv6 literal, which can never carry a port unbracketed.
+  if (value.indexOf(":", firstColon + 1) >= 0) return { host: value, port: null };
+  return { host: value.slice(0, firstColon), port: value.slice(firstColon + 1) };
+}
+
+/** True only for loopback `Host` / `:authority` values (an optional numeric port is allowed). */
+export function isAllowedHostHeader(raw: string | null | undefined): boolean {
+  if (raw == null) return false;
+  const parsed = splitHostAndPort(raw);
+  if (!parsed) return false;
+  if (parsed.port !== null && !/^\d{1,5}$/.test(parsed.port)) return false;
+  return ALLOWED_HOST_HEADER_SET.has(parsed.host);
+}
+
+//
+// SECURITY GATE 2 — CORS allow-list on the `Origin` header.
+//
+// `Access-Control-Allow-Origin: *` used to let ANY web page the owner happened to have
+// open read the whole ledger off 127.0.0.1:8080. Now the only readable origins are the
+// ones a *local* dashboard can produce:
+//   * `null`            — HTML opened from `file://`
+//   * http(s)://127.0.0.1[:port] | localhost[:port] | [::1][:port]
+// Everything else gets 403 and, critically, no `Access-Control-Allow-Origin` at all.
+
+/** Canonical origin to echo back, or null when the origin is not allow-listed. */
+export function resolveAllowedOrigin(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const value = raw.trim();
+  if (!value) return null;
+  // `file://` documents send the literal string `null` (opaque origin).
+  if (value.toLowerCase() === "null") return "null";
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  if (parsed.pathname !== "/" && parsed.pathname !== "") return null;
+  if (!ALLOWED_HOST_HEADER_SET.has(parsed.hostname.toLowerCase())) return null;
+  return value;
+}
+
+/** True only for the origins a local dashboard (or a loopback dev server) can produce. */
+export function isAllowedOrigin(raw: string | null | undefined): boolean {
+  return raw != null && resolveAllowedOrigin(raw) !== null;
+}
+
+/** Sentinel returned for a request that carries no `Origin` header at all (curl, scripts). */
+export const NO_ORIGIN = Symbol("no-origin");
+
+export type OriginVerdict = string | null | typeof NO_ORIGIN;
+
+/**
+ * Gate 2 verdict:
+ *  - `NO_ORIGIN`  -> no `Origin` header; allow, emit no CORS origin header.
+ *  - `string`     -> allow-listed; echo this exact value back.
+ *  - `null`       -> rejected; the caller must 403 without any CORS origin header.
+ */
+export function checkRequestOrigin(raw: string | null): OriginVerdict {
+  if (raw == null) return NO_ORIGIN;
+  const echo = resolveAllowedOrigin(raw);
+  return echo === null ? null : echo;
+}
+
+/** CORS headers for an already-validated origin. `NO_ORIGIN` emits no origin header. */
+function corsHeaders(origin: OriginVerdict): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin",
+    "Cache-Control": "no-store",
+  };
+  if (typeof origin === "string") headers["Access-Control-Allow-Origin"] = origin;
+  return headers;
+}
+
+function jsonResponse(body: unknown, status = 200, origin: OriginVerdict = NO_ORIGIN): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders(origin) },
   });
+}
+
+/**
+ * Flat 403 for a blocked request. Deliberately carries **no** `Access-Control-Allow-Origin` and
+ * no ledger field of any kind: a hostile page must not be able to read even the rejection.
+ */
+export function securityBlockResponse(kind: "host" | "origin"): Response {
+  const message =
+    kind === "host"
+      ? "安全拦截：Host 请求头不是本地回环地址（仅允许 127.0.0.1 / localhost / [::1]），已拒绝处理。"
+      : "安全拦截：请求来源（Origin）不在本地白名单内（仅允许本地看板的 Origin: null 与 http://127.0.0.1 / http://localhost / http://[::1]），已拒绝处理。";
+  return new Response(
+    JSON.stringify(
+      {
+        status: "error",
+        code: kind === "host" ? "HOST_NOT_ALLOWED" : "ORIGIN_NOT_ALLOWED",
+        message,
+      },
+      null,
+      2,
+    ),
+    {
+      status: 403,
+      // No CORS origin on purpose; Vary keeps caches from mixing verdicts.
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        Vary: "Origin",
+      },
+    },
+  );
 }
 
 export interface RuntimeContext {
@@ -733,12 +882,24 @@ export function createRequestHandler(
   ctx: RuntimeContext,
 ): (req: Request) => Promise<Response> {
   return async function handle(req: Request): Promise<Response> {
+    // --- Security gates: both run before routing, methods and business logic ---
+    // 1) DNS rebinding: the request must be addressed to a loopback literal.
+    const hostHeader = req.headers.get("host");
+    if (!isAllowedHostHeader(hostHeader)) {
+      return securityBlockResponse("host");
+    }
+    // 2) CORS: only a local dashboard origin (or no origin at all) may read the ledger.
+    const origin = checkRequestOrigin(req.headers.get("origin"));
+    if (origin === null) {
+      return securityBlockResponse("origin");
+    }
+
     try {
       if (req.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: CORS_HEADERS });
+        return new Response(null, { status: 204, headers: corsHeaders(origin) });
       }
       if (req.method !== "GET" && req.method !== "HEAD") {
-        return jsonResponse({ status: "error", message: `仅支持 GET 请求 (收到 ${req.method})` }, 405);
+        return jsonResponse({ status: "error", message: `仅支持 GET 请求 (收到 ${req.method})` }, 405, origin);
       }
 
       const url = new URL(req.url);
@@ -746,14 +907,18 @@ export function createRequestHandler(
       const route = path.toLowerCase();
 
       if (route === "/" || route === API_PREFIX) {
-        return jsonResponse({
-          status: "ok",
-          service: "lot-trader-local-engine",
-          version: TOOL_VERSION,
-          host: ctx.host,
-          port: ctx.port,
-          endpoints: ["GET /api/health", "GET /api/summary", "GET /api/lots?symbol=&account=&status="],
-        });
+        return jsonResponse(
+          {
+            status: "ok",
+            service: "lot-trader-local-engine",
+            version: TOOL_VERSION,
+            host: ctx.host,
+            port: ctx.port,
+            endpoints: ["GET /api/health", "GET /api/summary", "GET /api/lots?symbol=&account=&status="],
+          },
+          200,
+          origin,
+        );
       }
 
       if (route === `${API_PREFIX}/health`) {
@@ -767,7 +932,7 @@ export function createRequestHandler(
           uptime_seconds: Math.max(0, Math.round((Date.now() - ctx.startedAt) / 1000)),
           endpoints: ["/api/health", "/api/summary", "/api/lots"],
         };
-        return jsonResponse(health);
+        return jsonResponse(health, 200, origin);
       }
 
       if (route === `${API_PREFIX}/summary`) {
@@ -776,7 +941,7 @@ export function createRequestHandler(
           priceBook: ctx.priceBook,
           fullPositionCap: ctx.fullPositionCap,
         });
-        return jsonResponse(summary);
+        return jsonResponse(summary, 200, origin);
       }
 
       if (route === `${API_PREFIX}/lots`) {
@@ -787,7 +952,7 @@ export function createRequestHandler(
           account: url.searchParams.get("account"),
           status: url.searchParams.get("status"),
         });
-        return jsonResponse(payload);
+        return jsonResponse(payload, 200, origin);
       }
 
       return jsonResponse(
@@ -797,12 +962,13 @@ export function createRequestHandler(
           endpoints: ["GET /api/health", "GET /api/summary", "GET /api/lots?symbol=&account=&status="],
         },
         404,
+        origin,
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       // Read-only service: a bad filter is a client error, everything else is ours.
       const status = /非法批次状态|非法端口/.test(message) ? 400 : 500;
-      return jsonResponse({ status: "error", message, path: new URL(req.url).pathname }, status);
+      return jsonResponse({ status: "error", message, path: new URL(req.url).pathname }, status, origin);
     }
   };
 }

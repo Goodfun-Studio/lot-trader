@@ -22,7 +22,10 @@ import {
   buildLotsPayload,
   buildSummaryPayload,
   formatPortConflictError,
+  isAllowedHostHeader,
+  isAllowedOrigin,
   normalizeAccountKey,
+  resolveAllowedOrigin,
   resolveFullPositionCap,
   resolveServeDbPath,
   resolveServeHost,
@@ -812,7 +815,9 @@ describe("trade serve: local HTTP engine contract", () => {
 
     const preflight = await fetch(`${srv.url}/api/health`, { method: "OPTIONS" });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+    // No Origin header => no CORS origin is minted. The old `*` wildcard is gone for good.
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("vary")).toContain("Origin");
   });
 
   it("serves an empty ledger without throwing", async () => {
@@ -832,6 +837,261 @@ describe("trade serve: local HTTP engine contract", () => {
     expect(lots.total).toBe(0);
     expect(lots.lots).toEqual([]);
   });
+});
+
+// ===========================================================================
+// 1b. Network security guards: CORS allow-list + DNS-rebinding Host guard
+//
+// Both gates run before routing. Each test below is deliberately negative-first:
+// a hostile `Origin` / `Host` must be a flat 403 with NO `Access-Control-Allow-Origin`
+// and no ledger field, while every legitimate local client (file:// dashboard, loopback
+// dev server, plain curl) must keep working — that is the anti-false-positive half.
+// ===========================================================================
+
+describe("trade serve: network security guards (CORS allow-list + DNS rebinding)", () => {
+  async function bootSecured(tag: string) {
+    const dbPath = trackDir(tempDbPath(tag));
+    seedLedger(dbPath);
+    const srv = await startServe({
+      port: 0,
+      dbPath,
+      quoteProvider: new QuoteProvider({ "518880.SH": 6.6, "159934.SZ": 7.35 }),
+    });
+    openServers.push(srv);
+    return { srv, dbPath };
+  }
+
+  it("unit: Host allow-list is exact-match loopback only (no suffix / LAN / malformed host)", () => {
+    for (const allowed of [
+      "127.0.0.1",
+      "127.0.0.1:8080",
+      "localhost",
+      "localhost:8080",
+      "LOCALHOST:3000",
+      "localhost.",
+      "[::1]",
+      "[::1]:8080",
+      "::1",
+    ]) {
+      expect(isAllowedHostHeader(allowed), `Host ${allowed} must be allowed`).toBe(true);
+    }
+
+    for (const blocked of [
+      null,
+      undefined,
+      "",
+      "   ",
+      "attacker.example",
+      "attacker.example:8080",
+      "127.0.0.1.attacker.example",
+      "127.0.0.1.attacker.example:8080",
+      "localhost.attacker.example",
+      "attacker-127.0.0.1",
+      "10.0.0.1:8080",
+      "192.168.1.5",
+      "0.0.0.0",
+      "1.2.3.4:8080",
+      "127.0.0.1:abc",
+      "127.0.0.1:",
+      "[::1",
+      "[::1]evil",
+    ]) {
+      expect(isAllowedHostHeader(blocked as any), `Host ${String(blocked)} must be rejected`).toBe(false);
+    }
+  });
+
+  it("unit: Origin allow-list keeps file:// (null) + loopback, rejects every foreign origin", () => {
+    for (const allowed of [
+      "null",
+      "NULL",
+      "http://127.0.0.1:8080",
+      "http://127.0.0.1",
+      "http://localhost:3000",
+      "https://127.0.0.1:8443",
+      "http://[::1]:8080",
+    ]) {
+      expect(isAllowedOrigin(allowed), `Origin ${allowed} must be allowed`).toBe(true);
+    }
+    // `file://` is echoed as the literal opaque origin, never as the original casing.
+    expect(resolveAllowedOrigin("NULL")).toBe("null");
+    expect(resolveAllowedOrigin("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+
+    for (const blocked of [
+      null,
+      undefined,
+      "",
+      "  ",
+      "https://attacker.example",
+      "http://attacker.example:8080",
+      "http://127.0.0.1.attacker.example:8080",
+      "http://localhost.attacker.example",
+      "http://evil.example/?redirect=127.0.0.1",
+      "http://127.0.0.1:8080/path",
+      "http://user:pass@127.0.0.1:8080",
+      "file:///Users/ivywu/ledger.html",
+      "chrome-extension://abcdefghijklmnop",
+      "http://10.0.0.1:8080",
+      "*",
+    ]) {
+      expect(isAllowedOrigin(blocked as any), `Origin ${String(blocked)} must be rejected`).toBe(false);
+    }
+  });
+
+  it("blocks a hostile Origin with 403 and emits no CORS header at all", async () => {
+    const { srv, dbPath } = await bootSecured("cors-evil");
+
+    for (const evil of [
+      "https://attacker.example",
+      "http://attacker.example:8080",
+      "http://127.0.0.1.attacker.example:8080",
+      "chrome-extension://abcdefghijklmnop",
+    ]) {
+      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Origin: evil } });
+      expect(resp.status, `Origin ${evil} must be blocked`).toBe(403);
+      expect(resp.headers.get("access-control-allow-origin")).toBeNull();
+
+      const body = await resp.text();
+      expect(body).toContain("ORIGIN_NOT_ALLOWED");
+      // Not even a rejection may leak ledger content.
+      for (const secret of ["total_cost", "full_position_cap", "518880.SH", "LOT-GOLD", "realized_pnl", dbPath]) {
+        expect(body.includes(secret), `403 body must not leak ${secret}`).toBe(false);
+      }
+
+      // The preflight path is gated identically.
+      const preflight = await fetch(`${srv.url}/api/summary`, {
+        method: "OPTIONS",
+        headers: { Origin: evil, "Access-Control-Request-Method": "GET" },
+      });
+      expect(preflight.status).toBe(403);
+      expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    }
+  });
+
+  it("blocks DNS-rebinding Host headers with 403 before any business logic runs", async () => {
+    const { srv } = await bootSecured("rebind-evil");
+
+    for (const evilHost of [
+      "attacker.example",
+      "attacker.example:8080",
+      "127.0.0.1.attacker.example:8080",
+      "localhost.attacker.example",
+      "10.0.0.1:8080",
+    ]) {
+      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Host: evilHost } });
+      expect(resp.status, `Host ${evilHost} must be blocked`).toBe(403);
+      expect(resp.headers.get("access-control-allow-origin")).toBeNull();
+
+      const body = await resp.text();
+      expect(body).toContain("HOST_NOT_ALLOWED");
+      expect(body).not.toContain("total_cost");
+      expect(body).not.toContain("518880.SH");
+    }
+
+    // Rebinding + a forged friendly Origin is still blocked (Host gate runs first).
+    const both = await fetch(`${srv.url}/api/summary`, {
+      headers: { Host: "attacker.example", Origin: `http://127.0.0.1:${srv.port}` },
+    });
+    expect(both.status).toBe(403);
+    expect(both.headers.get("access-control-allow-origin")).toBeNull();
+
+    // ...and so is a rebinding Host on the preflight path.
+    const preflight = await fetch(`${srv.url}/api/health`, {
+      method: "OPTIONS",
+      headers: { Host: "attacker.example" },
+    });
+    expect(preflight.status).toBe(403);
+  });
+
+  it("still serves the file:// dashboard (Origin: null) and loopback origins (anti-false-positive)", async () => {
+    const { srv } = await bootSecured("cors-ok");
+
+    const cases: Array<{ sent: string; echoed: string }> = [
+      { sent: "null", echoed: "null" },
+      { sent: `http://127.0.0.1:${srv.port}`, echoed: `http://127.0.0.1:${srv.port}` },
+      { sent: "http://localhost:3000", echoed: "http://localhost:3000" },
+      { sent: "http://[::1]:8080", echoed: "http://[::1]:8080" },
+      { sent: "https://127.0.0.1:8443", echoed: "https://127.0.0.1:8443" },
+    ];
+
+    for (const { sent, echoed } of cases) {
+      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Origin: sent } });
+      expect(resp.status, `Origin ${sent} must be served`).toBe(200);
+      expect(resp.headers.get("access-control-allow-origin")).toBe(echoed);
+      expect(resp.headers.get("access-control-allow-origin")).not.toBe("*");
+      expect(resp.headers.get("vary")).toContain("Origin");
+
+      const body = (await resp.json()) as Record<string, any>;
+      expect(body.status).toBe("ok");
+      expect(body.portfolio.total_active_lots).toBe(3);
+    }
+
+    // Preflight from the file:// dashboard must still succeed and echo `null`.
+    const preflight = await fetch(`${srv.url}/api/health`, {
+      method: "OPTIONS",
+      headers: { Origin: "null", "Access-Control-Request-Method": "GET" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("null");
+  });
+
+  it("accepts loopback Host variants and Origin-less CLI clients with no CORS leakage", async () => {
+    const { srv } = await bootSecured("host-ok");
+
+    for (const okHost of [`127.0.0.1:${srv.port}`, `localhost:${srv.port}`, `[::1]:${srv.port}`, "127.0.0.1"]) {
+      const resp = await fetch(`${srv.url}/api/health`, { headers: { Host: okHost } });
+      expect(resp.status, `Host ${okHost} must be served`).toBe(200);
+      const body = (await resp.json()) as Record<string, any>;
+      expect(body.status).toBe("ok");
+      // No Origin sent => read-only, no CORS origin header is minted.
+      expect(resp.headers.get("access-control-allow-origin")).toBeNull();
+    }
+
+    // Plain curl-style request: no Origin header at all.
+    const plain = await fetch(`${srv.url}/api/summary`);
+    expect(plain.status).toBe(200);
+    expect(plain.headers.get("access-control-allow-origin")).toBeNull();
+    expect((await plain.json()) as Record<string, any>).toMatchObject({ status: "ok" });
+  });
+
+  it("replays the owner's exact curl attacks: hostile Origin / Host => 403, plain curl => 200", async () => {
+    const { srv } = await bootSecured("curl-live");
+
+    const curl = async (args: string[]) => {
+      const proc = Bun.spawn(["curl", "-sS", "--max-time", "8", "-i", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      const err = await new Response(proc.stderr).text();
+      const exit = await proc.exited;
+      return { out, err, exit };
+    };
+
+    const statusOf = (out: string): number => Number((out.split("\r\n")[0] || "").split(" ")[1]);
+
+    const hostileOrigin = await curl(["-H", "Origin: https://attacker.example", `${srv.url}/api/summary`]);
+    expect(hostileOrigin.exit).toBe(0);
+    expect(statusOf(hostileOrigin.out)).toBe(403);
+    expect(hostileOrigin.out.toLowerCase()).not.toContain("access-control-allow-origin");
+    expect(hostileOrigin.out).not.toContain("518880.SH");
+
+    const rebinding = await curl(["-H", "Host: attacker.example", `${srv.url}/api/summary`]);
+    expect(rebinding.exit).toBe(0);
+    expect(statusOf(rebinding.out)).toBe(403);
+    expect(rebinding.out).toContain("HOST_NOT_ALLOWED");
+    expect(rebinding.out).not.toContain("total_cost");
+
+    const plain = await curl([`${srv.url}/api/health`]);
+    expect(plain.exit).toBe(0);
+    expect(statusOf(plain.out)).toBe(200);
+    expect(plain.out).toContain("\"status\": \"ok\"");
+    expect(plain.out.toLowerCase()).not.toContain("access-control-allow-origin");
+
+    // The file:// dashboard path is the one legitimate cross-origin reader.
+    const dashboard = await curl(["-H", "Origin: null", `${srv.url}/api/health`]);
+    expect(statusOf(dashboard.out)).toBe(200);
+    expect(dashboard.out.toLowerCase()).toContain("access-control-allow-origin: null");
+  }, 30_000);
 });
 
 // ===========================================================================
