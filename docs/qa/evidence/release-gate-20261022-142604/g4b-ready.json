@@ -1,0 +1,2 @@
+{"code":0,"msg":"success","data":{"url":"http://127.0.0.1:8907","host":"127.0.0.1","port":8907,"db_path":"/tmp/lot-trader-qa-20261022-141230/cap.db","version":"0.1.0","auth":"bearer","token_file":"/tmp/lot-trader-qa-20261022-141230/token/link.token","token_source":"generated","token_ephemeral":true}}
+{"code":0,"msg":"stopped","data":{"signal":"SIGTERM"}}

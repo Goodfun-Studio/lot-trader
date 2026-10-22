@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:20:44.361Z",
+  "data": {
+    "lot_id": "LOT-20261022-004",
+    "account_id": "S",
+    "trade_id": "TRD-20261022142044-7XEIK5",
+    "action": "SELL_REGULAR",
+    "close_price": 2.633,
+    "close_quantity": 9000,
+    "fee": 4.74,
+    "realized_pnl": -7958.04,
+    "reason": "深跌-(25%)止损复验，批次未冻结可正常平仓",
+    "buy_reason": "DEEP fixture",
+    "close_reason": "深跌-(25%)止损复验，批次未冻结可正常平仓",
+    "remaining_quantity": 0,
+    "lot_status": "CLOSED",
+    "is_day_trading": false,
+    "substituted_core_lot_id": null
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:19:20.497Z",
+  "data": {
+    "lot_id": "LOT-20261022-002",
+    "account_id": "P2",
+    "parent_lot_id": "LOT-20261022-001",
+    "symbol": "600519.SH",
+    "buy_time": "2026-10-22T06:19:20.496Z",
+    "buy_price": 1500,
+    "buy_quantity": 100,
+    "cost_basis_unit": 1500.3,
+    "buy_fee": 30,
+    "status": "ACTIVE",
+    "pyramid_level": 1,
+    "can_sell_now": false,
+    "buy_reason": null
+  }
+}

@@ -1,0 +1,19 @@
+usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend} ...
+
+Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
+
+positional arguments:
+  {lot,account,position,scan,stats,physics,dashboard,serve,dividend}  Available subcommands
+    lot             Lot operations (buy, add, list, close, edit)
+    account         Broker account registry (add, list)
+    position        Position / Holding aggregated view
+    scan            Scan active lots for signals (including trailing stop)
+    stats           Performance statistics with multi-dimensional attribution
+    physics         Physics momentum radar analysis (velocity, acceleration, force, damping)
+    dashboard       Render the global interactive HTML dashboard
+    serve           Start the local read-only HTTP engine (loopback only)
+    dividend        Cash dividend management (add, list)
+
+options:
+  -h, --help        show this help message and exit
+

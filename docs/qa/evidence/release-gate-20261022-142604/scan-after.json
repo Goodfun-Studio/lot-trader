@@ -1,0 +1,68 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:20:20.505Z",
+  "data": {
+    "total_signals": 3,
+    "signals": [
+      {
+        "signal_id": "SIG-20261022142020--001",
+        "signal_type": "TRAILING_STOP_ALERT",
+        "lot_id": "LOT-20261022-001",
+        "account_id": "S",
+        "symbol": "600519.SH",
+        "trigger_return_rate": 0.1689,
+        "trigger_price": 1312.21,
+        "suggested_action": "TRAILING_STOP_CLOSE",
+        "payload": {
+          "reason": "âdynamic trailing stop triggered: peak 1375.6200, pullback 4.61%, return +16.89%",
+          "settlement_mode": "STATUTORY_T1",
+          "peak_price": 1375.62,
+          "pullback_rate": 0.04609557872086758,
+          "est_profit": 18946.72,
+          "remaining_qty": 100,
+          "suggested_qty": 100
+        }
+      },
+      {
+        "signal_id": "SIG-20261022142020--003",
+        "signal_type": "T1_LOCKED_ALERT",
+        "lot_id": "LOT-20261022-003",
+        "account_id": "S",
+        "symbol": "510300.SH",
+        "trigger_return_rate": 0.1974,
+        "trigger_price": 4.123,
+        "suggested_action": "HOLD_UNTIL_NEXT_TRADING_DAY",
+        "payload": {
+          "reason": "Today bought profitable (+19.74%), but available core insufficient (0 shares), T+1 locked",
+          "settlement_mode": "STATUTORY_T1",
+          "is_day_trading_eligible": false,
+          "can_sell_now": false,
+          "available_core_qty": 0,
+          "est_profit": 4076.85,
+          "remaining_qty": 6000,
+          "suggested_qty": 0
+        }
+      },
+      {
+        "signal_id": "SIG-20261022142020--004",
+        "signal_type": "DEEP_VALUE_ALERT",
+        "lot_id": "LOT-20261022-004",
+        "account_id": "S",
+        "symbol": "159915.SZ",
+        "trigger_return_rate": -0.2514,
+        "trigger_price": 2.633,
+        "suggested_action": "DEEP_VALUE_ACCUMULATE_ON_STABILIZE",
+        "payload": {
+          "reason": "Deep value zone reached (-25.14%), accumulate on stabilization",
+          "status_preserved": "ACTIVE",
+          "is_frozen": false,
+          "current_return_rate": -0.2514,
+          "deep_ladder_target": "-30%",
+          "suggested_base_amount": 10000,
+          "pyramid_level_next": 1
+        }
+      }
+    ]
+  }
+}

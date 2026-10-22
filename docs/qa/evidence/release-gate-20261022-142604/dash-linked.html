@@ -1,0 +1,2797 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lot-Trader 全局投资组合全景透视看板</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --card-sub: #162032;
+      --card-border: #1f2937;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --green: #10b981;
+      --green-bg: rgba(16, 185, 129, 0.12);
+      --red: #ef4444;
+      --red-bg: rgba(239, 68, 68, 0.12);
+      --blue: #3b82f6;
+      --blue-bg: rgba(59, 130, 246, 0.12);
+      --purple: #8b5cf6;
+      --purple-bg: rgba(139, 92, 246, 0.15);
+      --amber: #f59e0b;
+      --amber-bg: rgba(245, 158, 11, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+    body { background-color: var(--bg); color: var(--text-main); padding: 28px 20px; line-height: 1.5; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    
+    /* Header */
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 1px solid var(--card-border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+    .header-title h1 { font-size: 24px; font-weight: 700; color: #fff; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .header-title p { font-size: 13px; color: var(--text-muted); }
+    .badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 500; background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(59, 130, 246, 0.3); }
+    
+    /* Navigation Bar */
+    .nav-bar { display: flex; gap: 10px; margin-bottom: 24px; border-bottom: 1px solid var(--card-border); padding-bottom: 12px; overflow-x: auto; }
+    .nav-btn { background: transparent; border: 1px solid var(--card-border); color: var(--text-muted); padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .nav-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+    .nav-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+    
+    /* KPI Grid */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .kpi-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; padding: 16px; }
+    .kpi-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+    .kpi-value { font-size: 22px; font-weight: 700; color: #fff; }
+    .kpi-sub { font-size: 11px; margin-top: 4px; color: var(--text-muted); }
+    
+    /* Values */
+    .val-green { color: var(--green) !important; }
+    .val-red { color: var(--red) !important; }
+    .val-blue { color: var(--blue) !important; }
+    .val-amber { color: var(--amber) !important; }
+    
+    /* Section Cards */
+    .section-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+    .section-title { font-size: 16px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
+    
+    /* Subview Switcher */
+    .subview-toggle-bar { display: flex; gap: 8px; background: rgba(17, 24, 39, 0.8); padding: 4px; border-radius: 8px; border: 1px solid var(--card-border); }
+    .subview-btn { background: transparent; border: none; color: var(--text-muted); font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .subview-btn.active { background: var(--blue); color: #fff; }
+    .subview-btn:hover:not(.active) { color: var(--text-main); background: rgba(255, 255, 255, 0.05); }
+    .filter-btn { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); color: var(--text-muted); font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .filter-select { background: #162032; border: 1px solid #374151; color: #f9fafb; font-size: 13px; padding: 6px 12px; border-radius: 6px; outline: none; cursor: pointer; }
+    
+    /* Table */
+    .table-container { overflow-x: auto; max-height: 600px; overflow-y: auto; border-radius: 8px; border: 1px solid var(--card-border); }
+    .data-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+    .data-table th { background: var(--card-sub); color: var(--text-muted); padding: 10px 12px; font-weight: 600; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--card-border); }
+    .data-table td { padding: 10px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: #e5e7eb; }
+    .data-table tr:hover td { background: rgba(255, 255, 255, 0.03); }
+    
+    /* Tags */
+    .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .tag-green { background: var(--green-bg); color: var(--green); }
+    .tag-red { background: var(--red-bg); color: var(--red); }
+    .tag-blue { background: var(--blue-bg); color: var(--blue); }
+    .tag-purple { background: var(--purple-bg); color: var(--purple); }
+    .tag-amber { background: var(--amber-bg); color: var(--amber); }
+    
+    /* Targets Grid */
+    .target-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+    .target-card { background: var(--card-sub); border: 1px solid var(--card-border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+    .target-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6); border-color: rgba(59, 130, 246, 0.7) !important; }
+    .target-card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .target-card-name { font-size: 15px; font-weight: 600; color: #fff; }
+    .target-card-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; color: var(--text-muted); margin-bottom: 12px; background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 6px; }
+    .target-card-hint { font-size: 11px; color: #60a5fa; margin-top: 10px; display: flex; align-items: center; justify-content: flex-end; font-weight: 500; }
+    
+    /* Radar Grid */
+    .radar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    .radar-card { background: var(--card-sub); border: 1px solid var(--card-border); border-radius: 10px; padding: 16px; }
+    .radar-head { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+    .radar-body { font-size: 12px; color: #cbd5e1; line-height: 1.6; }
+    
+    /* Allocation Cards */
+    .alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    /* Physics Radar Card Elements */
+    .target-card-physics { background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 12px; }
+    .physics-mini-bars { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .mini-bar-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+    .mini-bar-title { color: #94a3b8; font-size: 11px; white-space: nowrap; width: 105px; }
+    .mini-bar-track { flex: 1; height: 6px; background: rgba(51, 65, 85, 0.6); border-radius: 3px; overflow: hidden; }
+    .mini-bar-fill { height: 100%; border-radius: 3px; }
+    .fill-green { background: #10b981; }
+    .fill-blue { background: #38bdf8; }
+    .fill-amber { background: #f59e0b; }
+    .fill-red { background: #ef4444; }
+    .fill-purple { background: #a855f7; }
+    .physics-mini-metrics { display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; background: rgba(0, 0, 0, 0.25); padding: 4px 8px; border-radius: 4px; }
+
+    .alloc-card { background: var(--card-sub); border: 1px solid var(--card-border); border-radius: 10px; padding: 16px; }
+    .alloc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .alloc-title { font-size: 14px; font-weight: 600; color: #fff; }
+    .alloc-ratio { font-size: 18px; font-weight: 700; }
+    .alloc-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+    .alloc-stats { font-size: 12px; color: #cbd5e1; background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    /* Modal Overlay & Card Details Drawer */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(6px);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-content {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 14px;
+      width: 100%;
+      max-width: 1100px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
+      animation: modalFadeIn 0.2s ease-out;
+      overflow: hidden;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .modal-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #162032;
+    }
+    .modal-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-close-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid #374151;
+      color: #9ca3af;
+      font-size: 18px;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .modal-close-btn:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+      border-color: #ef4444;
+    }
+    .modal-summary-strip {
+      padding: 14px 24px;
+      background: rgba(0, 0, 0, 0.25);
+      border-bottom: 1px solid #1f2937;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+    }
+    .modal-stat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .modal-stat-label {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .modal-stat-val {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .modal-toolbar {
+      padding: 12px 24px;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: #111827;
+    }
+    .modal-filter-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .modal-filter-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #374151;
+      color: #9ca3af;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .modal-filter-btn.active {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+    .modal-sort-btn {
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      color: #c4b5fd;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    .modal-sort-btn:hover {
+      background: rgba(139, 92, 246, 0.3);
+      color: #fff;
+    }
+    .modal-body {
+      padding: 0;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 12px;
+    }
+    .modal-table th {
+      background: #162032;
+      color: #9ca3af;
+      padding: 10px 14px;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid #1f2937;
+    }
+    .modal-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: #e5e7eb;
+    }
+    .modal-table tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    
+    /* ===== Dual-mode live engine: mode badge / onboarding card / price flash ===== */
+    .mode-indicator { display:inline-flex; align-items:center; gap:8px; padding:5px 12px; border-radius:9999px; font-size:12px; font-weight:600; letter-spacing:.2px; border:1px solid rgba(148,163,184,0.35); background:rgba(148,163,184,0.12); color:#cbd5e1; transition: background .35s ease, color .35s ease, border-color .35s ease; }
+    .mode-indicator .mode-dot { width:8px; height:8px; border-radius:50%; background:#94a3b8; transition: background .35s ease, box-shadow .35s ease; }
+    .mode-indicator.standalone .mode-dot { background:#64748b; }
+    .mode-indicator.local { background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.45); color:#34d399; }
+    .mode-indicator.local .mode-dot { background:#10b981; animation: modeBreathGreen 2s ease-in-out infinite; }
+    @keyframes modeBreathGreen { 0%,100% { box-shadow:0 0 0 0 rgba(16,185,129,0.65); } 55% { box-shadow:0 0 0 6px rgba(16,185,129,0); } }
+    .btn-live { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid rgba(59,130,246,0.45); background:rgba(59,130,246,0.15); color:#93c5fd; transition:all .2s ease; }
+    .btn-live:hover { background:rgba(59,130,246,0.28); color:#fff; }
+    .btn-live.ghost { border-color:rgba(148,163,184,0.35); background:rgba(148,163,184,0.10); color:#cbd5e1; }
+    .btn-live.ghost:hover { background:rgba(148,163,184,0.20); color:#fff; }
+    .btn-live.paused { border-color:rgba(245,158,11,0.5); background:rgba(245,158,11,0.15); color:#fbbf24; }
+    .live-status { font-size:11px; color:var(--text-muted); font-variant-numeric: tabular-nums; }
+    .live-panel { display:none; margin:-8px 0 20px; padding:16px 18px; border-radius:12px; border:1px solid rgba(59,130,246,0.35); background:linear-gradient(135deg, rgba(30,58,138,0.28), rgba(17,24,39,0.92)); }
+    .live-panel.open { display:block; animation: modalFadeIn .18s ease-out; }
+    .live-panel-title { font-size:14px; font-weight:700; color:#fff; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+    .live-panel-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); gap:8px; font-size:12px; color:#cbd5e1; margin:0 0 12px; padding:0; }
+    .live-panel-grid li { list-style:none; padding-left:18px; position:relative; line-height:1.6; }
+    .live-panel-grid li:before { content:"✓"; position:absolute; left:0; color:#34d399; font-weight:700; }
+    .cmd-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .cmd-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; background:rgba(2,6,23,0.85); border:1px solid rgba(148,163,184,0.3); color:#a7f3d0; padding:8px 12px; border-radius:8px; }
+    .copy-feedback { font-size:11px; color:#34d399; min-width:96px; }
+    /* price change breathing highlight: 1s fade-back, no layout shift */
+    .flash-up { animation: priceFlashUp 1s ease-out; }
+    .flash-down { animation: priceFlashDown 1s ease-out; }
+    @keyframes priceFlashUp { 0% { background-color: rgba(16,185,129,0.45); color:#6ee7b7; } 100% { background-color: transparent; } }
+    @keyframes priceFlashDown { 0% { background-color: rgba(239,68,68,0.45); color:#fca5a5; } 100% { background-color: transparent; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    
+    <!-- Header -->
+    <div class="header">
+      <div class="header-title">
+        <h1>📊 Lot-Trader 全局投资组合全景透视看板</h1>
+        <p>个人投资顾问 • 联动样本账户 (LINK) • 支持多账户独立核算与底仓物理隔离</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);">🌐 联动样本账户 (LINK)</span>
+        <span class="badge">已穿透 1 只在场标的 • 1 笔活跃批次 • 0 笔平仓战绩</span>
+        <span id="mode-indicator" class="mode-indicator standalone" title="当前运行模式：纯前端自驱（未检测到本地引擎）">
+          <span class="mode-dot" id="mode-dot"></span>
+          <span id="mode-text">模式：轻量独立（纯前端自驱）</span>
+        </span>
+        <span id="live-status" class="live-status">行情自驱待命</span>
+        <button id="btn-live-toggle" class="btn-live ghost" type="button" onclick="toggleLiveQuotes()">⏸ 暂停行情刷新</button>
+        <button id="btn-local-service" class="btn-live" type="button" onclick="toggleLocalServicePanel()">⚡ 启动本地服务</button>
+      </div>
+    </div>
+
+    <!-- Local engine onboarding (dual-mode: standalone <-> local engine, seamless swap) -->
+    <div id="local-service-card" class="live-panel">
+      <div class="live-panel-title"><span>⚡</span> 升级到本地引擎模式（可选，随时可回退）</div>
+      <ul class="live-panel-grid">
+        <li>多账户与全量历史批次由本机 SQLite 账本直接驱动，不再依赖页面内嵌快照</li>
+        <li>行情由本机统一抓取与缓存，看板与 CLI 共用同一套口径，杜绝前端重算漂移</li>
+        <li>仅监听 127.0.0.1 本地回环，账本不出本机；服务关闭后看板自动回退纯前端自驱</li>
+      </ul>
+      <div class="cmd-row">
+        <span style="font-size:12px;color:#94a3b8;">① 在终端执行：</span>
+        <code class="cmd-code" id="serve-command">trade serve</code>
+        <button class="btn-live" type="button" onclick="copyServeCommand()">📋 一键复制</button>
+        <span id="copy-feedback" class="copy-feedback"></span>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#64748b;">② 启动后无需刷新本页：页面每 3 秒自动心跳探测 <code style="color:#94a3b8;">http://127.0.0.1:8080/api/health</code>，一旦联通即刻无缝切换为「本地引擎已联动」绿色呼吸灯。</div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-bar">
+      <button class="nav-btn active" onclick="switchTab('tab-global')">📊 全局三层资产对冲全貌</button>
+      <button id="nav-btn-holdings" class="nav-btn" onclick="switchTab('tab-holdings')">📈 1 只活跃持仓盈亏全览 (按盈亏率分层)</button>
+      <button id="nav-btn-targets" class="nav-btn" onclick="switchTab('tab-targets')">🎯 Lot-Trader 1 大穿透标的透视</button>
+      <button id="nav-btn-lots" class="nav-btn" onclick="switchTab('tab-lots')">📋 1 笔在场活跃批次明细 (双维度)</button>
+      <button id="nav-btn-trades" class="nav-btn" onclick="switchTab('tab-trades')">🏆 0 笔历史波段战绩簿 (0.00%)</button>
+      <button class="nav-btn" onclick="switchTab('tab-radar')">🧭 操盘雷达与解套决策指南</button>
+    </div>
+
+    <!-- Account Filter Bar (Global Switcher) -->
+    <div class="account-filter-bar" style="display:flex;gap:10px;margin-bottom:20px;align-items:center;background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:10px;border:1px solid var(--card-border);flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600;">🏛 账户筛选视角:</span>
+      <button id="btn-acc-all" class="subview-btn active" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('ALL')">🌐 全账户合并 (1 标的 • 1 批次)</button>
+      <button id="btn-acc-LINK" class="subview-btn" style="padding:6px 14px;font-size:12px;" onclick="setGlobalAccountFilter('LINK')">🏛 联动样本账户 LINK (1 标的 • 1 批次)</button>
+    </div>
+
+    <!-- TAB 1: Global Macro Tri-Pillar -->
+    <div id="tab-global" class="tab-pane active">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div id="kpi-tab1-scale-label" class="kpi-label">投资组合总规模 (全账户合并)</div>
+          <div id="kpi-tab1-scale-val" class="kpi-value">¥13.12 万</div>
+          <div id="kpi-tab1-scale-sub" class="kpi-sub">联动样本账户 13.12 万</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab1-pnl-label" class="kpi-label">全局整体净浮盈</div>
+          <div id="kpi-tab1-pnl-val" class="kpi-value val-green">+¥11,108.14 (9.25%)</div>
+          <div id="kpi-tab1-pnl-sub" class="kpi-sub">整体本息倍数 1.09x • 对冲结构 1 浮盈 vs 0 浮亏</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab1-core-label" class="kpi-label">全球核心资产已赚利润</div>
+          <div id="kpi-tab1-core-val" class="kpi-value val-green">+¥0.00 万</div>
+          <div id="kpi-tab1-core-sub" class="kpi-sub">海外核心指数 ETF + 避险黄金 ETF</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab1-cash-label" class="kpi-label">短线波段历史已落袋现金</div>
+          <div id="kpi-tab1-cash-val" class="kpi-value val-green">+¥0.00</div>
+          <div id="kpi-tab1-cash-sub" class="kpi-sub">0 笔做T净利 +¥0.00 + 累计分红 +¥0.00</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab1-win-label" class="kpi-label">波段操盘综合胜率与盈亏比</div>
+          <div id="kpi-tab1-win-val" class="kpi-value val-green">0.00%</div>
+          <div id="kpi-tab1-win-sub" class="kpi-sub">0 战 0 捷 0 止损 • 盈亏比 --</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span>🛡️</span> 全局资产配置三大支柱协同对冲体系
+          </div>
+          <span class="tag tag-blue">战略反差印证资产配置价值</span>
+        </div>
+        <div class="alloc-grid">
+          <div class="alloc-card" style="border-top: 4px solid var(--green);">
+            <div class="alloc-head">
+              <div class="alloc-title">🌍 全球核心成长与对冲层</div>
+              <div class="alloc-ratio val-green">60.2%</div>
+            </div>
+            <div class="alloc-desc">包括纳指 ETF、标普 500、日经、法国、德国 ETF 及黄金 ETF。充分享受美股科技慢牛与央行去美元化黄金牛市。</div>
+            <div class="alloc-stats">
+              <div>持仓市值: <strong>¥75.2 万元</strong></div>
+              <div>累计净赚: <strong class="val-green">+¥21.93 万元</strong></div>
+              <div>纳指收益: <span class="val-green">+8.89 万 (+61%)</span></div>
+              <div>黄金收益: <span class="val-green">+8.57 万 (+129%)</span></div>
+            </div>
+          </div>
+          <div class="alloc-card" style="border-top: 4px solid var(--blue);">
+            <div class="alloc-head">
+              <div class="alloc-title">🧱 A 股高股息红利防守层</div>
+              <div class="alloc-ratio val-blue">12.5%</div>
+            </div>
+            <div class="alloc-desc">包括长江电力、招商银行、塔牌集团、工商银行。充裕现金分红与强劲底仓提供极佳避险缓冲。</div>
+            <div class="alloc-stats">
+              <div>持仓市值: <strong>¥13.6 万元</strong></div>
+              <div>累计浮盈: <strong class="val-green">+¥4.01 万元</strong></div>
+              <div>长江电力: <span class="val-green">+2.29 万 (+48%)</span></div>
+              <div>招商银行: <span class="val-green">+1.52 万 (+38%)</span></div>
+            </div>
+          </div>
+          <div class="alloc-card" style="border-top: 4px solid var(--purple);">
+            <div class="alloc-head">
+              <div class="alloc-title">🎯 Lot-Trader 批次消融层</div>
+              <div class="alloc-ratio val-purple">27.3%</div>
+            </div>
+            <div class="alloc-desc">涵盖恒瑞、我武、海螺、榨菜、*ST美芝、合盛、恒生互联、劲嘉、天山等标的，通过 1 笔在场活跃批次代冲做 T 与分红回笼。</div>
+            <div class="alloc-stats">
+              <div>做T净利: <strong id="alloc-p3-tpnl" class="val-green">+¥0.00</strong></div>
+              <div>累计分红: <strong id="alloc-p3-div" class="val-green">+¥0.00</strong></div>
+              <div>已提现现金: <strong id="alloc-p3-withdrawn" class="val-green">+¥0.00</strong></div>
+              <div>平仓战绩: <span id="alloc-p3-trades" class="val-green">0战0胜 (0.00%)</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: Active Holdings PnL & Return Rate Ranking -->
+    <div id="tab-holdings" class="tab-pane">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div id="kpi-tab2-cost-label" class="kpi-label">全账户在场总成本 (合并)</div>
+          <div id="kpi-tab2-cost-val" class="kpi-value">¥120,024.00</div>
+          <div id="kpi-tab2-cost-sub" class="kpi-sub">联动样本账户 ¥120,024.00</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab2-mkt-label" class="kpi-label">全账户在场总市值 (合并)</div>
+          <div id="kpi-tab2-mkt-val" class="kpi-value">¥13.12 万</div>
+          <div id="kpi-tab2-mkt-sub" class="kpi-sub">联动样本账户 ¥131,224.00</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab2-pnl-label" class="kpi-label">全账户净浮动盈亏</div>
+          <div id="kpi-tab2-pnl-val" class="kpi-value val-green">+¥11,108.14 (9.25%)</div>
+          <div id="kpi-tab2-pnl-sub" class="kpi-sub">整体本息倍数 1.09x (基本保本，对冲完全吸收)</div>
+        </div>
+        <div class="kpi-card">
+          <div id="kpi-tab2-hedge-label" class="kpi-label">账户分层对冲结构</div>
+          <div id="kpi-tab2-hedge-val" class="kpi-value val-green">1 浮盈 vs 0 浮亏</div>
+          <div id="kpi-tab2-hedge-sub" class="kpi-sub">浮盈群贡献 +¥1.11万 抵消 浮亏群 ¥0.00万</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span id="title-holdings"><span>📈</span> 联动样本账户 (LINK) 1 只在场活跃资产持仓盈亏与盈亏率全览</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span class="tag tag-blue" style="font-size:11px;">公式: 盈亏率 = (市值 - 成本) / 成本</span>
+            <span class="tag tag-green" style="font-size:11px;">本息倍数 = 市值 / 成本</span>
+            <span class="tag tag-purple" style="font-size:11px;">支持一键动态排序与穿透</span>
+          </div>
+        </div>
+
+        <!-- Sort Toolbar -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
+          <span style="font-size:12px;color:var(--text-muted);">排序视角:</span>
+          <button id="btn-sort-holdings-rate-desc" class="subview-btn active" onclick="sortHoldingsTable('rate_desc')">
+            🚀 按浮盈率降序 (高收益优先)
+          </button>
+          <button id="btn-sort-holdings-rate-asc" class="subview-btn" onclick="sortHoldingsTable('rate_asc')">
+            🛡 按浮亏率升序 (深跌优先)
+          </button>
+          <button id="btn-sort-holdings-mkt-desc" class="subview-btn" onclick="sortHoldingsTable('mkt_desc')">
+            💰 按持仓市值降序 (重仓优先)
+          </button>
+          <button id="btn-sort-holdings-pnl-asc" class="subview-btn" onclick="sortHoldingsTable('pnl_asc')">
+            📉 按浮亏额降序 (亏损额最大优先)
+          </button>
+          <button id="btn-sort-holdings-rank-asc" class="subview-btn" onclick="sortHoldingsTable('rank_asc')">
+            🟢 按年线空间分位升序 (年线底部优先)
+          </button>
+          <button id="btn-sort-holdings-rank-desc" class="subview-btn" onclick="sortHoldingsTable('rank_desc')">
+            🟣 按年线空间分位降序 (年线高位优先)
+          </button>
+        </div>
+
+        <!-- Descriptive notice -->
+        <div style="padding: 12px 16px; background: rgba(59, 130, 246, 0.08); border-left: 4px solid var(--blue); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1; line-height: 1.6;">
+          <strong>指标定义说明</strong>：<br>
+          • <strong>持仓盈亏率（净收益率）</strong> = (持仓市值 - 持仓成本) ÷ 持仓成本，直接反映该标的自建仓以来的净回报率；<br>
+          • <strong>本息倍数（净值）</strong> = 持仓市值 ÷ 持仓成本 = 1 + 持仓盈亏率。例如黄金 ETF 为 2.29x（本息翻倍有余），标普 500 为 1.57x；<br>
+          • <strong>双极对冲分层</strong>：13 只核心资产（全球指数、黄金、红利龙头与 *ST美芝）重仓逾 90 万元，净赚 <strong>+33.54 万元</strong>；彻底吸收 34 只 A 股赛道与港股个股的 <strong>-34.75 万元</strong> 浮亏，全盘保持在平衡线上。
+        </div>
+
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>账户</th>
+                <th>代码</th>
+                <th>名称</th>
+                <th>资产类别</th>
+                <th>持仓数量</th>
+                <th>成本均价</th>
+                <th>最新现价</th>
+                <th>总成本</th>
+                <th>持仓市值</th>
+                <th>浮动盈亏</th>
+                <th>持仓盈亏率</th>
+                <th>本息倍数</th>
+                <th>仓位占比</th>
+                <th>动力学态势</th>
+                <th>年线分位(250D)</th>
+                <th>操盘策略</th>
+                <th>穿透操作</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-holdings">
+              <tr data-symbol="600519.SH" data-account-visibility="ALL,LINK" data-account="LINK" data-qty="100" data-lots="1" data-pnl-rate="0.0925493234686396" data-pnl-val="11108.14" data-mkt-val="131224.0" data-cost-val="120024.0" data-rank-250="38.67" >
+                <td class="rank-cell">1</td>
+                <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">LINK</span></td>
+                <td><code>600519.SH</code></td>
+                <td><strong>贵州茅台</strong></td>
+                <td><span class="tag tag-green">A 股赛道标的</span></td>
+                <td>100 股</td>
+                <td>¥1200.24</td>
+                <td><strong data-field="price">¥1312.24</strong></td>
+                <td>¥120,024.00</td>
+                <td><strong data-field="mkt">¥131,224.00</strong></td>
+                <td><strong data-field="pnl" class="val-green">+¥11,108.14</strong></td>
+                <td><strong data-field="rate" class="val-green">+9.25%</strong></td>
+                <td><strong data-field="mult" class="val-green">1.09x</strong></td>
+                <td>100.00%</td>
+                <td><span class="tag tag-red" style="font-size:10px;">失速下坠</span></td>
+                <td><strong class="">38.7%</strong></td>
+                <td><span class="tag tag-blue">[持仓观察]</span></td>
+                <td><button class="subview-btn" style="padding:2px 8px;font-size:11px;" onclick="openTargetModal('600519.SH')">🎯 穿透明细</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: Target Deep Dives (38 Targets) -->
+    <div id="tab-targets" class="tab-pane">
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span id="title-targets"><span>🎯</span> Lot-Trader 1 大穿透标的操盘透视卡片 (双账户)</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="radar-status-filter" class="filter-select" onchange="filterTargetCards(this.value)">
+              <option value="ALL">全部 1 大标的 (全部雷达态势)</option>
+              <option value="DEEP_VALUE">🟢 极度低估区 (年线分位 < 15%)</option>
+              <option value="HIGH_ALT">🟣 高位预警区 (年线分位 > 80%)</option>
+              <option value="STEADY">⚖️ 匀速稳态 (STEADY)</option>
+              <option value="ACCELERATING_UP">🚀 加速反弹 (ACCELERATING_UP)</option>
+              <option value="ACCELERATING_DOWN">⚠️ 失速下坠 (ACCELERATING_DOWN)</option>
+              <option value="BRAKING_BOTTOM">🛑 底部刹车 (BRAKING_BOTTOM)</option>
+              <option value="BRAKING_TOP">🛑 顶部减速 (BRAKING_TOP)</option>
+            </select>
+            <select id="target-sort-select" class="filter-select" onchange="sortTargetCards(this.value)">
+              <option value="mkt_desc">💰 默认：持仓市值降序</option>
+              <option value="force_desc">⚛️ 物理动量合力 F_eff 降序（多头合力最强优先）</option>
+              <option value="force_asc">⚛️ 物理动量合力 F_eff 升序（空头合力最强优先）</option>
+              <option value="force_abs_desc">⚡ 合力绝对值 |F_eff| 降序（多空对决最激烈优先）</option>
+              <option value="v_desc">🚀 5 日动量速度 v 降序（短期冲劲最强优先）</option>
+              <option value="rate_desc">🚀 持仓收益率降序（浮盈率最高优先）</option>
+              <option value="rate_asc">🛡 持仓收益率升序（浮亏最深优先）</option>
+            </select>
+            <span class="tag tag-purple">点击任意卡片展开批次明细</span>
+          </div>
+        </div>
+        <div class="target-grid">
+          <!-- Target Card: 贵州茅台 (600519.SH) [LINK] -->
+          <div class="target-card" onclick="openTargetModal('600519.SH')" data-sym="600519.SH" data-account-visibility="ALL,LINK" data-account="LINK" data-brake-status="ACCELERATING_DOWN" data-qty="100" data-cost-val="120024.00" data-rank-250="38.67" data-force-eff="-0.4503" data-force-raw="-0.8831" data-v-short="-0.0278" data-pnl-rate="0.092549" data-mkt-val="131224.00" style="border-color: rgba(59, 130, 246, 0.4); ">
+            <div class="target-card-head">
+              <div>
+                <div class="target-card-name">贵州茅台 <span style="font-size:11px;color:var(--text-muted);">(600519.SH)</span></div>
+                <span class="tag tag-green">A 股赛道标的</span>
+                <span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">联动样本账户 (LINK)</span>
+              </div>
+              <span class="tag tag-blue">[持仓观察]</span>
+            </div>
+
+            <!-- Physics Momentum Radar Mini-Bar -->
+            <div class="target-card-physics">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="font-size:11px;color:#38bdf8;font-weight:600;">⚛️ 动量雷达</span>
+                <span class="tag tag-red" style="font-size:10px;padding:2px 6px;">⚠️ ACCEL_DOWN 失速下坠</span>
+              </div>
+              <div class="physics-mini-bars">
+                <div class="mini-bar-row">
+                  <span class="mini-bar-title">季线(60D): <strong>62.2%</strong></span>
+                  <div class="mini-bar-track"><div class="mini-bar-fill fill-blue" style="width:62.21%"></div></div>
+                </div>
+                <div class="mini-bar-row">
+                  <span class="mini-bar-title">年线(250D): <strong>38.7%</strong></span>
+                  <div class="mini-bar-track"><div class="mini-bar-fill fill-blue" style="width:38.67%"></div></div>
+                </div>
+              </div>
+              <div class="physics-mini-metrics">
+                <span>速度 <i>v</i>: <strong class="val-red">-0.03%</strong></span>
+                <span>质量 <i>m</i>: <strong class="">1.08x</strong></span>
+                <span>置信合力 <i>F<sub>eff</sub></i>: <strong class="val-red">-0.45</strong> <span style="font-size:9px;color:#f59e0b;font-weight:600;">[LOW]</span></span>
+              </div>
+            </div>
+
+            <div class="target-card-stats">
+              <div>持仓: <strong>100 股</strong></div>
+              <div>成本: <strong>¥1200.24</strong></div>
+              <div>现价: <strong data-field="price">¥1312.24</strong></div>
+              <div>市值: <strong data-field="mkt">¥131,224</strong></div>
+              <div>浮动盈亏: <strong data-field="pnl" class="val-green">+¥11,108</strong></div>
+              <div>持仓盈亏率: <strong data-field="rate" class="val-green">+9.25%</strong></div>
+              <div>本息倍数: <strong data-field="mult" class="val-green">1.09x</strong></div>
+              <div>做T战绩: <strong class="">无平仓记录</strong></div>
+            </div>
+            <div style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
+              • <strong>操盘策略</strong>：依托底仓操盘，杜绝盲目左侧补仓。
+            </div>
+            <div class="target-card-hint">
+              👆 点击穿透查看 1 笔批次明细 (按买入时间排序) →
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Active Lots Table (DUAL SUBVIEWS) -->
+    <div id="tab-lots" class="tab-pane">
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span id="title-lots"><span>📋</span> Lot-Trader 全部 1 笔在场活跃批次穿透明细 (1 大标的)</span>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="lots-symbol-filter" class="filter-select" onchange="filterLotsBySymbol(this.value)">
+<option value="ALL">全部 1 大标的 (1 笔在场活跃批次)</option>
+<option value="600519.SH">贵州茅台 (600519.SH) - 1 笔活跃批次</option>
+            </select>
+            <div class="subview-toggle-bar">
+              <button id="btn-subview-time" class="subview-btn active" onclick="switchLotSubView('time')">
+                📅 维度一：按买入时间倒序 (资金轨迹 • 最新在前)
+              </button>
+              <button id="btn-subview-pnl" class="subview-btn" onclick="switchLotSubView('pnl')">
+                📊 维度二：按盈亏率排序 (风险分层 • 收益排行)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SUBVIEW 1: Time Ordered -->
+        <div id="subview-lot-time" class="subview-pane active">
+          <div style="padding: 12px 16px; background: rgba(59, 130, 246, 0.08); border-left: 4px solid var(--blue); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1;">
+            <strong>时间维度视角说明</strong>：严格按买入时间倒序排列（最新交易在前，历史建仓在后）。用于追踪资金注入节奏、检验加仓防抖执行情况与近期击球点。
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>账户</th>
+                  <th>标的名称</th>
+                  <th>批次 ID</th>
+                  <th>买入日期</th>
+                  <th>买入价</th>
+                  <th>当前现价</th>
+                  <th>持仓股数</th>
+                  <th>浮动盈亏</th>
+                  <th>批次收益率</th>
+                  <th>Lot-Trader 操盘策略</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-time">
+              <tr data-symbol="600519.SH" data-lot-id="LOT-20261022-001" data-status="ACTIVE" data-qty="100" data-cost-unit="1200.24" data-account="LINK" title="买入理由: 联动样本">
+      <td class="rank-cell">1</td>
+      <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">LINK</span></td>
+      <td><strong>贵州茅台</strong> <span style="color:#94a3b8;font-size:11px;">(600519.SH)</span></td>
+      <td><code>LOT-20261022-001</code></td>
+      <td>2026-10-22</td>
+      <td>¥1200.00</td>
+      <td><strong data-field="price">¥1312.24</strong></td>
+      <td>100 股</td>
+      <td><strong data-field="pnl" class="val-green">+¥11,108.14</strong></td>
+      <td><strong data-field="rate" class="val-green">+9.25%</strong></td>
+      <td><span class="tag tag-green">[持仓观察]</span></td>
+    </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SUBVIEW 2: Return Rate Ordered -->
+        <div id="subview-lot-pnl" class="subview-pane" style="display: none;">
+          <div style="padding: 12px 16px; background: rgba(139, 92, 246, 0.08); border-left: 4px solid var(--purple); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <strong>盈亏率维度视角说明</strong>：严格按批次浮动盈亏率排序。用于识别正收益待止盈批次、评估标的下属批次风险暴露、定向挑选最深负收益批次进行底仓代冲消融。
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button id="btn-sort-desc" class="filter-btn active" onclick="sortPnlTable('desc')">高收益在前 (止盈扫描)</button>
+              <button id="btn-sort-asc" class="filter-btn" onclick="sortPnlTable('asc')">深跌在前 (解套对冲)</button>
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>账户</th>
+                  <th>标的名称</th>
+                  <th>批次 ID</th>
+                  <th>买入日期</th>
+                  <th>买入价</th>
+                  <th>当前现价</th>
+                  <th>持仓股数</th>
+                  <th>浮动盈亏</th>
+                  <th>批次收益率</th>
+                  <th>Lot-Trader 操盘策略</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-pnl">
+              <tr data-symbol="600519.SH" data-lot-id="LOT-20261022-001" data-status="ACTIVE" data-qty="100" data-cost-unit="1200.24" data-account="LINK" title="买入理由: 联动样本" data-return="0.0925">
+      <td class="rank-cell">1</td>
+      <td><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">LINK</span></td>
+      <td><strong>贵州茅台</strong> <span style="color:#94a3b8;font-size:11px;">(600519.SH)</span></td>
+      <td><code>LOT-20261022-001</code></td>
+      <td>2026-10-22</td>
+      <td>¥1200.00</td>
+      <td><strong data-field="price">¥1312.24</strong></td>
+      <td>100 股</td>
+      <td><strong data-field="pnl" class="val-green">+¥11,108.14</strong></td>
+      <td><strong data-field="rate" class="val-green">+9.25%</strong></td>
+      <td><span class="tag tag-green">[持仓观察]</span></td>
+    </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: Trade History (704 Trades) -->
+    <div id="tab-trades" class="tab-pane">
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span id="title-trades"><span>🏆</span> 历史平仓战绩簿 (累计 0 笔平仓 • 0 捷 0 止损 • 综合胜率 0.00%)</span>
+          </div>
+          <span class="tag tag-green">净做T利润 +¥0.00 • 盈亏比 --</span>
+        </div>
+        <div style="padding: 12px 16px; background: rgba(16, 185, 129, 0.08); border-left: 4px solid var(--green); border-radius: 4px; margin-bottom: 16px; font-size: 13px; color: #cbd5e1;">
+          <strong>战绩簿说明</strong>：包含 2017-2026 年全账户全量历史平仓战绩。展示了在熊市震荡期间通过底仓代冲、急跌反弹做 T、微损止损控制敞口所锁定的真实真金白银利润。
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>账户</th>
+                <th>标的名称</th>
+                <th>买入记录 (日期/价格)</th>
+                <th>平仓记录 (日期/价格)</th>
+                <th>成交数量</th>
+                <th>平仓实现盈亏</th>
+                <th>波段收益率</th>
+                <th>操盘类别</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-trades">
+
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: Radar & Decision -->
+    <div id="tab-radar" class="tab-pane">
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span>🧭</span> 操盘雷达与解套决策指南
+          </div>
+          <span class="tag tag-blue">四大军规坚决执行</span>
+        </div>
+        <div class="radar-grid">
+          <div class="radar-card" style="border-left: 4px solid var(--green);">
+            <div class="radar-head">
+              <span>🛡️ 军规一：硬红线绝不妥协</span>
+              <span class="tag tag-green">防守底线</span>
+            </div>
+            <div class="radar-body">
+              黄金 ETF 坚决对齐 $3,910 硬红线底仓守则。当前金价在 $4,200 上方，安全垫极为充裕，严禁在恐慌震荡日割肉，也不急于左侧盲目追涨加仓。
+            </div>
+          </div>
+          <div class="radar-card" style="border-left: 4px solid var(--purple);">
+            <div class="radar-head">
+              <span>🎯 军规二：深套标的零外部增仓</span>
+              <span class="tag tag-purple">代冲消融</span>
+            </div>
+            <div class="radar-body">
+              对于我武生物、合盛硅业、恒瑞医药等历史山顶建仓标的，<strong>坚决严禁注入任何外部新资金抄底</strong>！仅依托底仓急跌反弹进行日内/波段代冲做 T，用已实现的差价收益与现金分红逐步削减底仓全成本。
+            </div>
+          </div>
+          <div class="radar-card" style="border-left: 4px solid var(--blue);">
+            <div class="radar-head">
+              <span>🧱 军规三：高股息现金流再平衡</span>
+              <span class="tag tag-blue">现金复利</span>
+            </div>
+            <div class="radar-body">
+              长江电力与招商银行已累计贡献现金分红近 1.8 万元。高股息底仓不仅提供了坚固的净值防空洞，持续派发的现金红利更为全局提供了宝贵的逆周期流动性补给。
+            </div>
+          </div>
+          <div class="radar-card" style="border-left: 4px solid var(--amber);">
+            <div class="radar-head">
+              <span>⚖️ 军规四：独立批次生命周期核算</span>
+              <span class="tag tag-amber">拒绝摊薄</span>
+            </div>
+            <div class="radar-body">
+              严格执行单笔批次独立核算，严禁使用券商单一加权平均成本模糊账目。每一笔买入必须清晰记录击球成本、保本价格与浮盈状态，买得明白、卖得清楚。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- TARGET LOTS DETAIL MODAL -->
+  <div id="target-modal-overlay" class="modal-overlay" onclick="handleModalOverlayClick(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-header-left">
+          <div class="modal-title">
+            <span id="modal-symbol-name">标的名称</span>
+            <span id="modal-symbol-code" style="font-size:12px;color:#9ca3af;font-weight:400;">(000000.SZ)</span>
+          </div>
+          <span id="modal-category-tag" class="tag tag-green">资产类别</span>
+        </div>
+        <button class="modal-close-btn" onclick="closeTargetModal()" title="关闭弹窗 (Esc)">✕</button>
+      </div>
+
+      <!-- Quick Summary Strip -->
+      <div class="modal-summary-strip">
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">持仓股数 / 份额</span>
+          <span id="modal-stat-shares" class="modal-stat-val">--</span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">持仓均价 / 现价</span>
+          <span class="modal-stat-val"><span id="modal-stat-cost">--</span> / <span id="modal-stat-price">--</span></span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">持仓市值</span>
+          <span id="modal-stat-mktval" class="modal-stat-val">--</span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">浮动盈亏 (持仓盈亏率)</span>
+          <span class="modal-stat-val"><span id="modal-stat-pnl">--</span> (<span id="modal-stat-rr">--</span>)</span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">本息倍数 (净值)</span>
+          <span id="modal-stat-multiple" class="modal-stat-val">--</span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">波段做T战绩 (胜率)</span>
+          <span id="modal-stat-trades" class="modal-stat-val">--</span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">做T净利 / 历史平仓盈亏比</span>
+          <span class="modal-stat-val"><span id="modal-stat-tpnl">--</span> / <span id="modal-stat-pf">--</span></span>
+        </div>
+        <div class="modal-stat-box">
+          <span class="modal-stat-label">累计分红 / 回笼现金</span>
+          <span class="modal-stat-val"><span id="modal-stat-div" class="val-green">--</span> / <span id="modal-stat-withdrawn" class="val-green">--</span></span>
+        </div>
+      </div>
+
+      <!-- Modal Physics Radar Strip -->
+      <div id="modal-physics-panel" style="margin-bottom:14px;padding:12px 14px;background:rgba(15,23,42,0.8);border:1px solid #1e293b;border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+          <div style="font-size:13px;font-weight:600;color:#38bdf8;display:flex;align-items:center;gap:6px;">
+            <span>⚛️</span> 物理运动量化雷达实时体检 (Physics Momentum Radar)
+          </div>
+          <div id="modal-physics-badge">--</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;font-size:12px;margin-bottom:8px;background:rgba(0,0,0,0.2);padding:8px;border-radius:6px;">
+          <div>速度 <i>v</i>: <strong id="modal-phys-v" style="color:#f8fafc;">--</strong></div>
+          <div>加速度 <i>a</i>: <strong id="modal-phys-a" style="color:#f8fafc;">--</strong></div>
+          <div>惯性质量 <i>m</i>: <strong id="modal-phys-m" style="color:#f8fafc;">--</strong></div>
+          <div>原始合力 <i>F</i>: <strong id="modal-phys-f" style="color:#f8fafc;">--</strong></div>
+          <div>换手率 <i>τ</i>: <strong id="modal-phys-tau" style="color:#38bdf8;">--</strong></div>
+          <div>置信权重 <i>W<sub>conf</sub></i>: <strong id="modal-phys-wconf" style="color:#f8fafc;">--</strong></div>
+          <div>置信合力 <i>F<sub>eff</sub></i>: <strong id="modal-phys-feff" style="color:#f8fafc;">--</strong></div>
+          <div>态势研判: <strong id="modal-phys-force-status">--</strong></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;color:#94a3b8;background:rgba(0,0,0,0.25);padding:10px;border-radius:6px;">
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span>季线空间位置 (60D): <strong id="modal-phys-rank60-val" style="color:#f8fafc;">--</strong></span>
+              <span id="modal-phys-pullback60" style="color:#ef4444;">--</span>
+            </div>
+            <div style="height:6px;background:#334155;border-radius:3px;overflow:hidden;">
+              <div id="modal-phys-track60" style="height:100%;width:0%;background:#38bdf8;border-radius:3px;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px;color:#64748b;font-size:10px;">
+              <span id="modal-phys-min60">最低 --</span>
+              <span id="modal-phys-max60">最高 --</span>
+            </div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span>年线空间位置 (250D): <strong id="modal-phys-rank250-val" style="color:#f8fafc;">--</strong></span>
+              <span id="modal-phys-pullback250" style="color:#ef4444;">--</span>
+            </div>
+            <div style="height:6px;background:#334155;border-radius:3px;overflow:hidden;">
+              <div id="modal-phys-track250" style="height:100%;width:0%;background:#10b981;border-radius:3px;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px;color:#64748b;font-size:10px;">
+              <span id="modal-phys-min250">最低 --</span>
+              <span id="modal-phys-max250">最高 --</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="modal-toolbar">
+        <div class="modal-filter-group">
+          <span style="font-size:12px;color:#9ca3af;margin-right:4px;">批次筛选:</span>
+          <button class="modal-filter-btn active" data-filter="ALL" onclick="setModalFilter('ALL')">全部批次 (<span id="modal-cnt-all">0</span>)</button>
+          <button class="modal-filter-btn" data-filter="ACTIVE" onclick="setModalFilter('ACTIVE')">在场活跃 (<span id="modal-cnt-act">0</span>)</button>
+          <button class="modal-filter-btn" data-filter="CLOSED" onclick="setModalFilter('CLOSED')">历史平仓 (<span id="modal-cnt-cls">0</span>)</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="modal-sort-btn" class="modal-sort-btn" onclick="toggleModalSortOrder()">
+            📅 按买入时间倒序 (最新优先) ▼
+          </button>
+          <button class="modal-filter-btn" style="background:rgba(59,130,246,0.15);color:#60a5fa;border-color:rgba(59,130,246,0.4);" onclick="jumpToTabLots()">
+            📋 在总表中定位
+          </button>
+        </div>
+      </div>
+
+      <!-- Table Body -->
+      <div class="modal-body">
+        <table class="modal-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>账户</th>
+              <th>批次 ID</th>
+              <th>买入时间</th>
+              <th>买入价</th>
+              <th>状态</th>
+              <th>现价/平仓价</th>
+              <th>平仓时间</th>
+              <th>数量</th>
+              <th>批次盈亏</th>
+              <th>收益率</th>
+              <th>Lot-Trader 操盘策略</th>
+            </tr>
+          </thead>
+          <tbody id="modal-lots-tbody">
+            <!-- Rendered by JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       LOCAL SESSION CREDENTIAL (injected by `trade dashboard`)
+       The token comes from the 0600 credential file written by `trade serve`. It is the
+       only thing standing between a sandboxed `Origin: null` iframe and the ledger, so an
+       empty string is a valid state: the page then stays in pure standalone mode.
+       ========================================================================= -->
+  <script id="session-token-config">
+    window.__LOT_TRADER_SESSION_TOKEN__ = "<REDACTED-BY-QA:ephemeral-token>";
+    window.__LOT_TRADER_SESSION_AUTH_CONFIGURED__ = true;
+  </script>
+
+  <!-- =========================================================================
+       DUAL-MODE LIVE CLIENT RUNTIME (pure, dependency-free, unit-tested)
+       Everything below is side-effect free at load time and exposed on
+       window.LiveClientRuntime so the negative-path tests can drive it directly:
+         - tencent payload parsing that never yields NaN / never throws
+         - holding metric recomputation with cost-basis fallback
+         - trading-session / refresh-interval policy
+         - heartbeat probe + mode state machine (no uncaught rejection)
+       ========================================================================= -->
+  <script id="live-client-runtime">
+    (function (root) {
+      'use strict';
+
+      var LOCAL_API_BASE = 'http://127.0.0.1:8080';
+      var QUOTE_REFRESH_MS = 5000;      // 交易时段批量轮询周期
+      var HEARTBEAT_MS = 3000;          // 本地引擎心跳探针周期
+      var IDLE_REFRESH_MS = 60000;      // 非交易时段休眠降频
+      var TENCENT_QUOTE_BASE = 'https://qt.gtimg.cn/q=';
+      var DEFAULT_SELL_FEE_RATE = 0.0002;
+      var SESSION_TOKEN_KEY = '__LOT_TRADER_SESSION_TOKEN__';
+
+      /**
+       * Local session credential injected by `trade dashboard`.
+       * Read lazily from the global on every call: the config script may execute before or
+       * after this runtime, and returning '' (instead of throwing) keeps standalone mode safe.
+       */
+      function sessionToken() {
+        try {
+          var raw = root ? root[SESSION_TOKEN_KEY] : undefined;
+          // Only a non-empty string is a credential; numbers / objects / booleans mean
+          // "unconfigured" so a broken injection can never turn into a bogus header.
+          if (typeof raw !== 'string') return '';
+          return raw.trim();
+        } catch (e) {
+          return '';
+        }
+      }
+
+      /** `Authorization: Bearer <token>` header object; `{}` when no credential is configured. */
+      function authHeaders(token) {
+        var value = (token === undefined) ? sessionToken() : String(token === null || token === undefined ? '' : token).trim();
+        if (!value) return {};
+        return { Authorization: 'Bearer ' + value };
+      }
+
+      /** Append the credential as a query parameter too (static proxy / SSE compatibility). */
+      function withSessionToken(url, token) {
+        var raw = String(url === undefined || url === null ? '' : url);
+        var value = (token === undefined) ? sessionToken() : String(token === null || token === undefined ? '' : token).trim();
+        if (!raw || !value) return raw;
+        if (/[?&]token=/.test(raw)) return raw;
+        return raw + (raw.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(value);
+      }
+
+      function num(value, fallback) {
+        var parsed = typeof value === 'number' ? value : parseFloat(value);
+        var result = (typeof parsed === 'number' && isFinite(parsed)) ? parsed : undefined;
+        if (result === undefined) return fallback === undefined ? 0 : fallback;
+        return result;
+      }
+
+      function roundTo(value, decimals) {
+        var factor = Math.pow(10, decimals);
+        return Math.round((num(value) + Number.EPSILON) * factor) / factor;
+      }
+
+      function round2(value) { return roundTo(value, 2); }
+      function round4(value) { return roundTo(value, 4); }
+
+      /** "518880.SH" / "sh518880" / "518880" -> "sh518880" (qt.gtimg.cn code). */
+      function normalizeTencentCode(symbol) {
+        var raw = String(symbol === undefined || symbol === null ? '' : symbol).trim();
+        if (!raw) return '';
+        var lower = raw.toLowerCase();
+        if (/^(sh|sz|bj)\d{6}$/.test(lower)) return lower;
+        var parts = raw.toUpperCase().split('.');
+        if (parts.length === 2 && /^\d{6}$/.test(parts[0])) {
+          var market = parts[1] === 'SH' || parts[1] === 'SS' ? 'sh'
+            : parts[1] === 'SZ' ? 'sz'
+            : parts[1] === 'BJ' ? 'bj' : '';
+          if (market) return market + parts[0];
+        }
+        if (/^\d{6}$/.test(raw)) {
+          if (/^[569]/.test(raw)) return 'sh' + raw;
+          if (/^[0123]/.test(raw)) return 'sz' + raw;
+          if (/^[48]/.test(raw)) return 'bj' + raw;
+          return 'sh' + raw;
+        }
+        return lower;
+      }
+
+      function dedupeCodes(codes) {
+        var out = [];
+        var seen = {};
+        var list = Array.isArray(codes) ? codes : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var code = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toLowerCase();
+          if (!/^(sh|sz|bj)\d{6}$/.test(code) || seen[code]) continue;
+          seen[code] = true;
+          out.push(code);
+        }
+        return out;
+      }
+
+      function dedupeSymbols(symbols) {
+        var out = [];
+        var seen = {};
+        var list = Array.isArray(symbols) ? symbols : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var sym = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toUpperCase();
+          if (!sym || seen[sym]) continue;
+          seen[sym] = true;
+          out.push(sym);
+        }
+        return out;
+      }
+
+      function buildTencentQuoteUrl(codes, timestampMs) {
+        // Accept both standard symbols ("518880.SH") and ready-made codes ("sh518880").
+        var normalized = (Array.isArray(codes) ? codes : []).map(normalizeTencentCode);
+        var list = dedupeCodes(normalized);
+        if (!list.length) return '';
+        var suffix = '';
+        if (timestampMs !== undefined && timestampMs !== null) {
+          suffix = '&_=' + Math.round(num(timestampMs, 0));
+        }
+        return TENCENT_QUOTE_BASE + list.join(',') + suffix;
+      }
+
+      /** Parse one `v_shXXXXXX="..."` payload. Returns null for any unusable row. */
+      function parseTencentFields(tencentCode, dataStr) {
+        if (typeof dataStr !== 'string' || dataStr.indexOf('~') === -1) return null;
+        var fields = dataStr.split('~');
+        if (fields.length < 6) return null;
+        var price = num(fields[3], NaN);
+        if (!isFinite(price) || price <= 0) return null;
+        var prevClose = num(fields[4], NaN);
+        var high = fields.length > 33 ? num(fields[33], 0) : 0;
+        var low = fields.length > 34 ? num(fields[34], 0) : 0;
+        return {
+          code: String(tencentCode || '').toLowerCase(),
+          name: fields[1] || '',
+          price: price,
+          prev_close: isFinite(prevClose) && prevClose > 0 ? prevClose : null,
+          open: num(fields[5], 0),
+          high: high > 0 ? high : price,
+          low: low > 0 ? low : price,
+          time: fields.length > 30 ? String(fields[30] || '') : ''
+        };
+      }
+
+      /**
+       * Parse a full qt.gtimg.cn body. Anything that is not a well-formed quote row
+       * (HTML error pages, 502 text, truncated JSON, empty strings) is silently skipped.
+       */
+      function parseTencentPayload(rawText) {
+        var out = {};
+        if (typeof rawText !== 'string' || rawText.length === 0) return out;
+        var text = rawText.replace(/^\uFEFF/, '');
+        var re = /v_([a-zA-Z0-9_]+)\s*=\s*"([^"]*)"/g;
+        var match;
+        while ((match = re.exec(text)) !== null) {
+          var code = String(match[1]).toLowerCase();
+          if (!/^(sh|sz|bj)\d{6}$/.test(code)) continue;
+          var parsed = parseTencentFields(code, match[2]);
+          if (parsed) out[code] = parsed;
+        }
+        return out;
+      }
+
+      /** Join parsed quotes back onto the dashboard's standard symbols. */
+      function mapQuotesToSymbols(parsed, symbols, previousQuotes) {
+        var out = {};
+        var list = Array.isArray(symbols) ? symbols : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var sym = String(list[i] === undefined || list[i] === null ? '' : list[i]).trim().toUpperCase();
+          if (!sym) continue;
+          var hit = parsed && parsed[normalizeTencentCode(sym)];
+          if (!hit) continue;
+          var price = num(hit.price, 0);
+          if (!(price > 0)) continue;
+          var prev = previousQuotes && previousQuotes[sym] ? num(previousQuotes[sym].price, 0) : 0;
+          out[sym] = {
+            symbol: sym,
+            price: price,
+            prev_close: hit.prev_close === null ? null : num(hit.prev_close, 0) || null,
+            previous_price: prev > 0 ? prev : null,
+            direction: prev > 0 ? (price > prev ? 'up' : (price < prev ? 'down' : 'flat')) : 'flat',
+            name: hit.name || sym,
+            time: hit.time || '',
+            source: 'tencent'
+          };
+        }
+        return out;
+      }
+
+      /**
+       * Recompute one holding/lot from a live price.
+       * Invariants: every returned number is finite; quantity/cost guard against
+       * null / "" / NaN inputs (a dead quote feed must not paint NaN anywhere).
+       */
+      function computeHoldingLive(input) {
+        var src = input || {};
+        var quantity = Math.max(0, num(src.quantity, 0));
+        var costUnit = Math.max(0, num(src.costUnit, 0));
+        var rawPrice = num(src.price, 0);
+        var price = rawPrice > 0 ? rawPrice : costUnit;
+        var feeRate = num(src.sellFeeRate, DEFAULT_SELL_FEE_RATE);
+        if (!isFinite(feeRate) || feeRate < 0) feeRate = DEFAULT_SELL_FEE_RATE;
+        var marketValue = round2(price * quantity);
+        var costTotal = round2(costUnit * quantity);
+        var estSellFee = marketValue * feeRate;
+        var floatingPnl = round2(marketValue - costTotal - estSellFee);
+        var returnRate = costTotal > 0 ? round4(floatingPnl / costTotal) : 0;
+        var prevClose = num(src.prevClose, 0);
+        var dayChangePct = prevClose > 0 ? round4((price - prevClose) / prevClose) : 0;
+        return {
+          price: round4(price),
+          quantity: quantity,
+          costUnit: costUnit,
+          marketValue: marketValue,
+          costTotal: costTotal,
+          floatingPnl: floatingPnl,
+          returnRate: returnRate,
+          dayChangePct: dayChangePct,
+          price_source: rawPrice > 0 ? 'live' : 'cost_basis'
+        };
+      }
+
+      /** A-share sessions: Mon-Fri 09:30-11:30 and 13:00-15:00 (local time). */
+      function isTradingSession(date) {
+        var d = date instanceof Date ? date : new Date(date === undefined || date === null ? Date.now() : date);
+        if (!(d instanceof Date) || isNaN(d.getTime())) return false;
+        var day = d.getDay();
+        if (day === 0 || day === 6) return false;
+        var minutes = d.getHours() * 60 + d.getMinutes();
+        return (minutes >= 570 && minutes < 690) || (minutes >= 780 && minutes < 900);
+      }
+
+      /** Refresh policy: 5s while trading, 60s idle, 0 when paused. */
+      function nextRefreshDelay(date, paused) {
+        if (paused) return 0;
+        return isTradingSession(date) ? QUOTE_REFRESH_MS : IDLE_REFRESH_MS;
+      }
+
+      /**
+       * Mode state machine with one-beat hysteresis: a single missed heartbeat keeps
+       * the current mode (smooth), two consecutive misses demote to standalone.
+       */
+      function nextMode(prev, probeOk, consecutiveFailures) {
+        if (probeOk) return 'LOCAL';
+        var failures = num(consecutiveFailures, 1);
+        if (failures >= 2) return 'STANDALONE';
+        return prev === 'LOCAL' ? 'LOCAL' : 'STANDALONE';
+      }
+
+      /**
+       * Heartbeat probe. Never rejects: returns { ok, reason, data }.
+       * A dead service / DNS failure / non-JSON body / timeout all become ok:false.
+       */
+      function probeLocalService(fetcher, url, timeoutMs, token) {
+        return new Promise(function (resolve) {
+          var timer = null;
+          var controller = null;
+          var done = false;
+          function finish(result) {
+            if (done) return;
+            done = true;
+            if (timer) { try { clearTimeout(timer); } catch (e) {} }
+            resolve(result);
+          }
+          try {
+            if (typeof fetcher !== 'function') { finish({ ok: false, reason: 'no_fetch' }); return; }
+            var init = { method: 'GET', cache: 'no-store' };
+            var headers = authHeaders(token);
+            if (Object.keys(headers).length) init.headers = headers;
+            if (typeof AbortController === 'function') {
+              controller = new AbortController();
+              init.signal = controller.signal;
+              timer = setTimeout(function () {
+                try { controller.abort(); } catch (e) {}
+                finish({ ok: false, reason: 'timeout' });
+              }, num(timeoutMs, 2500));
+            }
+            Promise.resolve(fetcher(url, init)).then(function (resp) {
+              if (!resp || !resp.ok) { finish({ ok: false, reason: 'http_' + (resp ? resp.status : 'none') }); return undefined; }
+              return Promise.resolve(resp.json()).then(function (data) {
+                if (data && data.status === 'ok') { finish({ ok: true, reason: null, data: data }); return; }
+                finish({ ok: false, reason: 'bad_payload' });
+              });
+            }).catch(function () {
+              finish({ ok: false, reason: 'network_error' });
+            });
+          } catch (e) {
+            finish({ ok: false, reason: 'exception' });
+          }
+        });
+      }
+
+      /** JSONP-style fallback: qt.gtimg.cn answers with `v_shXXXXXX="..."` assignments. */
+      function loadTencentQuotesViaScript(url, codes, timeoutMs) {
+        return new Promise(function (resolve) {
+          var script = null;
+          var settled = false;
+          var list = dedupeCodes(codes);
+          function finish() {
+            if (settled) return;
+            settled = true;
+            var parsed = {};
+            for (var i = 0; i < list.length; i += 1) {
+              var raw = root['v_' + list[i]];
+              if (typeof raw === 'string') {
+                var item = parseTencentFields(list[i], raw);
+                if (item) parsed[list[i]] = item;
+              }
+            }
+            try { if (script && script.parentNode) script.parentNode.removeChild(script); } catch (e) {}
+            resolve(Object.keys(parsed).length ? parsed : null);
+          }
+          try {
+            if (typeof document === 'undefined' || !document.createElement) { resolve(null); return; }
+            if (!list.length || !url) { resolve(null); return; }
+            script = document.createElement('script');
+            script.src = url;
+            script.charset = 'gbk';
+            script.async = true;
+            script.onload = finish;
+            script.onerror = finish;
+            var parent = document.head || document.body || document.documentElement;
+            if (!parent) { resolve(null); return; }
+            parent.appendChild(script);
+            setTimeout(finish, num(timeoutMs, 5000));
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      }
+
+      /**
+       * Quote transport with a two-stage fallback:
+       *   1) fetch (CORS) + GBK decode  -> works when the API sends CORS headers
+       *   2) <script> tag JSONP         -> works from file:// where fetch is blocked
+       * Resolves { quotes, transport, error } and never rejects.
+       */
+      async function fetchTencentQuotes(options) {
+        var opts = options || {};
+        var codes = dedupeCodes((Array.isArray(opts.codes) ? opts.codes : []).map(normalizeTencentCode));
+        var url = opts.url || buildTencentQuoteUrl(codes, Date.now());
+        var fetcher = opts.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+        var timeoutMs = num(opts.timeoutMs, 5000);
+        var result = { quotes: {}, transport: 'none', error: null };
+        if (!url) { result.error = 'no_codes'; return result; }
+
+        if (fetcher) {
+          var timer = null;
+          try {
+            var init = { cache: 'no-store', mode: 'cors' };
+            var controller = typeof AbortController === 'function' ? new AbortController() : null;
+            if (controller) {
+              init.signal = controller.signal;
+              timer = setTimeout(function () { try { controller.abort(); } catch (e) {} }, timeoutMs);
+            }
+            var resp = await fetcher(url, init);
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (resp && resp.ok) {
+              var text = '';
+              if (typeof resp.arrayBuffer === 'function') {
+                var buffer = await resp.arrayBuffer();
+                try {
+                  text = new TextDecoder('gbk').decode(buffer);
+                } catch (e) {
+                  text = new TextDecoder('utf-8').decode(buffer);
+                }
+              } else {
+                text = await resp.text();
+              }
+              var parsed = parseTencentPayload(text);
+              if (Object.keys(parsed).length > 0) {
+                result.quotes = parsed;
+                result.transport = 'fetch';
+                return result;
+              }
+              result.error = 'empty_payload';
+            } else {
+              result.error = 'http_' + (resp ? resp.status : 'none');
+            }
+          } catch (e) {
+            if (timer) { try { clearTimeout(timer); } catch (e2) {} }
+            result.error = 'network_error';
+          }
+        }
+
+        var scriptQuotes = await loadTencentQuotesViaScript(url, codes, timeoutMs);
+        if (scriptQuotes && Object.keys(scriptQuotes).length > 0) {
+          result.quotes = scriptQuotes;
+          result.transport = 'script';
+          result.error = null;
+        }
+        return result;
+      }
+
+      function groupThousands(intPart) {
+        return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      }
+
+      function formatMoney(value) {
+        var n = num(value, 0);
+        var sign = n < 0 ? '-' : '';
+        var parts = Math.abs(n).toFixed(2).split('.');
+        return sign + '¥' + groupThousands(parts[0]) + '.' + parts[1];
+      }
+
+      function formatSignedMoney(value) {
+        var n = num(value, 0);
+        return (n > 0 ? '+' : '') + formatMoney(n);
+      }
+
+      function formatPct(rate, digits, withSign) {
+        var n = num(rate, 0) * 100;
+        var d = num(digits, 2);
+        var sign = (withSign === false) ? '' : (n > 0 ? '+' : '');
+        return sign + n.toFixed(d) + '%';
+      }
+
+      function formatMultiple(marketValue, costTotal) {
+        var cost = num(costTotal, 0);
+        var mult = cost > 0 ? num(marketValue, 0) / cost : 1;
+        return mult.toFixed(2) + 'x';
+      }
+
+      var api = {
+        LOCAL_API_BASE: LOCAL_API_BASE,
+        QUOTE_REFRESH_MS: QUOTE_REFRESH_MS,
+        HEARTBEAT_MS: HEARTBEAT_MS,
+        IDLE_REFRESH_MS: IDLE_REFRESH_MS,
+        TENCENT_QUOTE_BASE: TENCENT_QUOTE_BASE,
+        DEFAULT_SELL_FEE_RATE: DEFAULT_SELL_FEE_RATE,
+        num: num,
+        round2: round2,
+        round4: round4,
+        normalizeTencentCode: normalizeTencentCode,
+        dedupeCodes: dedupeCodes,
+        dedupeSymbols: dedupeSymbols,
+        buildTencentQuoteUrl: buildTencentQuoteUrl,
+        parseTencentFields: parseTencentFields,
+        parseTencentPayload: parseTencentPayload,
+        mapQuotesToSymbols: mapQuotesToSymbols,
+        computeHoldingLive: computeHoldingLive,
+        isTradingSession: isTradingSession,
+        nextRefreshDelay: nextRefreshDelay,
+        nextMode: nextMode,
+        sessionToken: sessionToken,
+        authHeaders: authHeaders,
+        withSessionToken: withSessionToken,
+        probeLocalService: probeLocalService,
+        fetchTencentQuotes: fetchTencentQuotes,
+        formatMoney: formatMoney,
+        formatSignedMoney: formatSignedMoney,
+        formatPct: formatPct,
+        formatMultiple: formatMultiple
+      };
+
+      root.LiveClientRuntime = api;
+    })(typeof window !== 'undefined' && window ? window : globalThis);
+  </script>
+
+  <!-- Embedded Client-side Data -->
+  <script>
+    const ACCOUNT_METRICS = {"ALL": {"acc": "ALL", "label": "全账户合并", "short_label": "全账户", "active_syms_count": 1, "active_lots_count": 1, "cost_val": 120024.0, "cost_str": "¥120,024.00", "mkt_val": 131224.0, "mkt_str": "¥131,224.00", "mkt_w_str": "13.12 万", "pnl_val": 11108.14, "pnl_str": "+¥11,108.14 (9.25%)", "pnl_cls": "val-green", "multiple_str": "1.09x", "closed_trades_count": 0, "win_trades_count": 0, "loss_trades_count": 0, "realized_pnl_val": 0, "realized_pnl_str": "+¥0.00", "win_rate_str": "0.00%", "win_loss_ratio_str": "--", "dividends_val": 0, "dividends_str": "+¥0.00", "withdrawn_val": 0, "withdrawn_str": "+¥0.00", "pos_count": 1, "neg_count": 0, "pos_sum_str": "+¥1.11万", "neg_sum_str": "¥0.00万", "global_pnl_str": "+¥0.00 万"}, "LINK": {"acc": "LINK", "label": "联动样本账户 (LINK)", "short_label": "联动样本账户", "active_syms_count": 1, "active_lots_count": 1, "cost_val": 120024.0, "cost_str": "¥120,024.00", "mkt_val": 131224.0, "mkt_str": "¥131,224.00", "mkt_w_str": "13.12 万", "pnl_val": 11108.14, "pnl_str": "+¥11,108.14 (9.25%)", "pnl_cls": "val-green", "multiple_str": "1.09x", "closed_trades_count": 0, "win_trades_count": 0, "loss_trades_count": 0, "realized_pnl_val": 0, "realized_pnl_str": "+¥0.00", "win_rate_str": "0.00%", "win_loss_ratio_str": "--", "dividends_val": 0, "dividends_str": "+¥0.00", "withdrawn_val": 0, "withdrawn_str": "+¥0.00", "pos_count": 1, "neg_count": 0, "pos_sum_str": "+¥1.11万", "neg_sum_str": "¥0.00万", "global_pnl_str": "+¥0.00 万"}};
+    const TARGETS_DATA = {"600519.SH": {"ALL": {"symbol": "600519.SH", "name": "贵州茅台", "asset_class": "STOCK", "qty_unit": "股", "shares": 100, "cost_unit": 1200.24, "current_price": 1312.24, "market_value": 131224.0, "floating_pnl": 11108.14, "return_rate": 0.0925493234686396, "active_lots_count": 1, "total_trades": 0, "win_trades": 0, "loss_trades": 0, "win_rate": 0, "win_pnl": 0, "loss_pnl": 0, "net_t_pnl": 0, "profit_factor": 0, "profit_factor_str": "--", "avg_win_loss_str": "--", "dividends": 0, "total_withdrawn": 0, "account_id": "ALL", "account_label": "全账户合并", "category": "A 股赛道标的", "strategy": "依托底仓操盘", "physics": {"symbol": "600519.SH", "name": "贵州茅台", "current_price": 1312.24, "data_bars_count": 60, "v_short": -0.0278, "v_mid": 0.3319, "a": -0.8157, "brake_status": "ACCELERATING_DOWN", "m": 1.082598, "F": -0.8831, "force_status": "STRONG_RESISTANCE", "turnover_rate": 0.24, "confidence_weight": 0.5099, "confidence_level": "LOW", "effective_force": -0.4503, "mu": 1481875.77, "pct_rank_60": 62.21, "pullback_60": -3.75, "pct_rank_250": 38.67, "pullback_250": -16.31, "min_60": 1228.1, "max_60": 1363.35, "min_250": 1151.01, "max_250": 1568}, "lots": [{"lot_id": "LOT-20261022-001", "account_id": "LINK", "cost_unit": 1200.24, "buy_reason": "联动样本", "close_reason": "", "buy_time": "2026-10-22 06:28", "buy_price": 1200, "qty": 100, "status": "ACTIVE", "price_now_or_close": 1312.24, "close_time": null, "pnl": 11200.0, "return_rate": 0.09331467039925348, "tag": "<span class=\"tag tag-green\">[持仓观察]</span>"}]}, "LINK": {"symbol": "600519.SH", "name": "贵州茅台", "asset_class": "STOCK", "qty_unit": "股", "shares": 100, "cost_unit": 1200.24, "current_price": 1312.24, "market_value": 131224.0, "floating_pnl": 11108.14, "return_rate": 0.0925493234686396, "active_lots_count": 1, "total_trades": 0, "win_trades": 0, "loss_trades": 0, "win_rate": 0, "win_pnl": 0, "loss_pnl": 0, "net_t_pnl": 0, "profit_factor": 0, "profit_factor_str": "--", "avg_win_loss_str": "--", "dividends": 0.0, "total_withdrawn": 0.0, "account_id": "LINK", "account_label": "联动样本账户 (LINK)", "category": "A 股赛道标的", "strategy": "依托底仓操盘", "physics": {"symbol": "600519.SH", "name": "贵州茅台", "current_price": 1312.24, "data_bars_count": 60, "v_short": -0.0278, "v_mid": 0.3319, "a": -0.8157, "brake_status": "ACCELERATING_DOWN", "m": 1.082598, "F": -0.8831, "force_status": "STRONG_RESISTANCE", "turnover_rate": 0.24, "confidence_weight": 0.5099, "confidence_level": "LOW", "effective_force": -0.4503, "mu": 1481875.77, "pct_rank_60": 62.21, "pullback_60": -3.75, "pct_rank_250": 38.67, "pullback_250": -16.31, "min_60": 1228.1, "max_60": 1363.35, "min_250": 1151.01, "max_250": 1568}, "lots": [{"lot_id": "LOT-20261022-001", "account_id": "LINK", "cost_unit": 1200.24, "buy_reason": "联动样本", "close_reason": "", "buy_time": "2026-10-22 06:28", "buy_price": 1200, "qty": 100, "status": "ACTIVE", "price_now_or_close": 1312.24, "close_time": null, "pnl": 11200.0, "return_rate": 0.09331467039925348, "tag": "<span class=\"tag tag-green\">[持仓观察]</span>"}]}}};
+
+    function accountShortLabel(acc) {
+      const m = ACCOUNT_METRICS[acc];
+      if (!m) return acc;
+      return m.short_label || m.label || acc;
+    }
+
+    function escapeAttr(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // Global Account Filter State
+    let currentGlobalAccount = 'ALL';
+
+    function setGlobalAccountFilter(acc) {
+      currentGlobalAccount = acc;
+      Object.keys(ACCOUNT_METRICS).forEach(function(key) {
+        const btn = document.getElementById('btn-acc-' + key);
+        if (btn) btn.classList.remove('active');
+      });
+      const activeBtn = document.getElementById('btn-acc-' + acc);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      const m = ACCOUNT_METRICS[acc];
+      if (!m) return;
+      const accLabel = m.label || m.short_label || acc;
+
+      // 1. Update Tab 1 KPI Cards
+      const tab1ScaleLbl = document.getElementById('kpi-tab1-scale-label');
+      if (tab1ScaleLbl) tab1ScaleLbl.textContent = acc === 'ALL' ? '投资组合总规模 (全账户合并)' : accLabel + ' 在场总规模';
+      const tab1ScaleVal = document.getElementById('kpi-tab1-scale-val');
+      if (tab1ScaleVal) tab1ScaleVal.textContent = m.mkt_str;
+      const tab1ScaleSub = document.getElementById('kpi-tab1-scale-sub');
+      if (tab1ScaleSub) tab1ScaleSub.textContent = acc === 'ALL' ? '联动样本账户 13.12 万' : ('在场持有 ' + m.active_syms_count + ' 标的 • ' + m.active_lots_count + ' 笔活跃批次');
+
+      const tab1PnlLbl = document.getElementById('kpi-tab1-pnl-label');
+      if (tab1PnlLbl) tab1PnlLbl.textContent = acc === 'ALL' ? '全局整体净浮盈' : accLabel + ' 在场净浮盈';
+      const tab1PnlVal = document.getElementById('kpi-tab1-pnl-val');
+      if (tab1PnlVal) {
+        tab1PnlVal.textContent = m.pnl_str;
+        tab1PnlVal.className = 'kpi-value ' + m.pnl_cls;
+      }
+      const tab1PnlSub = document.getElementById('kpi-tab1-pnl-sub');
+      if (tab1PnlSub) tab1PnlSub.textContent = '整体本息倍数 ' + m.multiple_str + ' • 对冲结构 ' + m.pos_count + ' 浮盈 vs ' + m.neg_count + ' 浮亏';
+
+      const tab1CoreVal = document.getElementById('kpi-tab1-core-val');
+      if (tab1CoreVal) tab1CoreVal.textContent = m.global_pnl_str;
+      const tab1CoreSub = document.getElementById('kpi-tab1-core-sub');
+      if (tab1CoreSub) tab1CoreSub.textContent = acc === 'ALL' ? '海外核心指数 ETF + 避险黄金 ETF' : accLabel + ' 海外核心与避险持仓';
+
+      const tab1CashVal = document.getElementById('kpi-tab1-cash-val');
+      if (tab1CashVal) tab1CashVal.textContent = m.withdrawn_str;
+      const tab1CashSub = document.getElementById('kpi-tab1-cash-sub');
+      if (tab1CashSub) tab1CashSub.textContent = m.closed_trades_count + ' 笔做T净利 ' + m.realized_pnl_str + ' + 累计分红 ' + m.dividends_str;
+
+      const tab1WinVal = document.getElementById('kpi-tab1-win-val');
+      if (tab1WinVal) tab1WinVal.textContent = m.win_rate_str;
+      const tab1WinSub = document.getElementById('kpi-tab1-win-sub');
+      if (tab1WinSub) tab1WinSub.textContent = m.closed_trades_count + ' 战 ' + m.win_trades_count + ' 捷 ' + m.loss_trades_count + ' 止损 • 盈亏比 ' + m.win_loss_ratio_str;
+
+      // 2. Update Tab 2 KPI Cards
+      const tab2CostLbl = document.getElementById('kpi-tab2-cost-label');
+      if (tab2CostLbl) tab2CostLbl.textContent = acc === 'ALL' ? '全账户在场总成本 (合并)' : accLabel + ' 在场总成本';
+      const tab2CostVal = document.getElementById('kpi-tab2-cost-val');
+      if (tab2CostVal) tab2CostVal.textContent = m.cost_str;
+
+      const tab2MktLbl = document.getElementById('kpi-tab2-mkt-label');
+      if (tab2MktLbl) tab2MktLbl.textContent = acc === 'ALL' ? '全账户在场总市值 (合并)' : accLabel + ' 在场总市值';
+      const tab2MktVal = document.getElementById('kpi-tab2-mkt-val');
+      if (tab2MktVal) tab2MktVal.textContent = m.mkt_str;
+
+      const tab2PnlLbl = document.getElementById('kpi-tab2-pnl-label');
+      if (tab2PnlLbl) tab2PnlLbl.textContent = acc === 'ALL' ? '全账户净浮动盈亏' : accLabel + ' 净浮动盈亏';
+      const tab2PnlVal = document.getElementById('kpi-tab2-pnl-val');
+      if (tab2PnlVal) {
+        tab2PnlVal.textContent = m.pnl_str;
+        tab2PnlVal.className = 'kpi-value ' + m.pnl_cls;
+      }
+
+      const tab2HedgeLbl = document.getElementById('kpi-tab2-hedge-label');
+      if (tab2HedgeLbl) tab2HedgeLbl.textContent = acc === 'ALL' ? '账户分层对冲结构' : accLabel + ' 分层对冲结构';
+      const tab2HedgeVal = document.getElementById('kpi-tab2-hedge-val');
+      if (tab2HedgeVal) tab2HedgeVal.textContent = m.pos_count + ' 浮盈 vs ' + m.neg_count + ' 浮亏';
+      const tab2HedgeSub = document.getElementById('kpi-tab2-hedge-sub');
+      if (tab2HedgeSub) tab2HedgeSub.textContent = '浮盈群贡献 ' + m.pos_sum_str + ' 抵消 浮亏群 ' + m.neg_sum_str;
+
+      // 3. Update Alloc Card Pillar 3
+      const p3Tpnl = document.getElementById('alloc-p3-tpnl');
+      if (p3Tpnl) p3Tpnl.textContent = m.realized_pnl_str;
+      const p3Div = document.getElementById('alloc-p3-div');
+      if (p3Div) p3Div.textContent = m.dividends_str;
+      const p3Withdrawn = document.getElementById('alloc-p3-withdrawn');
+      if (p3Withdrawn) p3Withdrawn.textContent = m.withdrawn_str;
+      const p3Trades = document.getElementById('alloc-p3-trades');
+      if (p3Trades) p3Trades.textContent = m.closed_trades_count + '战' + m.win_trades_count + '胜 (' + m.win_rate_str + ')';
+
+      // 4. Update Nav Buttons Text
+      const navHoldings = document.getElementById('nav-btn-holdings');
+      if (navHoldings) navHoldings.textContent = '📈 ' + m.active_syms_count + ' 只活跃持仓盈亏全览 (按盈亏率分层)';
+      const navTargets = document.getElementById('nav-btn-targets');
+      if (navTargets) navTargets.textContent = '🎯 Lot-Trader ' + m.active_syms_count + ' 大穿透标的透视';
+      const navLots = document.getElementById('nav-btn-lots');
+      if (navLots) navLots.textContent = '📋 ' + m.active_lots_count + ' 笔在场活跃批次明细 (双维度)';
+      const navTrades = document.getElementById('nav-btn-trades');
+      if (navTrades) navTrades.textContent = '🏆 ' + m.closed_trades_count + ' 笔历史波段战绩簿 (' + m.win_rate_str + ')';
+
+      // 5. Update Section Titles
+      const titleHoldings = document.getElementById('title-holdings');
+      if (titleHoldings) {
+        const accPrefix = acc === 'ALL' ? '全账户合并' : accLabel;
+        titleHoldings.innerHTML = '<span>📈</span> ' + accPrefix + ' ' + m.active_syms_count + ' 只在场活跃资产持仓盈亏与盈亏率全览';
+      }
+      const titleTargets = document.getElementById('title-targets');
+      if (titleTargets) {
+        const accPrefix = acc === 'ALL' ? '全账户' : accountShortLabel(acc);
+        titleTargets.innerHTML = '<span>🎯</span> Lot-Trader ' + m.active_syms_count + ' 大穿透标的操盘透视卡片 (' + accPrefix + ')';
+      }
+      const titleLots = document.getElementById('title-lots');
+      if (titleLots) {
+        titleLots.innerHTML = '<span>📋</span> Lot-Trader 全部 ' + m.active_lots_count + ' 笔在场活跃批次穿透明细 (' + m.active_syms_count + ' 大标的)';
+      }
+      const titleTrades = document.getElementById('title-trades');
+      if (titleTrades) {
+        titleTrades.innerHTML = '<span>🏆</span> 历史平仓战绩簿 (累计 ' + m.closed_trades_count + ' 笔平仓 • ' + m.win_trades_count + ' 捷 ' + m.loss_trades_count + ' 止损 • 综合胜率 ' + m.win_rate_str + ')';
+      }
+
+      // 6. Filter Holdings Table rows
+      const holdingsRows = document.querySelectorAll('#tbody-holdings tr');
+      let visibleHoldings = 0;
+      holdingsRows.forEach(function(r) {
+        const vis = r.getAttribute('data-account-visibility') || '';
+        const show = vis.split(',').includes(acc);
+        r.style.display = show ? '' : 'none';
+        if (show) {
+          visibleHoldings++;
+          const rankCell = r.querySelector('.rank-cell');
+          if (rankCell) rankCell.textContent = visibleHoldings;
+        }
+      });
+
+      // 7. Filter Target Cards
+      const targetCards = document.querySelectorAll('.target-card');
+      targetCards.forEach(function(card) {
+        const vis = card.getAttribute('data-account-visibility') || '';
+        card.style.display = vis.split(',').includes(acc) ? '' : 'none';
+      });
+
+      // 8. Filter Lots rows (time & pnl)
+      ['tbody-time', 'tbody-pnl'].forEach(function(tbId) {
+        const tb = document.getElementById(tbId);
+        if (tb) {
+          const rows = tb.querySelectorAll('tr');
+          let visibleLots = 0;
+          rows.forEach(function(r) {
+            const rAcc = r.getAttribute('data-account') || 'DEFAULT';
+            const show = (acc === 'ALL' || rAcc === acc);
+            r.style.display = show ? '' : 'none';
+            if (show) {
+              visibleLots++;
+              const rankCell = r.querySelector('.rank-cell');
+              if (rankCell) rankCell.textContent = visibleLots;
+            }
+          });
+        }
+      });
+
+      // 9. Filter Trades rows
+      const tradeRows = document.querySelectorAll('#tbody-trades tr');
+      let visibleTrades = 0;
+      tradeRows.forEach(function(r) {
+        const rAcc = r.getAttribute('data-account') || 'DEFAULT';
+        const show = (acc === 'ALL' || rAcc === acc);
+        r.style.display = show ? '' : 'none';
+        if (show) {
+          visibleTrades++;
+          const firstCell = r.querySelector('td:first-child');
+          if (firstCell) firstCell.textContent = visibleTrades;
+        }
+      });
+    }
+
+    function switchTab(tabId) {
+      var panes = document.querySelectorAll('.tab-pane');
+      panes.forEach(function(pane) {
+        pane.classList.remove('active');
+      });
+      var pane = document.getElementById(tabId);
+      if (pane) pane.classList.add('active');
+      var btns = document.querySelectorAll('.nav-btn');
+      btns.forEach(function(btn) {
+        if (btn.getAttribute('onclick') && btn.getAttribute('onclick').indexOf(tabId) !== -1) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+    }
+
+    function switchLotSubView(view) {
+      var btnTime = document.getElementById('btn-subview-time');
+      var btnPnl = document.getElementById('btn-subview-pnl');
+      var viewTime = document.getElementById('subview-lot-time');
+      var viewPnl = document.getElementById('subview-lot-pnl');
+
+      if (view === 'time') {
+        btnTime.classList.add('active');
+        btnPnl.classList.remove('active');
+        viewTime.style.display = 'block';
+        viewPnl.style.display = 'none';
+      } else {
+        btnTime.classList.remove('active');
+        btnPnl.classList.add('active');
+        viewTime.style.display = 'none';
+        viewPnl.style.display = 'block';
+      }
+    }
+
+    function sortPnlTable(dir) {
+      var btnDesc = document.getElementById('btn-sort-desc');
+      var btnAsc = document.getElementById('btn-sort-asc');
+      if (dir === 'desc') {
+        btnDesc.classList.add('active');
+        btnAsc.classList.remove('active');
+      } else {
+        btnDesc.classList.remove('active');
+        btnAsc.classList.add('active');
+      }
+      var tbody = document.getElementById('tbody-pnl');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {
+        var va = parseFloat(a.getAttribute('data-return'));
+        var vb = parseFloat(b.getAttribute('data-return'));
+        return dir === 'desc' ? (vb - va) : (va - vb);
+      });
+      rows.forEach(function(r, idx) {
+        r.querySelector('.rank-cell').textContent = idx + 1;
+        tbody.appendChild(r);
+      });
+    }
+
+    function sortHoldingsTable(mode) {
+      var btnRateDesc = document.getElementById('btn-sort-holdings-rate-desc');
+      var btnRateAsc = document.getElementById('btn-sort-holdings-rate-asc');
+      var btnMktDesc = document.getElementById('btn-sort-holdings-mkt-desc');
+      var btnPnlAsc = document.getElementById('btn-sort-holdings-pnl-asc');
+      var btnRankAsc = document.getElementById('btn-sort-holdings-rank-asc');
+      var btnRankDesc = document.getElementById('btn-sort-holdings-rank-desc');
+
+      [btnRateDesc, btnRateAsc, btnMktDesc, btnPnlAsc, btnRankAsc, btnRankDesc].forEach(function(b) {
+        if (b) b.classList.remove('active');
+      });
+
+      if (mode === 'rate_desc' && btnRateDesc) btnRateDesc.classList.add('active');
+      if (mode === 'rate_asc' && btnRateAsc) btnRateAsc.classList.add('active');
+      if (mode === 'mkt_desc' && btnMktDesc) btnMktDesc.classList.add('active');
+      if (mode === 'pnl_asc' && btnPnlAsc) btnPnlAsc.classList.add('active');
+      if (mode === 'rank_asc' && btnRankAsc) btnRankAsc.classList.add('active');
+      if (mode === 'rank_desc' && btnRankDesc) btnRankDesc.classList.add('active');
+
+      var tbody = document.getElementById('tbody-holdings');
+      if (!tbody) return;
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+
+      rows.sort(function(a, b) {
+        var rateA = parseFloat(a.getAttribute('data-pnl-rate') || 0);
+        var rateB = parseFloat(b.getAttribute('data-pnl-rate') || 0);
+        var mktA = parseFloat(a.getAttribute('data-mkt-val') || 0);
+        var mktB = parseFloat(b.getAttribute('data-mkt-val') || 0);
+        var pnlA = parseFloat(a.getAttribute('data-pnl-val') || 0);
+        var pnlB = parseFloat(b.getAttribute('data-pnl-val') || 0);
+        var rankA = parseFloat(a.getAttribute('data-rank-250') || 50);
+        var rankB = parseFloat(b.getAttribute('data-rank-250') || 50);
+
+        if (mode === 'rate_desc') return rateB - rateA;
+        if (mode === 'rate_asc') return rateA - rateB;
+        if (mode === 'mkt_desc') return mktB - mktA;
+        if (mode === 'pnl_asc') return pnlA - pnlB;
+        if (mode === 'rank_asc') return rankA - rankB;
+        if (mode === 'rank_desc') return rankB - rankA;
+        return rateB - rateA;
+      });
+
+      let visibleRank = 0;
+      rows.forEach(function(r) {
+        tbody.appendChild(r);
+        if (r.style.display !== 'none') {
+          visibleRank++;
+          var rankCell = r.querySelector('.rank-cell');
+          if (rankCell) rankCell.textContent = visibleRank;
+        }
+      });
+    }
+
+    function filterLotsBySymbol(sym) {
+      var tbodyTime = document.getElementById('tbody-time');
+      var tbodyPnl = document.getElementById('tbody-pnl');
+      
+      [tbodyTime, tbodyPnl].forEach(function(tbody) {
+        if (!tbody) return;
+        var rows = tbody.querySelectorAll('tr');
+        var visibleCount = 0;
+        rows.forEach(function(r) {
+          var rowSym = r.getAttribute('data-symbol');
+          var rAcc = r.getAttribute('data-account') || 'DEFAULT';
+          var accMatch = (currentGlobalAccount === 'ALL' || rAcc === currentGlobalAccount);
+          var symMatch = (sym === 'ALL' || rowSym === sym);
+          if (accMatch && symMatch) {
+            r.style.display = '';
+            visibleCount++;
+            var rankCell = r.querySelector('.rank-cell');
+            if (rankCell) rankCell.textContent = visibleCount;
+          } else {
+            r.style.display = 'none';
+          }
+        });
+      });
+    }
+
+    // MODAL DRILL-DOWN LOGIC
+    let currentModalSymbol = null;
+    let currentModalFilter = 'ALL';
+    let currentModalSortOrder = 'desc'; // 'desc' (newest first), 'asc' (oldest first)
+
+    function getPhysicsBadgeHtml(p) {
+      if (!p) return '<span class="tag tag-blue">--</span>';
+      const st = p.brake_status;
+      if (st === 'STEADY') return '<span class="tag tag-blue">⚖️ STEADY 匀速稳态</span>';
+      if (st === 'ACCELERATING_UP') {
+        if (p.confidence_level === 'LOW') return '<span class="tag tag-amber">🚀 ACCEL_UP (无量虚火)</span>';
+        if (p.m < 0.7) return '<span class="tag tag-green">🚀 ACCEL_UP (缩量)</span>';
+        if (p.confidence_level === 'HIGH') return '<span class="tag tag-green">🚀 ACCEL_UP (放量变盘)</span>';
+        return '<span class="tag tag-green">🚀 ACCEL_UP 加速反弹</span>';
+      }
+      if (st === 'ACCELERATING_DOWN') return '<span class="tag tag-red">⚠️ ACCEL_DOWN 失速下坠</span>';
+      if (st === 'BRAKING_BOTTOM') return '<span class="tag tag-amber">🛑 BRAKE_BOTTOM 底部刹车</span>';
+      if (st === 'BRAKING_TOP') return '<span class="tag tag-purple">🛑 BRAKE_TOP 顶部减速</span>';
+      return '<span class="tag tag-blue">' + st + '</span>';
+    }
+
+    function filterTargetCards(val) {
+      const cards = document.querySelectorAll('.target-card');
+      cards.forEach(card => {
+        const vis = card.getAttribute('data-account-visibility') || '';
+        const accMatch = vis.split(',').includes(currentGlobalAccount);
+        const status = card.getAttribute('data-brake-status') || '';
+        const rank250 = parseFloat(card.getAttribute('data-rank-250') || 50);
+        let statusMatch = false;
+        if (val === 'ALL') {
+          statusMatch = true;
+        } else if (val === 'DEEP_VALUE') {
+          statusMatch = (rank250 < 15);
+        } else if (val === 'HIGH_ALT') {
+          statusMatch = (rank250 > 80);
+        } else {
+          statusMatch = (status === val);
+        }
+        card.style.display = (accMatch && statusMatch) ? 'flex' : 'none';
+      });
+    }
+
+    function sortTargetCards(mode) {
+      const grid = document.querySelector('#tab-targets .target-grid');
+      if (!grid) return;
+      const cards = Array.from(grid.querySelectorAll('.target-card'));
+      const num = function(card, attr) {
+        const v = parseFloat(card.getAttribute(attr));
+        return Number.isFinite(v) ? v : 0;
+      };
+      cards.sort(function(a, b) {
+        if (mode === 'force_desc') return num(b, 'data-force-eff') - num(a, 'data-force-eff');
+        if (mode === 'force_asc') return num(a, 'data-force-eff') - num(b, 'data-force-eff');
+        if (mode === 'force_abs_desc') return Math.abs(num(b, 'data-force-eff')) - Math.abs(num(a, 'data-force-eff'));
+        if (mode === 'v_desc') return num(b, 'data-v-short') - num(a, 'data-v-short');
+        if (mode === 'rate_desc') return num(b, 'data-pnl-rate') - num(a, 'data-pnl-rate');
+        if (mode === 'rate_asc') return num(a, 'data-pnl-rate') - num(b, 'data-pnl-rate');
+        return num(b, 'data-mkt-val') - num(a, 'data-mkt-val');
+      });
+      cards.forEach(function(card) { grid.appendChild(card); });
+    }
+
+    function openTargetModal(sym) {
+      currentModalSymbol = sym;
+      currentModalFilter = 'ALL';
+      currentModalSortOrder = 'desc';
+
+      const targetGroup = TARGETS_DATA[sym];
+      if (!targetGroup) return;
+      const target = (targetGroup[currentGlobalAccount] || targetGroup['ALL'] || targetGroup);
+      if (!target) return;
+
+      // Header
+      document.getElementById('modal-symbol-name').textContent = target.name;
+      document.getElementById('modal-symbol-code').textContent = '(' + target.symbol + ')';
+      document.getElementById('modal-category-tag').textContent = target.category;
+
+      // Summary Strip
+      document.getElementById('modal-stat-shares').textContent = target.shares.toLocaleString() + ' ' + target.qty_unit;
+      document.getElementById('modal-stat-cost').textContent = '¥' + target.cost_unit.toFixed(target.cost_unit < 2 ? 3 : 2);
+      document.getElementById('modal-stat-price').textContent = '¥' + target.current_price.toFixed(target.current_price < 2 ? 3 : 2);
+      document.getElementById('modal-stat-mktval').textContent = '¥' + Math.round(target.market_value).toLocaleString();
+
+      const pnlEl = document.getElementById('modal-stat-pnl');
+      pnlEl.textContent = (target.floating_pnl >= 0 ? '+' : '') + '¥' + Math.round(target.floating_pnl).toLocaleString();
+      pnlEl.className = 'modal-stat-val ' + (target.floating_pnl >= 0 ? 'val-green' : 'val-red');
+
+      const rrEl = document.getElementById('modal-stat-rr');
+      rrEl.textContent = (target.return_rate >= 0 ? '+' : '') + (target.return_rate * 100).toFixed(2) + '%';
+      rrEl.className = 'modal-stat-val ' + (target.return_rate >= 0 ? 'val-green' : 'val-red');
+
+      const multVal = target.cost_unit > 0 ? (target.current_price / target.cost_unit) : 1.0;
+      const multEl = document.getElementById('modal-stat-multiple');
+      if (multEl) {
+        multEl.textContent = multVal.toFixed(2) + 'x';
+        multEl.className = 'modal-stat-val ' + (multVal >= 1.0 ? 'val-green' : 'val-red');
+      }
+
+      document.getElementById('modal-stat-trades').textContent = target.total_trades > 0 
+        ? (target.win_trades + '胜' + target.loss_trades + '负 (' + (target.win_rate*100).toFixed(1) + '%)')
+        : '暂无平仓';
+
+      const tpnlEl = document.getElementById('modal-stat-tpnl');
+      tpnlEl.textContent = (target.net_t_pnl >= 0 ? '+' : '') + '¥' + Math.round(target.net_t_pnl).toLocaleString();
+      tpnlEl.className = 'modal-stat-val ' + (target.net_t_pnl >= 0 ? 'val-green' : 'val-red');
+
+      const pfEl = document.getElementById('modal-stat-pf');
+      pfEl.textContent = target.profit_factor_str;
+      pfEl.className = 'modal-stat-val ' + (target.profit_factor_str === '全胜' || target.profit_factor >= 1.5 ? 'val-green' : target.profit_factor < 1 && target.profit_factor > 0 ? 'val-red' : 'val-blue');
+
+      document.getElementById('modal-stat-div').textContent = '+¥' + Math.round(target.dividends).toLocaleString();
+      document.getElementById('modal-stat-withdrawn').textContent = '+¥' + Math.round(target.total_withdrawn).toLocaleString();
+
+      // Populate Physics Panel
+      const p = target.physics;
+      const physPanel = document.getElementById('modal-physics-panel');
+      if (p && physPanel) {
+        physPanel.style.display = 'block';
+        document.getElementById('modal-physics-badge').innerHTML = getPhysicsBadgeHtml(p);
+        document.getElementById('modal-phys-v').textContent = (p.v_short >= 0 ? '+' : '') + p.v_short.toFixed(2) + '%/日';
+        document.getElementById('modal-phys-a').textContent = (p.a >= 0 ? '+' : '') + p.a.toFixed(2) + '%';
+        document.getElementById('modal-phys-m').textContent = p.m.toFixed(2) + 'x (' + (p.m < 0.7 ? '缩量' : (p.m > 1.3 ? '放量' : '平量')) + ')';
+        document.getElementById('modal-phys-f').textContent = (p.F >= 0 ? '+' : '') + p.F.toFixed(3);
+        
+        const tauVal = (p.turnover_rate !== undefined && p.turnover_rate !== null) ? p.turnover_rate.toFixed(2) + '%' : '--';
+        document.getElementById('modal-phys-tau').textContent = tauVal;
+        
+        const wconf = p.confidence_weight !== undefined ? p.confidence_weight.toFixed(2) + 'x' : '--';
+        const clvl = p.confidence_level || 'MEDIUM';
+        const clvlColor = clvl === 'HIGH' ? '#10b981' : (clvl === 'LOW' ? '#f59e0b' : '#38bdf8');
+        document.getElementById('modal-phys-wconf').innerHTML = wconf + ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.08);color:' + clvlColor + ';font-weight:600;">[' + clvl + ']</span>';
+        
+        const feff = (p.effective_force !== undefined && p.effective_force !== null) ? p.effective_force : (p.F || 0);
+        const feffColor = feff > 0 ? '#10b981' : (feff < 0 ? '#ef4444' : '#94a3b8');
+        document.getElementById('modal-phys-feff').innerHTML = '<span style="color:' + feffColor + ';font-weight:700;">' + (feff >= 0 ? '+' : '') + feff.toFixed(3) + '</span>';
+
+        let forceStatusText = '多空均衡';
+        if (p.force_status === 'STRONG_SUPPORT') forceStatusText = '🟢 强托底承接';
+        else if (p.force_status === 'STRONG_RESISTANCE') forceStatusText = '🔴 强上方抛压';
+        document.getElementById('modal-phys-force-status').textContent = forceStatusText;
+        
+        document.getElementById('modal-phys-rank60-val').textContent = p.pct_rank_60.toFixed(1) + '%';
+        document.getElementById('modal-phys-pullback60').textContent = '距高点 ' + p.pullback_60.toFixed(1) + '%';
+        document.getElementById('modal-phys-track60').style.width = Math.min(100, Math.max(0, p.pct_rank_60)) + '%';
+        document.getElementById('modal-phys-min60').textContent = '最低 ¥' + (p.min_60 < 2 ? p.min_60.toFixed(3) : p.min_60.toFixed(2));
+        document.getElementById('modal-phys-max60').textContent = '最高 ¥' + (p.max_60 < 2 ? p.max_60.toFixed(3) : p.max_60.toFixed(2));
+
+        document.getElementById('modal-phys-rank250-val').textContent = p.pct_rank_250.toFixed(1) + '%';
+        document.getElementById('modal-phys-pullback250').textContent = '距高点 ' + p.pullback_250.toFixed(1) + '%';
+        document.getElementById('modal-phys-track250').style.width = Math.min(100, Math.max(0, p.pct_rank_250)) + '%';
+        document.getElementById('modal-phys-min250').textContent = '最低 ¥' + (p.min_250 < 2 ? p.min_250.toFixed(3) : p.min_250.toFixed(2));
+        document.getElementById('modal-phys-max250').textContent = '最高 ¥' + (p.max_250 < 2 ? p.max_250.toFixed(3) : p.max_250.toFixed(2));
+      } else if (physPanel) {
+        physPanel.style.display = 'none';
+      }
+
+      // Counts
+      const totalLots = target.lots.length;
+      const activeLots = target.lots.filter(l => l.status === 'ACTIVE').length;
+      const closedLots = totalLots - activeLots;
+      document.getElementById('modal-cnt-all').textContent = totalLots;
+      document.getElementById('modal-cnt-act').textContent = activeLots;
+      document.getElementById('modal-cnt-cls').textContent = closedLots;
+
+      // Reset Sort Button text
+      document.getElementById('modal-sort-btn').innerHTML = '📅 按买入时间倒序 (最新优先) ▼';
+
+      updateModalFilterButtons();
+      renderModalLotsTable();
+
+      document.getElementById('target-modal-overlay').classList.add('active');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeTargetModal() {
+      document.getElementById('target-modal-overlay').classList.remove('active');
+      document.body.style.overflow = '';
+    }
+
+    function handleModalOverlayClick(e) {
+      if (e.target.id === 'target-modal-overlay') {
+        closeTargetModal();
+      }
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeTargetModal();
+      }
+    });
+
+    function toggleModalSortOrder() {
+      currentModalSortOrder = (currentModalSortOrder === 'desc') ? 'asc' : 'desc';
+      const btn = document.getElementById('modal-sort-btn');
+      if (currentModalSortOrder === 'desc') {
+        btn.innerHTML = '📅 按买入时间倒序 (最新优先) ▼';
+      } else {
+        btn.innerHTML = '📅 按买入时间正序 (最早优先) ▲';
+      }
+      renderModalLotsTable();
+    }
+
+    function setModalFilter(filter) {
+      currentModalFilter = filter;
+      updateModalFilterButtons();
+      renderModalLotsTable();
+    }
+
+    function updateModalFilterButtons() {
+      document.querySelectorAll('.modal-filter-btn').forEach(btn => {
+        if (btn.getAttribute('data-filter') === currentModalFilter) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+    }
+
+    function renderModalLotsTable() {
+      const targetGroup = TARGETS_DATA[currentModalSymbol];
+      if (!targetGroup) return;
+      const target = (targetGroup[currentGlobalAccount] || targetGroup['ALL'] || targetGroup);
+      if (!target) return;
+
+      let lots = target.lots.slice();
+
+      if (currentModalFilter === 'ACTIVE') {
+        lots = lots.filter(l => l.status === 'ACTIVE');
+      } else if (currentModalFilter === 'CLOSED') {
+        lots = lots.filter(l => l.status === 'CLOSED');
+      }
+
+      // Strict Buy Time Sorting
+      lots.sort(function(a, b) {
+        var tA = new Date(a.buy_time).getTime();
+        var tB = new Date(b.buy_time).getTime();
+        return currentModalSortOrder === 'desc' ? (tB - tA) : (tA - tB);
+      });
+
+      const tbody = document.getElementById('modal-lots-tbody');
+      tbody.innerHTML = '';
+
+      if (lots.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:32px;color:#9ca3af;">无对应批次记录</td></tr>';
+        return;
+      }
+
+      lots.forEach(function(l, idx) {
+        const tr = document.createElement('tr');
+        const bDate = l.buy_time.slice(0, 10);
+        const pBuy = '¥' + l.buy_price.toFixed(l.buy_price < 2 ? 3 : 2);
+        const pCurrOrClose = '¥' + l.price_now_or_close.toFixed(l.price_now_or_close < 2 ? 3 : 2);
+        const qtyStr = l.qty.toLocaleString() + ' ' + target.qty_unit;
+
+        const pnlClass = l.pnl >= 0 ? 'val-green' : 'val-red';
+        const pnlPrefix = l.pnl > 0 ? '+' : '';
+        const pnlStr = pnlPrefix + '¥' + l.pnl.toFixed(2);
+
+        const rrClass = l.return_rate >= 0 ? 'val-green' : 'val-red';
+        const rrPrefix = l.return_rate > 0 ? '+' : '';
+        const rrStr = rrPrefix + (l.return_rate * 100).toFixed(2) + '%';
+
+        let statusBadge = '';
+        if (l.status === 'ACTIVE') {
+          statusBadge = '<span class="tag tag-green">在场活跃</span>';
+        } else {
+          if (l.pnl >= 0) {
+            statusBadge = '<span class="tag tag-blue">已平仓做T</span>';
+          } else {
+            statusBadge = '<span class="tag tag-red">微损止损</span>';
+          }
+        }
+
+        const closeDate = l.close_time ? l.close_time.slice(0, 10) : '<span style="color:#9ca3af;">持仓中</span>';
+
+        tr.innerHTML = '<td>' + (idx + 1) + '</td>' +
+          '<td title="买入理由: ' + escapeAttr(l.buy_reason || '未记录') + '"><span class="tag tag-blue" style="font-size:10px;padding:1px 6px;">' + (l.account_id || 'DEFAULT') + '</span></td>' +
+          '<td><code>' + l.lot_id + '</code></td>' +
+          '<td><strong>' + bDate + '</strong></td>' +
+          '<td>' + pBuy + '</td>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td>' + pCurrOrClose + '</td>' +
+          '<td>' + closeDate + '</td>' +
+          '<td>' + qtyStr + '</td>' +
+          '<td><strong class="' + pnlClass + '">' + pnlStr + '</strong></td>' +
+          '<td><strong class="' + rrClass + '">' + rrStr + '</strong></td>' +
+          '<td>' + l.tag + '</td>';
+        tbody.appendChild(tr);
+      });
+    }
+
+    function jumpToTabLots() {
+      const sym = currentModalSymbol;
+      closeTargetModal();
+      switchTab('tab-lots');
+      const sel = document.getElementById('lots-symbol-filter');
+      if (sel) {
+        sel.value = sym;
+        filterLotsBySymbol(sym);
+      }
+    }
+    /* =====================================================================
+       DUAL-MODE LIVE ENGINE — standalone self-driving quotes + local heartbeat
+       ---------------------------------------------------------------------
+       Standalone  : the page polls qt.gtimg.cn itself (works from file://)
+       Local engine: 3s heartbeat to trade serve; prices then come from /api/summary
+       Safety contract: no uncaught exception, no NaN cell, no white screen —
+       every entry point is wrapped and every failure degrades to the last good data.
+       ===================================================================== */
+    var LCR = (typeof LiveClientRuntime !== 'undefined' && LiveClientRuntime) ? LiveClientRuntime : null;
+
+    var LIVE = {
+      mode: 'STANDALONE',
+      paused: false,
+      failCount: 0,
+      booted: false,
+      lastQuoteAt: 0,
+      lastError: '',
+      appliedQuotes: 0,
+      localBase: LCR ? LCR.LOCAL_API_BASE : 'http://127.0.0.1:8080',
+      previousPrices: {},
+      quoteTimer: null,
+      heartbeatTimer: null,
+      // Session-credential state: a 401 from /api/summary means the local engine is alive
+      // but our token is missing/stale -> stay standalone instead of retrying blindly.
+      authRejected: false,
+      authRetryCount: 0
+    };
+
+    var AUTH_RETRY_BEATS = 20; // ~60s at HEARTBEAT_MS = 3000
+
+    /** The credential injected by `trade dashboard` (empty string when unconfigured). */
+    function localSessionToken() {
+      try {
+        return LCR ? LCR.sessionToken() : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    /** Build a local API URL carrying `?token=` as a fallback channel. */
+    function localApiUrl(path) {
+      var url = LIVE.localBase + path;
+      try {
+        return LCR ? LCR.withSessionToken(url, localSessionToken()) : url;
+      } catch (e) {
+        return url;
+      }
+    }
+
+    /** Authorization header object for the local engine ({} when no token is set). */
+    function localAuthHeaders() {
+      try {
+        return LCR ? LCR.authHeaders(localSessionToken()) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function liveNum(value, fallback) {
+      try {
+        return LCR ? LCR.num(value, fallback) : (isFinite(parseFloat(value)) ? parseFloat(value) : (fallback || 0));
+      } catch (e) {
+        return fallback || 0;
+      }
+    }
+
+    function formatLivePrice(price) {
+      var p = liveNum(price, 0);
+      return '¥' + p.toFixed(p < 2 ? 3 : 2);
+    }
+
+    function formatWan(value) {
+      return (liveNum(value, 0) / 10000).toFixed(2) + ' 万';
+    }
+
+    function nowClock() {
+      try {
+        return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      } catch (e) {
+        return '--';
+      }
+    }
+
+    /** Flash a cell red/green for 1s, then let CSS transition it back to rest. */
+    function flashField(el, direction) {
+      if (!el || (direction !== 'up' && direction !== 'down')) return;
+      try {
+        var target = (el.closest && el.closest('td')) || el;
+        target.classList.remove('flash-up', 'flash-down');
+        void target.offsetWidth;
+        target.classList.add(direction === 'up' ? 'flash-up' : 'flash-down');
+        setTimeout(function () {
+          try { target.classList.remove('flash-up', 'flash-down'); } catch (e) {}
+        }, 1000);
+      } catch (e) {}
+    }
+
+    function setFieldText(el, text, direction) {
+      if (!el) return;
+      var changed = el.textContent !== text;
+      el.textContent = text;
+      if (changed) flashField(el, direction);
+    }
+
+    function setFieldMoney(el, value, direction) {
+      if (!el) return;
+      setFieldText(el, LCR.formatSignedMoney(value), direction);
+      el.className = liveNum(value, 0) >= 0 ? 'val-green' : 'val-red';
+    }
+
+    function setFieldRate(el, rate, direction) {
+      if (!el) return;
+      setFieldText(el, LCR.formatPct(rate, 2, true), direction);
+      el.className = liveNum(rate, 0) >= 0 ? 'val-green' : 'val-red';
+    }
+
+    /** Every symbol the page already knows about (dedup, from the embedded payload). */
+    function collectLiveSymbols() {
+      var raw = [];
+      try {
+        if (typeof TARGETS_DATA === 'object' && TARGETS_DATA) {
+          Object.keys(TARGETS_DATA).forEach(function (sym) { raw.push(sym); });
+        }
+      } catch (e) {}
+      try {
+        document.querySelectorAll('[data-sym]').forEach(function (el) {
+          var sym = el.getAttribute('data-sym');
+          if (sym) raw.push(sym);
+        });
+      } catch (e) {}
+      return LCR ? LCR.dedupeSymbols(raw) : [];
+    }
+
+    // ---------------------------------------------------------------- rendering
+
+    function writeCardFields(card, bucket, direction) {
+      if (!card || !bucket) return;
+      setFieldText(card.querySelector('[data-field="price"]'), formatLivePrice(bucket.current_price), direction);
+      setFieldText(card.querySelector('[data-field="mkt"]'), '¥' + Math.round(liveNum(bucket.market_value, 0)).toLocaleString('en-US'));
+      setFieldMoney(card.querySelector('[data-field="pnl"]'), bucket.floating_pnl);
+      setFieldRate(card.querySelector('[data-field="rate"]'), bucket.return_rate);
+      setFieldText(card.querySelector('[data-field="mult"]'), LCR.formatMultiple(bucket.market_value, liveNum(bucket.cost_unit, 0) * liveNum(bucket.shares, 0)));
+      card.setAttribute('data-pnl-rate', String(liveNum(bucket.return_rate, 0)));
+      card.setAttribute('data-mkt-val', String(liveNum(bucket.market_value, 0)));
+    }
+
+    function writeHoldingRowFields(row, bucket, direction) {
+      if (!row || !bucket) return;
+      setFieldText(row.querySelector('[data-field="price"]'), formatLivePrice(bucket.current_price), direction);
+      setFieldText(row.querySelector('[data-field="mkt"]'), '¥' + liveNum(bucket.market_value, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      setFieldMoney(row.querySelector('[data-field="pnl"]'), bucket.floating_pnl);
+      setFieldRate(row.querySelector('[data-field="rate"]'), bucket.return_rate);
+      setFieldText(row.querySelector('[data-field="mult"]'), LCR.formatMultiple(bucket.market_value, liveNum(bucket.cost_unit, 0) * liveNum(bucket.shares, 0)));
+      row.setAttribute('data-pnl-rate', String(liveNum(bucket.return_rate, 0)));
+      row.setAttribute('data-pnl-val', String(liveNum(bucket.floating_pnl, 0)));
+      row.setAttribute('data-mkt-val', String(liveNum(bucket.market_value, 0)));
+    }
+
+    /** Push one symbol's live quote into embedded data + every DOM surface. */
+    function updateSymbolLive(symbol, quote) {
+      var group = (typeof TARGETS_DATA === 'object' && TARGETS_DATA) ? TARGETS_DATA[symbol] : null;
+      if (!group || !quote) return false;
+      var price = liveNum(quote.price, 0);
+      if (!(price > 0)) return false;
+
+      var prevClose = liveNum(quote.prev_close, 0);
+      var prevPrice = liveNum(LIVE.previousPrices[symbol], 0);
+      var direction = prevPrice > 0 ? (price > prevPrice ? 'up' : (price < prevPrice ? 'down' : 'flat')) : 'flat';
+      LIVE.previousPrices[symbol] = price;
+
+      // 1) embedded data (drives the drill-down modal, sorts, and filters)
+      Object.keys(group).forEach(function (accKey) {
+        var bucket = group[accKey];
+        if (!bucket) return;
+        var live = LCR.computeHoldingLive({
+          quantity: bucket.shares,
+          costUnit: bucket.cost_unit,
+          price: price,
+          prevClose: prevClose
+        });
+        bucket.current_price = live.price;
+        bucket.market_value = live.marketValue;
+        bucket.floating_pnl = live.floatingPnl;
+        bucket.return_rate = live.returnRate;
+        bucket.day_change_pct = live.dayChangePct;
+        bucket.price_source = live.price_source;
+
+        (bucket.lots || []).forEach(function (lot) {
+          if (!lot || lot.status !== 'ACTIVE') return;
+          var lotLive = LCR.computeHoldingLive({
+            quantity: lot.qty,
+            costUnit: lot.cost_unit,
+            price: price,
+            prevClose: prevClose
+          });
+          lot.price_now_or_close = lotLive.price;
+          lot.pnl = lotLive.floatingPnl;
+          lot.return_rate = lotLive.returnRate;
+        });
+      });
+
+      // 2) Layer 2: target cards (one card per account bucket)
+      try {
+        document.querySelectorAll('.target-card[data-sym="' + symbol + '"]').forEach(function (card) {
+          var accKey = card.getAttribute('data-account') || 'ALL';
+          var bucket = group[accKey] || group['ALL'];
+          if (bucket) writeCardFields(card, bucket, direction);
+        });
+      } catch (e) {}
+
+      // 3) Layer 1 holdings table rows
+      try {
+        document.querySelectorAll('#tbody-holdings tr[data-symbol="' + symbol + '"]').forEach(function (row) {
+          var accKey = row.getAttribute('data-account') || 'ALL';
+          var bucket = group[accKey] || group['ALL'];
+          if (bucket) writeHoldingRowFields(row, bucket, direction);
+        });
+      } catch (e) {}
+
+      // 4) Layer 3 active lot rows (time + return-rate tables)
+      try {
+        document.querySelectorAll('tr[data-lot-id][data-symbol="' + symbol + '"]').forEach(function (row) {
+          var status = row.getAttribute('data-status') || 'ACTIVE';
+          if (status !== 'ACTIVE') return;
+          var live = LCR.computeHoldingLive({
+            quantity: row.getAttribute('data-qty'),
+            costUnit: row.getAttribute('data-cost-unit'),
+            price: price,
+            prevClose: prevClose
+          });
+          setFieldText(row.querySelector('[data-field="price"]'), formatLivePrice(live.price), direction);
+          setFieldMoney(row.querySelector('[data-field="pnl"]'), live.floatingPnl);
+          setFieldRate(row.querySelector('[data-field="rate"]'), live.returnRate);
+          row.setAttribute('data-return', String(live.returnRate));
+        });
+      } catch (e) {}
+
+      return true;
+    }
+
+    /** Aggregate live totals directly from the rendered holdings rows (authoritative set). */
+    function collectLiveAccountTotals() {
+      var totals = { ALL: { cost: 0, mkt: 0, pnl: 0, symbols: 0, lots: 0, pos: 0, neg: 0, posSum: 0, negSum: 0 } };
+      var rows = [];
+      try {
+        rows = Array.prototype.slice.call(document.querySelectorAll('#tbody-holdings tr'));
+      } catch (e) {
+        return totals;
+      }
+      var hasAllRow = {};
+      rows.forEach(function (row) {
+        if ((row.getAttribute('data-account') || 'ALL') === 'ALL') {
+          hasAllRow[row.getAttribute('data-symbol')] = true;
+        }
+      });
+      var countedAll = {};
+      rows.forEach(function (row) {
+        var acc = row.getAttribute('data-account') || 'ALL';
+        var sym = row.getAttribute('data-symbol') || '';
+        var cost = liveNum(row.getAttribute('data-cost-val'), 0);
+        var mkt = liveNum(row.getAttribute('data-mkt-val'), 0);
+        var pnl = liveNum(row.getAttribute('data-pnl-val'), 0);
+        var lots = liveNum(row.getAttribute('data-lots'), 0) || 0;
+
+        if (acc !== 'ALL') {
+          if (!totals[acc]) totals[acc] = { cost: 0, mkt: 0, pnl: 0, symbols: 0, lots: 0, pos: 0, neg: 0, posSum: 0, negSum: 0 };
+          totals[acc].cost += cost;
+          totals[acc].mkt += mkt;
+          totals[acc].pnl += pnl;
+          totals[acc].symbols += 1;
+          totals[acc].lots += lots;
+          if (pnl >= 0) { totals[acc].pos += 1; totals[acc].posSum += pnl; }
+          else { totals[acc].neg += 1; totals[acc].negSum += pnl; }
+        }
+
+        // One row per symbol feeds the merged portfolio: the merged row when it
+        // exists, otherwise the single-account row that carries visibility "ALL".
+        var contributes = (acc === 'ALL') || !hasAllRow[sym];
+        if (contributes && !countedAll[sym]) {
+          countedAll[sym] = true;
+          totals.ALL.cost += cost;
+          totals.ALL.mkt += mkt;
+          totals.ALL.pnl += pnl;
+          totals.ALL.symbols += 1;
+          totals.ALL.lots += lots;
+          if (pnl >= 0) { totals.ALL.pos += 1; totals.ALL.posSum += pnl; }
+          else { totals.ALL.neg += 1; totals.ALL.negSum += pnl; }
+        }
+      });
+      return totals;
+    }
+
+    function accountMktSplitText(totals) {
+      var parts = [];
+      try {
+        Object.keys(totals).forEach(function (key) {
+          if (key === 'ALL' || !ACCOUNT_METRICS[key]) return;
+          parts.push(accountShortLabel(key) + ' ' + formatWan(totals[key].mkt));
+        });
+      } catch (e) {}
+      return parts.length ? parts.join(' + ') : '暂无可穿透账户';
+    }
+
+    function setKpiText(id, text, className) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text;
+      if (className) el.className = 'kpi-value ' + className;
+    }
+
+    /** Refresh Layer-1 KPI cards from the live rows (never from stale template metrics). */
+    function applyLiveKpis() {
+      var totals = collectLiveAccountTotals();
+      var acc = (typeof currentGlobalAccount === 'string' && currentGlobalAccount) ? currentGlobalAccount : 'ALL';
+      var t = totals[acc] || totals.ALL;
+      if (!t) return;
+      var pnlCls = t.pnl >= 0 ? 'val-green' : 'val-red';
+      var mult = t.cost > 0 ? t.mkt / t.cost : 1;
+
+      setKpiText('kpi-tab1-scale-val', LCR.formatMoney(t.mkt));
+      var scaleSub = document.getElementById('kpi-tab1-scale-sub');
+      if (scaleSub) {
+        scaleSub.textContent = acc === 'ALL'
+          ? accountMktSplitText(totals)
+          : ('在场持有 ' + t.symbols + ' 标的 • ' + t.lots + ' 笔活跃批次');
+      }
+      setKpiText('kpi-tab1-pnl-val', LCR.formatSignedMoney(t.pnl) + ' (' + LCR.formatPct(t.cost > 0 ? t.pnl / t.cost : 0, 2, false) + ')', pnlCls);
+      var pnlSub = document.getElementById('kpi-tab1-pnl-sub');
+      if (pnlSub) {
+        pnlSub.textContent = '整体本息倍数 ' + mult.toFixed(2) + 'x • 对冲结构 ' + t.pos + ' 浮盈 vs ' + t.neg + ' 浮亏';
+      }
+
+      setKpiText('kpi-tab2-cost-val', LCR.formatMoney(t.cost));
+      setKpiText('kpi-tab2-mkt-val', LCR.formatMoney(t.mkt));
+      setKpiText('kpi-tab2-pnl-val', LCR.formatSignedMoney(t.pnl) + ' (' + LCR.formatPct(t.cost > 0 ? t.pnl / t.cost : 0, 2, false) + ')', pnlCls);
+      setKpiText('kpi-tab2-hedge-val', t.pos + ' 浮盈 vs ' + t.neg + ' 浮亏', 'val-green');
+      var hedgeSub = document.getElementById('kpi-tab2-hedge-sub');
+      if (hedgeSub) {
+        hedgeSub.textContent = '浮盈群贡献 +¥' + formatWan(t.posSum) + ' 抵消 浮亏群 ¥' + formatWan(t.negSum);
+      }
+    }
+
+    /** If the drill-down modal is open on this symbol, keep its numbers in sync. */
+    function refreshOpenModalLive() {
+      try {
+        var overlay = document.getElementById('target-modal-overlay');
+        if (!overlay || !overlay.classList.contains('active')) return;
+        var sym = (typeof currentModalSymbol === 'string') ? currentModalSymbol : null;
+        if (!sym || !TARGETS_DATA[sym]) return;
+        var group = TARGETS_DATA[sym];
+        var target = group[currentGlobalAccount] || group['ALL'];
+        if (!target) return;
+        var priceEl = document.getElementById('modal-stat-price');
+        if (priceEl) priceEl.textContent = formatLivePrice(target.current_price);
+        var mktEl = document.getElementById('modal-stat-mktval');
+        if (mktEl) mktEl.textContent = '¥' + Math.round(liveNum(target.market_value, 0)).toLocaleString('en-US');
+        var pnlEl = document.getElementById('modal-stat-pnl');
+        if (pnlEl) {
+          pnlEl.textContent = LCR.formatSignedMoney(target.floating_pnl);
+          pnlEl.className = 'modal-stat-val ' + (liveNum(target.floating_pnl, 0) >= 0 ? 'val-green' : 'val-red');
+        }
+        var rrEl = document.getElementById('modal-stat-rr');
+        if (rrEl) {
+          rrEl.textContent = LCR.formatPct(target.return_rate, 2, true);
+          rrEl.className = 'modal-stat-val ' + (liveNum(target.return_rate, 0) >= 0 ? 'val-green' : 'val-red');
+        }
+      } catch (e) {}
+    }
+
+    function updateLiveStatus() {
+      var el = document.getElementById('live-status');
+      if (!el) return;
+      if (LIVE.paused) {
+        el.textContent = '行情刷新已暂停';
+        return;
+      }
+      var interval = LCR.isTradingSession(new Date())
+        ? ((LCR.QUOTE_REFRESH_MS / 1000) + 's 轮询')
+        : '非交易时段 • 休眠降频 60s';
+      var when = LIVE.lastQuoteAt ? nowClock() : '--';
+      var srcText = LIVE.mode === 'LOCAL' ? '本地引擎' : '自驱';
+      var degraded = (LIVE.lastError && !LIVE.authRejected) ? ' • 异常已安全降级' : '';
+      var authNote = LIVE.authRejected ? ' • 本地服务未授权/Token不匹配，当前保持轻量自驱' : '';
+      el.textContent = srcText + '行情 • ' + interval + ' • 最近 ' + when + degraded + authNote;
+    }
+
+    function renderModeIndicator() {
+      var wrap = document.getElementById('mode-indicator');
+      var text = document.getElementById('mode-text');
+      if (!wrap || !text) return;
+      if (LIVE.mode === 'LOCAL') {
+        wrap.classList.add('local');
+        wrap.classList.remove('standalone');
+        text.textContent = '模式：本地引擎已联动';
+        wrap.title = '已连接本机 trade serve（' + LIVE.localBase + '）：行情与账本口径由本地引擎统一驱动';
+      } else {
+        wrap.classList.remove('local');
+        wrap.classList.add('standalone');
+        text.textContent = '模式：轻量独立（纯前端自驱）';
+        wrap.title = LIVE.authRejected
+          ? '本地引擎可达但凭证校验未通过（Token 缺失或不匹配）：页面已保持纯前端自驱行情，重新生成看板即可注入最新凭证'
+          : '未检测到本地引擎，页面以纯前端方式自驱动行情（每 5 秒批量轮询）';
+      }
+    }
+
+    // -------------------------------------------------------------- onboarding
+
+    function toggleLocalServicePanel(force) {
+      var panel = document.getElementById('local-service-card');
+      var btn = document.getElementById('btn-local-service');
+      if (!panel) return;
+      var open = (typeof force === 'boolean') ? force : !panel.classList.contains('open');
+      if (open) panel.classList.add('open');
+      else panel.classList.remove('open');
+      if (btn) btn.textContent = open ? '✕ 收起本地服务' : '⚡ 启动本地服务';
+    }
+
+    function fallbackCopyText(text) {
+      try {
+        var area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', 'readonly');
+        area.style.position = 'fixed';
+        area.style.top = '-1000px';
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(area);
+        return Boolean(ok);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function copyServeCommand() {
+      var feedback = document.getElementById('copy-feedback');
+      var command = 'trade serve';
+      function done(ok) {
+        if (!feedback) return;
+        feedback.textContent = ok ? '已复制 ✓' : '复制失败，请手动选中命令';
+        setTimeout(function () {
+          try { feedback.textContent = ''; } catch (e) {}
+        }, 1800);
+      }
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(command).then(function () {
+            done(true);
+          }).catch(function () {
+            done(fallbackCopyText(command));
+          });
+          return;
+        }
+      } catch (e) {}
+      done(fallbackCopyText(command));
+    }
+
+    function toggleLiveQuotes() {
+      LIVE.paused = !LIVE.paused;
+      var btn = document.getElementById('btn-live-toggle');
+      if (btn) {
+        btn.textContent = LIVE.paused ? '▶ 继续行情刷新' : '⏸ 暂停行情刷新';
+        if (LIVE.paused) btn.classList.add('paused');
+        else btn.classList.remove('paused');
+      }
+      if (LIVE.paused) {
+        if (LIVE.quoteTimer) {
+          clearTimeout(LIVE.quoteTimer);
+          LIVE.quoteTimer = null;
+        }
+      } else {
+        scheduleQuoteTick();
+        void performRefresh();
+      }
+      updateLiveStatus();
+    }
+
+    // ------------------------------------------------------------- quote engine
+
+    async function tryTencentQuotes() {
+      try {
+        var symbols = collectLiveSymbols();
+        if (!symbols.length) return null;
+        var codes = symbols.map(function (sym) { return LCR.normalizeTencentCode(sym); }).filter(Boolean);
+        if (!codes.length) return null;
+        var res = await LCR.fetchTencentQuotes({
+          codes: codes,
+          url: LCR.buildTencentQuoteUrl(codes, Date.now()),
+          timeoutMs: 5000
+        });
+        var mapped = LCR.mapQuotesToSymbols(res && res.quotes, symbols, LIVE.previousPrices);
+        if (res && res.error && Object.keys(mapped).length === 0) LIVE.lastError = res.error;
+        return Object.keys(mapped).length ? mapped : null;
+      } catch (e) {
+        LIVE.lastError = 'quote_exception';
+        return null;
+      }
+    }
+
+    async function tryLocalEngineQuotes() {
+      try {
+        if (typeof fetch !== 'function') return null;
+        var init = { method: 'GET', cache: 'no-store' };
+        var auth = localAuthHeaders();
+        if (auth && Object.keys(auth).length) init.headers = auth;
+        var controller = typeof AbortController === 'function' ? new AbortController() : null;
+        var timer = null;
+        if (controller) {
+          init.signal = controller.signal;
+          timer = setTimeout(function () { try { controller.abort(); } catch (e) {} }, 4000);
+        }
+        var resp = await fetch(localApiUrl('/api/summary'), init);
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (resp && resp.status === 401) {
+          // Alive but unauthenticated: keep the page self-driving, never blank it.
+          LIVE.authRejected = true;
+          LIVE.lastError = 'unauthorized';
+          if (LIVE.mode !== 'STANDALONE') {
+            LIVE.mode = 'STANDALONE';
+            renderModeIndicator();
+          }
+          return null;
+        }
+        if (!resp || !resp.ok) return null;
+        LIVE.authRejected = false;
+        var data = await resp.json();
+        var quotes = {};
+        (data && Array.isArray(data.symbols) ? data.symbols : []).forEach(function (item) {
+          var price = liveNum(item.current_price, 0);
+          if (!(price > 0)) return;
+          quotes[String(item.symbol)] = {
+            symbol: item.symbol,
+            price: price,
+            prev_close: null,
+            source: item.price_source || 'local'
+          };
+        });
+        return Object.keys(quotes).length ? quotes : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function applyQuotes(quotes) {
+      if (!quotes) return 0;
+      var applied = 0;
+      try {
+        Object.keys(quotes).forEach(function (sym) {
+          try {
+            if (updateSymbolLive(sym, quotes[sym])) applied += 1;
+          } catch (e) {
+            LIVE.lastError = 'apply_failed';
+          }
+        });
+      } catch (e) {
+        LIVE.lastError = 'apply_failed';
+      }
+      if (applied > 0) {
+        LIVE.appliedQuotes = applied;
+        LIVE.lastQuoteAt = Date.now();
+      }
+      try { applyLiveKpis(); } catch (e) {}
+      try { refreshOpenModalLive(); } catch (e) {}
+      updateLiveStatus();
+      return applied;
+    }
+
+    async function performRefresh() {
+      if (LIVE.paused) return;
+      var quotes = null;
+      if (LIVE.mode === 'LOCAL') {
+        quotes = await tryLocalEngineQuotes();
+      }
+      if (!quotes) {
+        quotes = await tryTencentQuotes();
+      }
+      if (quotes) {
+        LIVE.lastError = '';
+        applyQuotes(quotes);
+      } else {
+        updateLiveStatus();
+      }
+    }
+
+    function scheduleQuoteTick() {
+      if (LIVE.quoteTimer) {
+        clearTimeout(LIVE.quoteTimer);
+        LIVE.quoteTimer = null;
+      }
+      if (LIVE.paused) return;
+      var delay = LCR.nextRefreshDelay(new Date(), false);
+      LIVE.quoteTimer = setTimeout(function () {
+        quoteTick();
+      }, delay);
+    }
+
+    async function quoteTick() {
+      try {
+        await performRefresh();
+      } catch (e) {
+        LIVE.lastError = 'tick_exception';
+      } finally {
+        try { scheduleQuoteTick(); } catch (e) {}
+      }
+    }
+
+    async function heartbeatTick() {
+      var result = { ok: false };
+      try {
+        var fetcher = typeof fetch === 'function'
+          ? function (url, init) { return fetch(url, init); }
+          : null;
+        // `null` token on purpose: /api/health is public and content-free, so the heartbeat
+        // must not trigger an Authorization preflight every 3 seconds.
+        result = await LCR.probeLocalService(fetcher, LIVE.localBase + '/api/health', 2500, null);
+      } catch (e) {
+        result = { ok: false };
+      }
+      LIVE.failCount = (result && result.ok) ? 0 : (LIVE.failCount + 1);
+
+      // A rejected credential must not be latched forever: retry it on a slow beat, and only
+      // upgrade back to LOCAL when the retry actually returns data (no badge flicker).
+      if (LIVE.authRejected) {
+        LIVE.authRetryCount = (LIVE.authRetryCount || 0) + 1;
+        if (LIVE.authRetryCount >= AUTH_RETRY_BEATS) {
+          LIVE.authRetryCount = 0;
+          var retried = null;
+          try { retried = await tryLocalEngineQuotes(); } catch (e) { retried = null; }
+          if (retried) applyQuotes(retried);
+        }
+      }
+
+      var probeOk = Boolean(result && result.ok) && !LIVE.authRejected;
+      var next = LCR.nextMode(LIVE.mode, probeOk, LIVE.failCount);
+      if (next !== LIVE.mode) {
+        LIVE.mode = next;
+        renderModeIndicator();
+        // Local engine came online: align the data flow immediately.
+        if (next === 'LOCAL') void performRefresh();
+      }
+      updateLiveStatus();
+    }
+
+    function startHeartbeat() {
+      if (LIVE.heartbeatTimer) clearInterval(LIVE.heartbeatTimer);
+      LIVE.heartbeatTimer = setInterval(function () {
+        heartbeatTick();
+      }, LCR.HEARTBEAT_MS);
+      heartbeatTick();
+    }
+
+    function bootLiveEngine() {
+      if (LIVE.booted || !LCR) return;
+      LIVE.booted = true;
+      renderModeIndicator();
+      updateLiveStatus();
+      startHeartbeat();
+      scheduleQuoteTick();
+    }
+
+    // Patch the account switcher so switching accounts re-applies LIVE values,
+    // never the frozen values baked into ACCOUNT_METRICS at generation time.
+    try {
+      if (typeof setGlobalAccountFilter === 'function') {
+        var __originalSetGlobalAccountFilter = setGlobalAccountFilter;
+        setGlobalAccountFilter = function (acc) {
+          __originalSetGlobalAccountFilter(acc);
+          try { applyLiveKpis(); } catch (e) {}
+        };
+      }
+    } catch (e) {}
+
+    try {
+      bootLiveEngine();
+    } catch (e) {
+      LIVE.lastError = 'boot_failed';
+    }
+
+  </script>
+</body>
+</html>
+

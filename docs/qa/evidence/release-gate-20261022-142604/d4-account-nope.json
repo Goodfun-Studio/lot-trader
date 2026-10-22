@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "message": "非法账户代码: \"NOPE\"。该账户未在系统中登记。",
+  "path": "/api/lots"
+}

@@ -1,0 +1,43 @@
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "db_path": "/tmp/lot-trader-qa-20261022-141230/sandbox.db",
+  "generated_at": 1792649746470,
+  "filters": {
+    "symbol": null,
+    "account": "LOWER_ACCT",
+    "status": "ALL"
+  },
+  "total": 1,
+  "lots": [
+    {
+      "lot_id": "LOT-20261022-005",
+      "account_id": "LOWER_ACCT",
+      "symbol": "002507.SZ",
+      "symbol_name": "标的002507.SZ",
+      "asset_class": "STOCK",
+      "settlement_mode": "STATUTORY_T1",
+      "buy_time": "2026-10-22T06:15:45.811Z",
+      "buy_price": 10,
+      "buy_quantity": 100,
+      "remaining_quantity": 100,
+      "cost_basis_unit": 10.002,
+      "current_price": 11.18,
+      "price_source": "live",
+      "market_value": 1118,
+      "floating_pnl": 117.02,
+      "return_rate": 0.117,
+      "status": "ACTIVE",
+      "pyramid_level": 0,
+      "can_sell_now": false,
+      "is_day_trading": false,
+      "peak_price": 10,
+      "trailing_stop_active": false,
+      "buy_reason": "QA小写账户复验",
+      "close_reason": null,
+      "close_time": null,
+      "close_avg_price": null,
+      "realized_pnl": 0
+    }
+  ]
+}

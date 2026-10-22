@@ -1,0 +1,13 @@
+# QA evidence bundle — lot-trader release gate
+generated_at: 2026-10-22T14:26:04+0800
+commit: dd3b236  (fix(serve): eliminate ghost db creation, default db touch, ledger error masking, cap misat)
+binary_sha256: 5bbf7bc11849ff3265a248b9528efa5de77b21ce52dbd2f7236875328165edc1
+binary_bytes: 63611234
+sandbox_root: /tmp/lot-trader-qa-20261022-141230
+prod_db_sha256_at_start: 84686a5e294c095c0464bdca0b928910756bd5113af8a2289320903bc661ecb4
+prod_db_sha256_at_end:   84686a5e294c095c0464bdca0b928910756bd5113af8a2289320903bc661ecb4
+prod_db_size: 987136
+prod_db_integrity_check: ok
+prod_db_lots_active: 203
+note: dash-linked.html had its ephemeral session-token literal redacted by QA.
+      The token belonged to a serve instance that has been shut down; its token file was deleted on exit.

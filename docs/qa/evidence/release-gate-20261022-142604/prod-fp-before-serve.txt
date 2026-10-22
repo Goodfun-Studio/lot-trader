@@ -1,0 +1,3 @@
+trade.db size=987136 mtime=2026-10-22T14:11:46 sha=84686a5e294c095c
+trade.db-wal size=0 mtime=2026-10-22T14:11:46 sha=e3b0c44298fc1c14
+trade.db-shm size=32768 mtime=2026-10-22T14:12:40 sha=fd4c9fda9cd3f9ae

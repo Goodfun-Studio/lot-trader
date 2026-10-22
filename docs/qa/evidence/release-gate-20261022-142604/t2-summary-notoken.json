@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "UNAUTHORIZED",
+  "message": "未授权：请提供合法的本地会话 Token。"
+}

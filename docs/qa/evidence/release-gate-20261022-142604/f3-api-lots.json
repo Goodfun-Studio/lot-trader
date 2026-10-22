@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "code": "DATABASE_ERROR",
+  "message": "数据库查询失败: lots 表缺少必需列 [lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status]，该文件不是可用的 trade 账本。",
+  "path": "/api/lots"
+}

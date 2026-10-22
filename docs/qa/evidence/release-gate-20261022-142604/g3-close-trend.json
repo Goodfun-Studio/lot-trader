@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:20:44.395Z",
+  "data": {
+    "lot_id": "LOT-20261022-001",
+    "account_id": "S",
+    "trade_id": "TRD-20261022142044-QIX1GW",
+    "action": "SELL_REGULAR",
+    "close_price": 1312.21,
+    "close_quantity": 100,
+    "fee": 91.85,
+    "realized_pnl": 18946.72,
+    "reason": "移动止盈落袋(峰值回撤4.61%)",
+    "buy_reason": "TREND fixture",
+    "close_reason": "移动止盈落袋(峰值回撤4.61%)",
+    "remaining_quantity": 0,
+    "lot_status": "CLOSED",
+    "is_day_trading": false,
+    "substituted_core_lot_id": null
+  }
+}

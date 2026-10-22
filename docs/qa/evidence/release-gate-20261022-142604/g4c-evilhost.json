@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "HOST_NOT_ALLOWED",
+  "message": "安全拦截：Host 请求头不是本地回环地址（仅允许 127.0.0.1 / localhost / [::1]），已拒绝处理。"
+}

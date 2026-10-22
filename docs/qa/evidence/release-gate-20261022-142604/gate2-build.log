@@ -1,0 +1,3 @@
+$ bun build --compile src/cli.ts --outfile trade
+  [13ms]  bundle  14 modules
+ [312ms] compile  trade

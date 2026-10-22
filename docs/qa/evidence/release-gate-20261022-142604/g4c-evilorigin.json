@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "ORIGIN_NOT_ALLOWED",
+  "message": "安全拦截：请求来源（Origin）不在本地白名单内（仅允许本地看板的 Origin: null 与 http://127.0.0.1 / http://localhost / http://[::1]），已拒绝处理。"
+}

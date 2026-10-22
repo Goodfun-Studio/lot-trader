@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:18:28.100Z",
+  "data": {
+    "lot_id": "LOT-20261022-001",
+    "account_id": "GATE3",
+    "symbol": "600519.SH",
+    "buy_time": "2026-10-22T06:18:28.099Z",
+    "buy_price": 1141,
+    "buy_quantity": 100,
+    "cost_basis_unit": 1141.2282,
+    "buy_fee": 22.82,
+    "status": "ACTIVE",
+    "pyramid_level": 0,
+    "can_sell_now": false,
+    "buy_reason": "回调分批低吸(移动止盈复验)"
+  }
+}

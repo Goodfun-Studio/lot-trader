@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-22T06:18:49.267Z",
+  "data": {
+    "lot_id": "LOT-20261022-003",
+    "account_id": "GATE3",
+    "parent_lot_id": "LOT-20261022-002",
+    "symbol": "600519.SH",
+    "buy_time": "2026-10-22T06:18:49.265Z",
+    "buy_price": 1050,
+    "buy_quantity": 100,
+    "cost_basis_unit": 1050.21,
+    "buy_fee": 21,
+    "status": "ACTIVE",
+    "pyramid_level": 2,
+    "can_sell_now": false,
+    "buy_reason": null
+  }
+}

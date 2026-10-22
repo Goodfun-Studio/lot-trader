@@ -1,0 +1,10 @@
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json; charset=utf-8
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Max-Age: 600
+Vary: Origin
+Cache-Control: no-store
+Date: Thu, 22 Oct 2026 06:15:17 GMT
+Content-Length: 117
+

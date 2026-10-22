@@ -1,0 +1,203 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/calc.test.ts:
+(pass) Cost basis and PnL Math > computes cost basis and floating pnl accurately [2.57ms]
+
+tests/quotes.test.ts:
+(pass) Quotes normalization and provider > normalizes symbols correctly [0.46ms]
+(pass) Quotes normalization and provider > handles mock quotes properly [2.71ms]
+
+tests/turnover_weighted_force.test.ts:
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > a. LOW 置信度：地量参与度大幅折价 (W_conf ∈ [0.10, 0.50] 区间) > 极低换手 0.05% + 正常量能 → 折价至 0.22，等级 LOW [0.56ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > a. LOW 置信度：地量参与度大幅折价 (W_conf ∈ [0.10, 0.50] 区间) > 老板案例 0.27% 换手 (茅台当日) → W_conf ≈ 0.5375，等级 LOW [0.04ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > a. LOW 置信度：地量参与度大幅折价 (W_conf ∈ [0.10, 0.50] 区间) > 极低换手 0.10% 叠加缩量 0.5x → 双重折价 0.2475，等级 LOW [0.02ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > a. LOW 置信度：地量参与度大幅折价 (W_conf ∈ [0.10, 0.50] 区间) > 锚点下界饱和：换手率 0.01%（低于首锚点）→ 0.15 × 1.0，绝不为负/不 NaN [0.01ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > b. MEDIUM 置信度：正常博弈中枢基准 W_conf ≈ 1.0 > 换手 1.00% + 量能持平 (γ=1.0) → W_conf 恰好 1.0000，等级 MEDIUM
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > b. MEDIUM 置信度：正常博弈中枢基准 W_conf ≈ 1.0 > 换手 0.90% → 0.965，等级 MEDIUM（未跌破 LOW 门槛 0.80）
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > b. MEDIUM 置信度：正常博弈中枢基准 W_conf ≈ 1.0 > 换手 1.20% + 温和放量 1.1x → 1.024 × 1.024 = 1.0486，等级 MEDIUM
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > c. HIGH 置信度：天量重兵对决 → W_conf > 1.2 放大真合力 > 老板案例 2.87% 换手 + 2.0x 放量 → 1.1722 × 1.22 = 1.4301，等级 HIGH [0.15ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > c. HIGH 置信度：天量重兵对决 → W_conf > 1.2 放大真合力 > 天量 5.00% + 5.0x 爆量 → 1.25 × 1.45 = 1.8125，等级 HIGH [0.01ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > c. HIGH 置信度：天量重兵对决 → W_conf > 1.2 放大真合力 > 极端外推 (换手 10% + 量能 20x) 锚点饱和，钳制不超上限 2.00
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > c. HIGH 置信度：天量重兵对决 → W_conf > 1.2 放大真合力 > HIGH 门槛精确性：W_conf 跨过 1.20 即升 HIGH，其下仍为 MEDIUM [0.18ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > d. F_eff = F × W_conf 引擎集成（地量假动作 vs 放量真变盘） > 同一根 K 线：低换手时 F_eff 被压至原始合力的 1/3 以下 [0.28ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > d. F_eff = F × W_conf 引擎集成（地量假动作 vs 放量真变盘） > 同一根 K 线：天量换手 2.87% 时 F_eff 放大到原始合力的 1.3 倍以上 [0.04ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > d. F_eff = F × W_conf 引擎集成（地量假动作 vs 放量真变盘） > 原始合力 F 不受置信度加权污染（F 仍为 m × a，仅派生 F_eff） [0.07ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > d. F_eff = F × W_conf 引擎集成（地量假动作 vs 放量真变盘） > 向下合力同样按 W_conf 折价 / 放大（做空抛压适用同一套置信度） [0.05ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > d. F_eff = F × W_conf 引擎集成（地量假动作 vs 放量真变盘） > 存量调用方（不传换手率）不炸：F_eff 退化为相对量能锚点加权，绝不 NaN [0.10ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 换手率 0 视为不可用：W 不折价不溢价，等级 MEDIUM（不谎报 HIGH） [0.18ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 负数 / NaN / Infinity / undefined / null 均按缺失处理，绝不产生 NaN 或除零 [0.04ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 换手率缺失但量能爆量 50x → 封顶 1.20 且等级最多 MEDIUM（无绝对参与度证据不得宣称 HIGH）
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 换手率缺失 + 地量 0.1x → 仍可由相对量能证据判 LOW [0.02ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 量能倍数 0 / 负数 / NaN → 视为无相对证据，退回中性 1.0 [0.03ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > radar 数据不足 (<5 根) 时 F_eff = 0，换手率仍安全暴露且无 NaN [0.03ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > e. 负向防误杀守卫：0 / 负数 / 缺失 / NaN / Infinity 全部安全降级 > 零成交量 + 零振幅 + 负换手率：全链路安全兜底 [0.10ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > f. Mock 换手率注入与 CLI 端到端呈现 > QuoteProvider 支持 Mock 换手率注入，非法值被忽略 [0.23ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > f. Mock 换手率注入与 CLI 端到端呈现 > trade physics 终端卡片含【博弈参与度与合力置信度】专栏 [1574.18ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > f. Mock 换手率注入与 CLI 端到端呈现 > trade physics --json 暴露全部 4 个新字段且数值自洽 [362.68ms]
+(pass) Turnover Participation & Confidence-Weighted Effective Force (F_eff = F × W_conf) > f. Mock 换手率注入与 CLI 端到端呈现 > 锚点数据结构自洽：严格升序、权重非负、区间覆盖 0.10~2.00 钳制边界 [0.09ms]
+
+tests/physics_numpy_validation.test.ts:
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 1. 600519.SH 贵州茅台真实市场行情双引擎盲验 > a. 最小二乘斜率 k 与截距 b 高精度交叉断言 (|diff| < 1e-5) [0.12ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 1. 600519.SH 贵州茅台真实市场行情双引擎盲验 > b. 归一化动量速度 v 与加速度 a 高精度断言 (|diff| < 1e-4) [0.09ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 1. 600519.SH 贵州茅台真实市场行情双引擎盲验 > c. 20 日均量与质量系数 m 高精度断言 (|diff| < 1e-5) [0.07ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 1. 600519.SH 贵州茅台真实市场行情双引擎盲验 > d. 多空合力 F 与流体阻尼 mu 高精度断言 [0.05ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 2. 多形态典型走势双引擎盲验与真实波动断言 > 检验形态: 单边上涨标的 (UPTREND_MOCK) [0.09ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 2. 多形态典型走势双引擎盲验与真实波动断言 > 检验形态: 剧烈下挫震荡标的 (DOWNTREND_MOCK) [0.06ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 2. 多形态典型走势双引擎盲验与真实波动断言 > 检验形态: 横盘磨底标的 (SIDEWAYS_MOCK) [0.03ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 3. 动态 Python NumPy 子进程双引擎实时对账 > 动态调用 Python numpy.polyfit 并在位对齐验证 [472.10ms]
+(pass) Physics Engine & Python NumPy Double-Engine Cross-Validation > 4. 负向防误杀边界守卫断言 (Anti-False-Positive Guard) > 数据包含非法值/空值/少于2根时安全优雅兜底，绝不产生 NaN 或内存泄漏 [0.07ms]
+
+tests/position_view.test.ts:
+(pass) Position / Holding Aggregated View Tests > 1. calculates weighted average cost price and total quantity across multiple lots for a single symbol [221.89ms]
+(pass) Position / Holding Aggregated View Tests > 2. computes available_core_qty correctly for Native T+0 and Statutory T+1 [279.31ms]
+(pass) Position / Holding Aggregated View Tests > 3. calculates portfolio_weight and total market value across multiple symbols [225.43ms]
+(pass) Position / Holding Aggregated View Tests > 4. computes dual position rates (cost position vs market position) and recommended points accurately [100.71ms]
+(pass) Position / Holding Aggregated View Tests > 5. validates CLI 'trade position' and 'trade position --json' end-to-end execution [1063.99ms]
+
+tests/db.test.ts:
+(pass) Database Initialization > initializes tables and seeds default symbols [3.28ms]
+
+tests/multi_account.test.ts:
+(pass) Multi-Account & Core Substitution Isolation Tests > a. supports account_id persistence and maintains backward compatibility with DEFAULT [0.92ms]
+(pass) Multi-Account & Core Substitution Isolation Tests > b. auto-inherits account_id on addLot (pyramid dip add) and supports explicit override [0.67ms]
+(pass) Multi-Account & Core Substitution Isolation Tests > c. CORE NEGATIVE GUARD: Account A holds historical core, Account B buys today and profits +10%, strictly outputs T1_LOCKED_ALERT and blocks cross-account substitution [1.40ms]
+(pass) Multi-Account & Core Substitution Isolation Tests > d. allows intra-account core substitution day trade within the same account [0.72ms]
+(pass) Multi-Account & Core Substitution Isolation Tests > e. filters position view and listLots accurately by account_id [441.56ms]
+
+tests/engine.test.ts:
+(pass) Trader Engine > validates lot buy parameters correctly [1.36ms]
+(pass) Trader Engine > scene a: deep value alert preserves ACTIVE status strictly [0.76ms]
+(pass) Trader Engine > scene b: gold etf native T+0 profit take [0.65ms]
+(pass) Trader Engine > scene c: stock core substitution day trade [0.61ms]
+(pass) Trader Engine > scene d: stock no core position T+1 lock [0.48ms]
+(pass) Trader Engine > handles partial close properly [0.38ms]
+(pass) Trader Engine > computes stats accurately [0.55ms]
+
+tests/symbol_inference.test.ts:
+(pass) Bug 1 & Bug 2: Symbol Inference & DB Path Verification > Bug 2验收矩阵: 严格前缀与白名单推导 [0.24ms]
+(pass) Bug 1 & Bug 2: Symbol Inference & DB Path Verification > SettlementArbitrator fallback: 未入库标的严格遵循推导规则 [0.49ms]
+(pass) Bug 1 & Bug 2: Symbol Inference & DB Path Verification > Bug 1验收: TRADE_DB_PATH 环境变量正确生效 [46.62ms]
+
+tests/dividend.test.ts:
+(pass) Cash Dividends Management Tests > 1. records a cash dividend successfully with full fields [1.44ms]
+(pass) Cash Dividends Management Tests > 2. supports multi-account isolation and aggregation [0.45ms]
+(pass) Cash Dividends Management Tests > 3. NEGATIVE GUARD: blocks invalid amount <= 0, NaN, and bad date [0.32ms]
+(pass) Cash Dividends Management Tests > 4. handles querying non-existent dividends gracefully without throwing [0.30ms]
+(pass) Cash Dividends Management Tests > 5. validates CLI trade dividend add and list end-to-end [0.31ms]
+
+tests/dashboard.test.ts:
+(pass) trade dashboard CLI primitive > renders a complete, valid standalone HTML dashboard [1669.75ms]
+(pass) trade dashboard CLI primitive > defaults the output to ./lot-trader-global-dashboard.html in the current working directory [1139.00ms]
+(pass) trade dashboard CLI primitive > renders an empty ledger without exploding [540.65ms]
+(pass) trade dashboard CLI primitive > exits non-zero with a JSON error when the template is missing [21.52ms]
+
+tests/phase2_strategy.test.ts:
+(pass) Phase 2 Core Strategy Logic Tests > pyramid dip add: correctly inherits lineage, calculates amount, and increments pyramid level [0.83ms]
+(pass) Phase 2 Core Strategy Logic Tests > lineage guard: anti-shake cooldown intercepts rapid dip additions within 48 hours [0.57ms]
+(pass) Phase 2 Core Strategy Logic Tests > dynamic trailing stop: activates at +15% and triggers on 3% pullback from peak [0.57ms]
+(pass) Phase 2 Core Strategy Logic Tests > position cap & risk guard: blocks purchases exceeding 30% single-symbol limit [0.83ms]
+(pass) Phase 2 Core Strategy Logic Tests > partial close: preserves ACTIVE status, maintains cost basis, and stats multi-attribution [0.49ms]
+
+tests/physics.test.ts:
+(pass) Physics Momentum Radar Core Tests > a. validates linear regression slope, intercept, and normalized slope pct [0.04ms]
+(pass) Physics Momentum Radar Core Tests > b. computes force F = m * a and fluid damping mu accurately [0.07ms]
+(pass) Physics Momentum Radar Core Tests > c. CORE NEGATIVE GUARD: zero volume, extreme flat zero amplitude, and < 5 bars never throw or produce NaN/Infinity [0.08ms]
+(pass) Physics Momentum Radar Core Tests > d. validates CLI trade physics and --json output structure end-to-end [1725.00ms]
+
+tests/serve_dashboard_dual_mode.test.ts:
+(pass) trade serve: local HTTP engine contract > GET /api/health returns compliant JSON with status ok and no NaN [14.23ms]
+(pass) trade serve: local HTTP engine contract > binds an OS-assigned ephemeral port and reports it back on the health payload [4.71ms]
+(pass) trade serve: local HTTP engine contract > GET /api/summary aggregates portfolio, accounts and symbols consistently [8.83ms]
+(pass) trade serve: local HTTP engine contract > GET /api/lots supports symbol / account / status filters [6.04ms]
+(pass) trade serve: local HTTP engine contract > never emits NaN when the quote feed is dead (cost-basis fallback) [6.40ms]
+(pass) trade serve: local HTTP engine contract > answers 404/405/preflight without leaking a stack trace [3.67ms]
+(pass) trade serve: local HTTP engine contract > serves an empty ledger without throwing [3.75ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > unit: Host allow-list is exact-match loopback only (no suffix / LAN / malformed host) [0.09ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > unit: Origin allow-list keeps file:// (null) + loopback, rejects every foreign origin [0.65ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > blocks a hostile Origin with 403 and emits no CORS header at all [5.11ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > blocks DNS-rebinding Host headers with 403 before any business logic runs [4.10ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > still serves the file:// dashboard (Origin: null) and loopback origins (anti-false-positive) [6.11ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > accepts loopback Host variants and Origin-less CLI clients with no CORS leakage [4.73ms]
+(pass) trade serve: network security guards (CORS allow-list + DNS rebinding) > replays the owner's exact curl attacks: hostile Origin / Host => 403, plain curl => 200 [34.08ms]
+(pass) trade serve: local session credential gate (0600 token) > unit: token comparison is exact-match, token generation is high-entropy hex [0.11ms]
+(pass) trade serve: local session credential gate (0600 token) > unit: extractRequestToken reads Bearer and ?token=, ignores junk [0.20ms]
+(pass) trade serve: local session credential gate (0600 token) > writes a 64-hex credential file with 0600 and nothing wider [5.36ms]
+(pass) trade serve: local session credential gate (0600 token) > NEGATIVE: no credential => 401 before any query, and the refusal carries no ledger field [3.53ms]
+(pass) trade serve: local session credential gate (0600 token) > NEGATIVE: the auth gate runs before the business logic (bad filter still answers 401, not 400) [3.92ms]
+(pass) trade serve: local session credential gate (0600 token) > NEGATIVE: a wrong token of any shape is refused [5.34ms]
+(pass) trade serve: local session credential gate (0600 token) > NEGATIVE: Origin:null (sandboxed iframe) + no token is still 401 — the blind-fire hole is closed [11.73ms]
+(pass) trade serve: local session credential gate (0600 token) > accepts the Bearer header and the ?token= channel with identical full payloads [14.84ms]
+(pass) trade serve: local session credential gate (0600 token) > /api/health stays public, tokenless and ledger-free (anti-false-positive probe) [5.19ms]
+(pass) trade serve: local session credential gate (0600 token) > OPTIONS preflight from a legal Origin allows the Authorization header without a token [4.28ms]
+(pass) trade serve: local session credential gate (0600 token) > keeps an explicitly supplied token and never deletes the owner's credential file [4.62ms]
+(pass) trade serve: local session credential gate (0600 token) > rotates the token on restart, so a stale file value stops working [75.08ms]
+(pass) trade serve: local session credential gate (0600 token) > a failed boot (port already taken) never clobbers the running instance's credential [5.55ms]
+(pass) trade serve: local session credential gate (0600 token) > fails closed when the credential file cannot be written [2.97ms]
+(pass) trade serve: local session credential gate (0600 token) > exposes the credential flags in `trade serve --help` [21.07ms]
+(pass) trade serve: local session credential gate (0600 token) > `trade dashboard` injects the live credential into the generated page [1914.27ms]
+(pass) trade serve: local session credential gate (0600 token) > ships DEFAULT_TOKEN_FILE outside the repo and documents the 0600 contract [0.05ms]
+(pass) trade serve: port conflict and lifecycle guards > throws a readable error (not a raw stack) when the port is already taken [6.36ms]
+(pass) trade serve: port conflict and lifecycle guards > refuses to bind a non-loopback host so the ledger never leaves the machine [0.26ms]
+(pass) trade serve: port conflict and lifecycle guards > validates ports, db path and full-position cap deterministically [0.45ms]
+(pass) trade serve: port conflict and lifecycle guards > shuts down gracefully on SIGTERM, frees the port and drops the generated credential [115.35ms]
+(pass) trade serve: port conflict and lifecycle guards > CLI reports the port conflict as a friendly message and exits 1 [28.84ms]
+(pass) trade serve: port conflict and lifecycle guards > exposes `trade serve` in the CLI help output [40.75ms]
+(pass) trade serve: payload builders and price cache > PriceBook caches live quotes and falls back without caching failures [0.24ms]
+(pass) trade serve: payload builders and price cache > buildLotsPayload / buildSummaryPayload never yield NaN for degenerate ledgers [114.41ms]
+(pass) trade serve: payload builders and price cache > normalizeAccountKey maps blank ids onto the generic fallback [0.09ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 4 unit: account keys are case-insensitive and blank maps to the generic fallback [0.02ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 1: a non-existent --db exits 1, prints a friendly refusal and creates NO file/WAL [53.08ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 1: `serve --db <other>` never opens or touches the default ~/.trade ledger [95.81ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 2: a real database failure is a 500 DATABASE_ERROR, never a fake 200 empty book [3.39ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 2 anti-false-positive: a legacy ledger missing the newest columns still serves [1.20ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 4: ?account=cmb / CMB / Cmb agree, and ?account=NOPE is a 400 (not an empty 200) [8.06ms]
+(pass) trade serve: runtime defect matrix (negative guards) > defect 3: the portfolio never fabricates a budget; symbols keep a per-symbol utilisation [5.06ms]
+(pass) dashboard dual-mode contract > ships the standalone self-driving engine with pause control and flash feedback [0.66ms]
+(pass) dashboard dual-mode contract > ships the mode badge, the 3s heartbeat and the onboarding copy card [0.26ms]
+(pass) dashboard dual-mode contract > generated dashboard HTML carries the whole dual-mode runtime [1065.11ms]
+(pass) dashboard front-end: quote feed negative guards > parses a well-formed qt.gtimg.cn payload [3.86ms]
+(pass) dashboard front-end: quote feed negative guards > NEGATIVE: an HTML 502 / truncated / empty quote body degrades to an empty map (no throw, no NaN) [0.41ms]
+(pass) dashboard front-end: quote feed negative guards > NEGATIVE: total network failure resolves to an empty result instead of rejecting [3.18ms]
+(pass) dashboard front-end: quote feed negative guards > NEGATIVE: buildTencentQuoteUrl refuses an empty code list [0.35ms]
+(pass) dashboard front-end: quote feed negative guards > NEGATIVE: no cell can ever render NaN after a garbage refresh [22.45ms]
+(pass) dashboard front-end: quote feed negative guards > computeHoldingLive is NaN-proof for null / '' / NaN / negative inputs [1.73ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > NEGATIVE: a closed local engine demotes the badge to standalone with zero uncaught exceptions [43.54ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > NEGATIVE: an HTTP-200-but-not-JSON health response is treated as offline [43.66ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > NEGATIVE: a health payload without status:ok never upgrades the mode [43.58ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > upgrades seamlessly to the local engine when /api/health answers [62.68ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > hysteresis keeps LOCAL mode through a single missed beat [0.85ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > probeLocalService never rejects and honours the timeout [7.93ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > refresh policy: 5s while trading, 60s idle, paused stops the timer [0.92ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > pause / resume control toggles the engine without breaking the page [0.69ms]
+(pass) dashboard front-end: heartbeat upgrade and degradation > onboarding card opens, copies the command and survives a clipboard failure [11.42ms]
+(pass) dashboard front-end: local session credential > unit: sessionToken / authHeaders / withSessionToken stay inert without a credential [1.76ms]
+(pass) dashboard front-end: local session credential > attaches the credential as Bearer + ?token= when the engine speaks [63.45ms]
+(pass) dashboard front-end: local session credential > NEGATIVE: a 401 keeps the page self-driving with zero uncaught exceptions [63.13ms]
+(pass) dashboard front-end: local session credential > retries a rejected credential on a slow beat instead of latching the downgrade [226.71ms]
+
+tests/accounts_reasons.test.ts:
+(pass) Accounts registry: schema, model & self-healing registration > creates the accounts table with the documented columns and seeds the generic fallback [0.63ms]
+(pass) Accounts registry: schema, model & self-healing registration > registers accounts via addAccount and lists them with broker presets [0.43ms]
+(pass) Accounts registry: schema, model & self-healing registration > NEGATIVE GUARD: rejects duplicate, empty-name, unknown-broker and malformed account ids [0.44ms]
+(pass) Accounts registry: schema, model & self-healing registration > SELF-HEALING: buying into an unregistered account auto-inserts a CUSTOM record without interrupting entry [0.60ms]
+(pass) Accounts registry: schema, model & self-healing registration > backfills legacy ledger accounts that were written before the registry existed [0.53ms]
+(pass) Accounts registry: schema, model & self-healing registration > normalizes account ids deterministically and keeps the fallback generic [0.05ms]
+(pass) Cross-account core substitution: physical isolation negative guard > NEGATIVE GUARD: account A with core cannot lend it to account B's same-day T+1 lot [0.85ms]
+(pass) Cross-account core substitution: physical isolation negative guard > positive control: substitution works inside the same account and stamps the substituted core lot [0.56ms]
+(pass) Decision thesis: buy / add / close reason persistence > persists buy_reason on the lot and reason on the BUY trade [0.37ms]
+(pass) Decision thesis: buy / add / close reason persistence > BACKWARD COMPATIBILITY: omitting --reason stores NULL and never blocks the entry [0.47ms]
+(pass) Decision thesis: buy / add / close reason persistence > persists add-lot (pyramid) reason and inherits the parent account [0.60ms]
+(pass) Decision thesis: buy / add / close reason persistence > persists close_reason on the lot and reason on the SELL trade [0.50ms]
+(pass) Decision thesis: buy / add / close reason persistence > appends partial-close reviews instead of overwriting the earlier thesis [0.51ms]
+(pass) Decision thesis: buy / add / close reason persistence > edits an existing lot thesis without touching accounting fields, and can clear it [0.50ms]
+(pass) Decision thesis: buy / add / close reason persistence > exposes both reasons through listLots JSON for downstream consumers [60.00ms]
+(pass) CLI primitives: trade account & --reason > drives the full account + reason lifecycle end-to-end with JSON output [316.61ms]
+(pass) Dashboard: zero hardcoded broker accounts > renders a switcher entry for any registered account and keeps the template generic [989.88ms]
+
+tests/cli.test.ts:
+(pass) CLI End-to-End Tests > runs full lot lifecycle via CLI with JSON output and tables [475.95ms]
+
+ 165 pass
+ 0 fail
+ 1885 expect() calls
+Ran 165 tests across 16 files. [16.20s]
