@@ -27,6 +27,7 @@
   - **轻量自驱模式**（默认）：静态单文件直接打开即可，页面自动去重标的并每 5 秒批量轮询腾讯财经接口，前端按各批次成本/数量重算总市值、浮盈与收益率；现价变动触发红/绿 1 秒呼吸高亮；非交易时段自动降频至 60 秒，并可用【暂停/继续行情刷新】随时冻结。
   - **本地引擎联动模式**：看板每 3 秒心跳探测 `http://127.0.0.1:8080/api/health`，联通即无缝转绿并优先对齐本地服务口径；服务关闭或超时后平滑回退自驱模式，全程不抛未捕获异常、不出现 `NaN` 与白屏。
 - **本地微服务原语 `trade serve`**：基于 Bun 原生 HTTP 的只读 JSON 引擎，**仅监听 127.0.0.1 回环**（拒绝任何非回环 host，账本不出本机），提供 `/api/health`、`/api/summary`、`/api/lots?symbol=&account=&status=`，端口冲突给出可读文案而非崩溃堆栈，SIGINT/SIGTERM 优雅停机。
+- **本地协议凭证门禁（0600 Session Token）**：`/api/summary`、`/api/lots` 必须携带 `Authorization: Bearer <token>` 或 `?token=`；令牌默认每次启动随机生成 32 字节（64 hex）并写入 `~/.lot-trader/session.token`（`chmod 0600`），退出即删；无/错令牌一律 401 `UNAUTHORIZED` 且响应不含任何账本字段。安全边界从浏览器同源策略下沉到**操作系统文件权限**——连 `Origin: null` 的沙箱 iframe 也无法盲打读取账本。
 - **批次部分平仓与战绩多维归因**：
   - 支持指定数量部分平仓，状态保持 `ACTIVE` 持续监控；
   - `trade stats` 提供按标的明细、按操盘类型（普通波段、天然 T+0、底仓代冲做 T）的多维战绩归因。
@@ -83,9 +84,11 @@ bun run build
 # 本地微服务引擎（只读 JSON，仅监听 127.0.0.1；Ctrl+C 优雅退出）
 ./trade serve
 ./trade serve --port 8080 --host 127.0.0.1 --db ~/.trade/trade.db
-curl -s http://127.0.0.1:8080/api/health
-curl -s http://127.0.0.1:8080/api/summary
-curl -s "http://127.0.0.1:8080/api/lots?symbol=518880&status=ACTIVE"
+./trade serve --token <固定令牌> --token-file /path/to/session.token
+curl -s http://127.0.0.1:8080/api/health          # 公开探活，无需令牌
+TOKEN=$(cat ~/.lot-trader/session.token)          # 0600 凭证文件（仅当前用户可读）
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/summary
+curl -s "http://127.0.0.1:8080/api/lots?symbol=518880&status=ACTIVE&token=$TOKEN"
 ```
 
 > 看板生成器资产固化在 `scripts/`（`generate_dashboard.py` + `template_base.html`），随二进制同级部署即可被 `trade dashboard` 自动发现。

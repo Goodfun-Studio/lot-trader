@@ -222,14 +222,18 @@ trade dashboard --json
 # 默认 127.0.0.1:8080
 trade serve
 trade serve --port 8090 --host 127.0.0.1 --db ~/.trade/trade.db
-trade serve --json     # 结构化就绪行：{code:0,data:{url,host,port,db_path,version}}
+trade serve --json     # 结构化就绪行：{code:0,data:{url,host,port,db_path,version,auth,token_file,token_source}}
+trade serve --token <固定令牌> | --token-file <凭证文件>
 ```
 
-| 接口 | 说明 |
-| --- | --- |
-| `GET /api/health` | `{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}` |
-| `GET /api/summary` | `portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
-| `GET /api/lots?symbol=&account=&status=` | 批次明细（`ACTIVE`/`CLOSED`/`CLOSING`/`ALL`），含 `price_source` |
+| 接口 | 鉴权 | 说明 |
+| --- | --- | --- |
+| `GET /api/health` | 公开 | `{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}`，无账本字段 |
+| `GET /api/summary` | 需令牌 | `portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE`/`CLOSED`/`CLOSING`/`ALL`），含 `price_source` |
+
+- **本地协议凭证门（0600 Session Token）**：令牌默认每次启动随机生成 32 字节（64 hex）并写入 `~/.lot-trader/session.token`（`chmod 0600`），退出即删；调用方用 `Authorization: Bearer <token>` 或 `?token=`；无/错令牌 → 401 `UNAUTHORIZED` 且无任何账本字段（鉴权在查库之前）。`Origin: null` 的沙箱 iframe 也因此彻底失效；
+- **看板无感注入**：`trade dashboard` 读同一凭证文件注入 `window.__LOT_TRADER_SESSION_TOKEN__`；本地引擎返回 401 时看板留在「轻量自驱」并提示未授权，不影响行情轮询。
 
 - **只读 + 仅监听回环**：拒绝 `0.0.0.0`/局域网 IP/域名等一切非 `127.0.0.1`、`localhost`、`::1` 的 host —— 账本永不出本机；
 - 端口冲突输出可读中文文案（非崩溃堆栈）并退出码 1；`SIGINT`/`SIGTERM` 优雅停机并释放端口；

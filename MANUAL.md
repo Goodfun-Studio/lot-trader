@@ -185,16 +185,25 @@ trade dashboard --json
 ### 本地微服务原语（trade serve）
 
 ```bash
-trade serve                              # 默认 127.0.0.1:8080
+trade serve                              # 默认 127.0.0.1:8080，自动生成会话令牌
 trade serve --port 8090 --host 127.0.0.1 --db ~/.trade/trade.db
-trade serve --json                       # 结构化就绪行（供脚本/智能体解析）
+trade serve --token <固定令牌>            # 指定令牌（退出时不删除凭证文件）
+trade serve --token-file /path/session.token   # 指定凭证文件路径
+trade serve --json                       # 结构化就绪行（含 token_file / token_source，绝不含令牌本身）
 ```
 
-| 接口 | 说明 |
-| --- | --- |
-| `GET /api/health` | 存活探针：`{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}` |
-| `GET /api/summary` | 三层快照：`portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
-| `GET /api/lots?symbol=&account=&status=` | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` |
+| 接口 | 鉴权 | 说明 |
+| --- | --- | --- |
+| `GET /api/health` | 公开 | 存活探针：`{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}`，不含任何账本字段 |
+| `GET /api/summary` | 需令牌 | 三层快照：`portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` |
+
+**本地协议凭证门禁（第三道门，0600 Session Token）**：
+- **令牌来源**：默认每次启动用 32 字节 CSPRNG 随机生成（64 hex），也可用 `--token` 固定；写入凭证文件（默认 `$LOT_TRADER_TOKEN_FILE` → `~/.lot-trader/session.token`），写入后 `chmod 0600`，即只有当前操作系统用户可读写。
+- **传递方式**：`Authorization: Bearer <token>` 或 `?token=<token>`（SSE / 静态前端兼容通道）。
+- **拒绝口径**：无令牌或令牌不匹配 → `401` `{"status":"error","code":"UNAUTHORIZED","message":"未授权：请提供合法的本地会话 Token。"}`，响应**不含任何账本字段**，且鉴权发生在路由与查库之前（因此连非法筛选参数也只会得到 401）。
+- **生命周期**：自动生成的令牌在 `SIGINT`/`SIGTERM` 优雅退出时随进程删除；`--token` 显式指定的令牌由老板自己保管，不删除；端口被占用导致启动失败时，不会覆盖/删除正在运行实例的凭证文件。
+- **看板无感注入**：`trade dashboard` 读取同一凭证文件并注入 `window.__LOT_TRADER_SESSION_TOKEN__`，看板请求自动带 `Bearer` 头（同时附 `?token=` 备用）；若本地引擎返回 401，看板保持「轻量独立（纯前端自驱）」并提示「本地服务未授权/Token不匹配」，行情轮询不受影响、控制台零未捕获异常。
 
 **硬约束与容错口径**：
 1. **只读 + 只监听回环**：拒绝 `0.0.0.0` / 局域网 IP / 域名等任何非 `127.0.0.1`、`localhost`、`::1` 的 host，账本永不出本机；
@@ -202,13 +211,13 @@ trade serve --json                       # 结构化就绪行（供脚本/智能
 3. `SIGINT` / `SIGTERM` 优雅停机并释放端口；
 4. 行情拉取失败时按批次成本价兜底（`price_source: "cost_basis"`），任何字段都不会是 `NaN`。
 
-**浏览器安全门（两道，均在路由前生效）**：
+**浏览器安全门（两道，均在路由前生效）+ 本地凭证门（第三道）**：
 1. **Host 校验（防 DNS rebinding）**：`Host`（HTTP/2 的 `:authority`）主机部分必须精确等于 `127.0.0.1` / `localhost` / `[::1]`（可带端口），否则一律 403 `HOST_NOT_ALLOWED`。仅绑回环不够——攻击者可用 DNS rebinding 把恶意域名解析到 127.0.0.1 从而变成同源；
 2. **Origin 白名单（防 CORS 窃取）**：只放行 `Origin: null`（`file://` 打开的本地看板）与回环 origin（`http(s)://127.0.0.1[:port]`、`localhost[:port]`、`[::1][:port]`），并回显该 origin + `Vary: Origin`；其它 origin（含 `file://` 之外的任意第三方站点、`chrome-extension://`）直接 403 `ORIGIN_NOT_ALLOWED`，且**响应里不出现任何 `Access-Control-Allow-Origin`**；无 `Origin`（curl / 本机脚本）正常放行且不带 CORS 头。
 
 > 显式禁止：`Access-Control-Allow-Origin: *`。它会让任何开着 trade serve 的浏览器标签页（广告脚本、恶意页面）静默读走完整账本。
 
-> 已知残余风险：`Origin: null` 无法与沙箱化 iframe 区分（`<iframe sandbox>` 也发 `Origin: null`）。若需更严，可改用 `--token` 或只在专用浏览器 profile 里打开看板。
+> 已闭环的残余风险：`Origin: null` 无法与沙箱化 iframe 区分（`<iframe sandbox>` 也发 `Origin: null`）。仅靠 CORS + Host 两道门拦不住这种盲打，因此账本接口一律要求 0600 凭证文件里的会话令牌（第三道门）；无令牌的沙箱 iframe 只能拿到 401。
 
 > 注：`trade serve` 不设置 `development: false` —— 该选项会让 Bun 启用 `SO_REUSEPORT`，导致两个引擎静默共用同一端口并互相抢占请求。
 

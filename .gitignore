@@ -37,3 +37,6 @@ trade
 
 # Generated dashboard output (full rebuild on every run — diff noise)
 lot-trader-global-dashboard.html
+
+# tsc incremental build info
+tsconfig.tsbuildinfo

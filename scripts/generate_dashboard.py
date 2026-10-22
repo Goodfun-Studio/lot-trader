@@ -9,11 +9,42 @@ parser = argparse.ArgumentParser(description="Generate Lot Trader Global Dashboa
 parser.add_argument("--out", "-o", default="lot-trader-global-dashboard.html", help="Output HTML file path (default: lot-trader-global-dashboard.html)")
 parser.add_argument("--template", "-t", default=None, help="Template HTML path (default: template_base.html in script directory)")
 parser.add_argument("--db", default=None, help="SQLite database path (default: ~/.trade/trade.db)")
+parser.add_argument("--token", default=None, help="Session token to embed (default: read the credential file)")
+parser.add_argument("--token-file", default=None, help="Session credential file (default: $LOT_TRADER_TOKEN_FILE / ~/.lot-trader/session.token)")
 args = parser.parse_args()
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 template_path = args.template if args.template else os.path.join(script_dir, "template_base.html")
 db_path = args.db if args.db else os.environ.get("TRADE_DB_PATH", os.path.expanduser("~/.trade/trade.db"))
+
+DEFAULT_TOKEN_FILE = os.path.expanduser("~/.lot-trader/session.token")
+
+
+def resolve_session_token(explicit_token, token_file):
+    """Read the same 0600 credential `trade serve` publishes.
+
+    Returns (token, source, path). An absent/unreadable/empty file means "no active
+    credential": the page must then run in pure standalone mode rather than guess.
+    """
+    if explicit_token is not None and str(explicit_token).strip():
+        return str(explicit_token).strip(), "explicit", token_file
+    path = (token_file or os.environ.get("LOT_TRADER_TOKEN_FILE") or DEFAULT_TOKEN_FILE)
+    path = os.path.expanduser(str(path))
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+    except OSError:
+        return "", None, path
+    return (value, "credential_file", path) if value else ("", None, path)
+
+
+session_token, session_token_source, session_token_path = resolve_session_token(
+    args.token, args.token_file
+)
+if session_token:
+    print(f"Local session credential loaded from {session_token_path} (mode 0600) — will be injected into the page.")
+else:
+    print(f"No active local session credential at {session_token_path} — dashboard will open in standalone mode.")
 
 # 1. Fetch live active lots from trade CLI
 out_lots = subprocess.check_output(["trade", "lot", "list", "--status", "ACTIVE", "--json"])
@@ -1110,6 +1141,14 @@ html_content = html_content.replace("{{TOTAL_NEG_SUM_STR}}", m_all["neg_sum_str"
 html_content = html_content.replace("{{TOTAL_REALIZED_PNL_STR}}", m_all["realized_pnl_str"])
 html_content = html_content.replace("{{TOTAL_DIVIDENDS_STR}}", m_all["dividends_str"])
 html_content = html_content.replace("{{TOTAL_WITHDRAWN_CASH_STR}}", m_all["withdrawn_str"])
+
+# ---- local session credential (0600 handshake) ----
+# Injected as a JS string literal so a token containing quotes/backslashes can never break
+# out of the assignment. Empty string === "no active credential, stay standalone".
+html_content = html_content.replace("{{SESSION_TOKEN_JS_LITERAL}}", json.dumps(session_token))
+html_content = html_content.replace(
+    "{{SESSION_TOKEN_CONFIGURED}}", "true" if session_token else "false"
+)
 
 out_path = os.path.abspath(args.out)
 with open(out_path, "w", encoding="utf-8") as f:

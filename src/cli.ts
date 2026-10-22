@@ -6,7 +6,13 @@ import { AppDatabase } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
-import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT, startServe } from "./serve.ts";
+import {
+  DEFAULT_SERVE_HOST,
+  DEFAULT_SERVE_PORT,
+  readSessionTokenFile,
+  resolveSessionTokenFile,
+  startServe,
+} from "./serve.ts";
 import { parseArgs } from "util";
 import { existsSync, statSync } from "fs";
 import { homedir } from "os";
@@ -50,6 +56,7 @@ options:
 
 function printServeHelp(): void {
   console.log(`usage: trade serve [-h] [--port ${DEFAULT_SERVE_PORT}] [--host ${DEFAULT_SERVE_HOST}] [--db <path>]
+                       [--token <string>] [--token-file <path>]
 
 Local HTTP Engine (read-only JSON API, loopback only)
 
@@ -57,14 +64,22 @@ options:
   --port, -p PORT   TCP port to bind (default: ${DEFAULT_SERVE_PORT}; 0 = ephemeral)
   --host HOST       Bind host, loopback only (default: ${DEFAULT_SERVE_HOST})
   --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  --token TOKEN     Fixed session token (default: 32 random bytes / 64 hex, regenerated per run)
+  --token-file PATH Credential file, written with 0600 (default: $LOT_TRADER_TOKEN_FILE /
+                    ~/.lot-trader/session.token). Auto-generated tokens are deleted on exit.
   --json            Emit a single machine-readable ready line instead of the banner
   --quiet           Suppress the startup banner
   -h, --help        show this help message and exit
 
 endpoints:
-  GET /api/health   Liveness probe: {status, version, db_path, timestamp}
-  GET /api/summary  Portfolio + multi-account + per-symbol snapshot
-  GET /api/lots     Lot detail list (?symbol= &account= &status=)
+  GET /api/health   Liveness probe: {status, version, db_path, timestamp}  [public, no token]
+  GET /api/summary  Portfolio + multi-account + per-symbol snapshot        [token required]
+  GET /api/lots     Lot detail list (?symbol= &account= &status=)          [token required]
+
+session credential:
+  The token is passed as \`Authorization: Bearer <token>\` or \`?token=<token>\`.
+  Missing or wrong token => HTTP 401 UNAUTHORIZED with no ledger field at all.
+  \`trade dashboard\` reads the credential file and injects it into the generated page.
 
 notes:
   The engine refuses to bind any non-loopback host, so the ledger never leaves this machine.
@@ -79,6 +94,8 @@ async function handleServe(args: string[]): Promise<void> {
       port: { type: "string", short: "p" },
       host: { type: "string" },
       db: { type: "string" },
+      token: { type: "string" },
+      "token-file": { type: "string" },
       json: { type: "boolean", default: false },
       quiet: { type: "boolean", default: false },
     },
@@ -93,8 +110,15 @@ async function handleServe(args: string[]): Promise<void> {
       port: (values.port as string | undefined) ?? DEFAULT_SERVE_PORT,
       host: (values.host as string | undefined) ?? DEFAULT_SERVE_HOST,
       dbPath: values.db as string | undefined,
+      token: values.token as string | undefined,
+      tokenFile: values["token-file"] as string | undefined,
       quiet,
     });
+
+    // The token itself is NEVER printed: only where it lives and how it is protected.
+    const credentialNote = `${started.tokenFile} (0600, ${
+      started.tokenSource === "generated" ? "自动生成，退出时清除" : "由 --token 指定"
+    })`;
 
     if (isJson) {
       console.log(
@@ -107,6 +131,10 @@ async function handleServe(args: string[]): Promise<void> {
             port: started.port,
             db_path: started.dbPath,
             version: started.version,
+            auth: "bearer",
+            token_file: started.tokenFile,
+            token_source: started.tokenSource,
+            token_ephemeral: started.ephemeralToken,
           },
         }),
       );
@@ -115,8 +143,10 @@ async function handleServe(args: string[]): Promise<void> {
       console.log(`   地址: ${started.url}`);
       console.log(`   接口: GET /api/health | GET /api/summary | GET /api/lots?symbol=&account=&status=`);
       console.log(`   账本: ${started.dbPath}`);
+      console.log(`   凭证: ${credentialNote}`);
+      console.log(`   鉴权: /api/summary 与 /api/lots 需 Bearer Token（/api/health 保持公开探活）`);
       console.log(`   版本: v${started.version} • 仅监听本地回环地址，不对公网暴露`);
-      console.log(`   看板: 打开 dashboard 后顶栏指示灯将在 3 秒内转为「本地引擎已联动」`);
+      console.log(`   看板: trade dashboard 会自动注入该凭证，顶栏指示灯 3 秒内转为「本地引擎已联动」`);
     }
 
     let stopping = false;
@@ -154,6 +184,7 @@ async function handleServe(args: string[]): Promise<void> {
 
 function printDashboardHelp(): void {
   console.log(`usage: trade dashboard [-h] [--out <path>] [--open] [--template <path>] [--db <path>]
+                         [--token <string>] [--token-file <path>]
 
 Global Interactive HTML Dashboard Generator
 
@@ -162,8 +193,15 @@ options:
   --open            Open the generated dashboard with the system default browser
   --template, -t    Front-end template HTML path (default: template_base.html next to the script)
   --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
+  --token TOKEN     Session token to embed (default: read the credential file below)
+  --token-file PATH Credential file (default: $LOT_TRADER_TOKEN_FILE / ~/.lot-trader/session.token)
   --json            Emit structured JSON result instead of human readable text
   -h, --help        show this help message and exit
+
+notes:
+  When an active credential is found it is injected as window.__LOT_TRADER_SESSION_TOKEN__
+  so the page can call /api/summary and /api/lots; without one the page stays in
+  pure front-end standalone mode.
 `);
 }
 
@@ -248,6 +286,8 @@ async function handleDashboard(args: string[]): Promise<void> {
       open: { type: "boolean", default: false },
       template: { type: "string", short: "t" },
       db: { type: "string" },
+      token: { type: "string" },
+      "token-file": { type: "string" },
       "scripts-dir": { type: "string" },
       json: { type: "boolean", default: false },
     },
@@ -280,10 +320,32 @@ async function handleDashboard(args: string[]): Promise<void> {
       childEnv.PATH = childPath;
     }
 
-    const proc = Bun.spawn(
-      [pythonCommand(), scriptPath, "--out", outPath, "--template", template, "--db", dbPath],
-      { cwd: process.cwd(), env: childEnv, stdout: isJson ? "pipe" : "inherit", stderr: isJson ? "pipe" : "inherit" },
-    );
+    // Credential hand-off: `trade dashboard` embeds the same token `trade serve` publishes,
+    // so the generated page can authenticate against the local engine without user input.
+    const generatorArgs = [scriptPath, "--out", outPath, "--template", template, "--db", dbPath];
+    const explicitToken = ((values.token as string | undefined) ?? "").trim();
+    const tokenFileArg = ((values["token-file"] as string | undefined) ?? "").trim();
+    const tokenFile = resolveSessionTokenFile(tokenFileArg || undefined);
+    childEnv.LOT_TRADER_TOKEN_FILE = tokenFile;
+    if (explicitToken) {
+      generatorArgs.push("--token", explicitToken);
+    }
+    if (tokenFileArg) {
+      generatorArgs.push("--token-file", tokenFileArg);
+    }
+    // Report what the page will actually be able to prove, without printing the secret.
+    const tokenSource = explicitToken
+      ? "explicit"
+      : readSessionTokenFile(tokenFile)
+        ? "credential_file"
+        : "none";
+
+    const proc = Bun.spawn([pythonCommand(), ...generatorArgs], {
+      cwd: process.cwd(),
+      env: childEnv,
+      stdout: isJson ? "pipe" : "inherit",
+      stderr: isJson ? "pipe" : "inherit",
+    });
 
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -310,7 +372,16 @@ async function handleDashboard(args: string[]): Promise<void> {
         JSON.stringify({
           code: 0,
           msg: "success",
-          data: { out: outPath, script: scriptPath, template, db: dbPath, bytes: size, opened: Boolean(values.open) },
+          data: {
+            out: outPath,
+            script: scriptPath,
+            template,
+            db: dbPath,
+            bytes: size,
+            opened: Boolean(values.open),
+            token_file: tokenFile,
+            token_source: tokenSource,
+          },
         }),
       );
     } else {
@@ -318,6 +389,15 @@ async function handleDashboard(args: string[]): Promise<void> {
       console.log(`   脚本: ${scriptPath}`);
       console.log(`   模板: ${template}`);
       console.log(`   数据: ${dbPath}`);
+      console.log(
+        `   凭证: ${
+          tokenSource === "explicit"
+            ? "已通过 --token 注入"
+            : tokenSource === "credential_file"
+              ? `已注入活跃会话 Token (${tokenFile}, 0600)`
+              : `未找到活跃 Token (${tokenFile})，页面将以纯前端自驱模式打开`
+        }`,
+      );
       if (values.open) {
         console.log(`   已在系统默认浏览器中打开。`);
       }

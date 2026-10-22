@@ -6,17 +6,26 @@
  *    hard-restricted to `127.0.0.1` / `localhost` / `::1`; any other `--host` value is a
  *    hard error rather than a silent external exposure.
  *  - Read-only JSON API. `serve` never mutates the ledger; writes stay on the CLI.
- *  - Browser-hardened. Two independent gates run before any routing:
+ *  - Browser-hardened. Three independent gates run before any routing:
  *      1. `Host` must name a loopback literal (blocks DNS rebinding, which would
  *         otherwise let `attacker.example -> 127.0.0.1` read the ledger as same-origin);
  *      2. `Origin` must be absent (curl / local script), `null` (dashboard opened from
  *         `file://`) or a loopback origin. Anything else is a flat 403 with **no** CORS
- *         headers, so a hostile page can never read the response.
+ *         headers, so a hostile page can never read the response;
+ *      3. Sensitive ledger endpoints require the local session credential
+ *         (`Authorization: Bearer <token>` or `?token=<token>`). The token lives in a
+ *         `0600` file only the current OS user can read, so "same machine" is no longer
+ *         treated as "trusted caller": a hostile `Origin: null` sandboxed iframe can pass
+ *         the CORS gate but still cannot read a single ledger field.
  *  - Every handler is defensive: a broken quote feed / missing table degrades the payload
  *    (cost-basis fallback) instead of throwing a 500 or emitting NaN.
  */
 import type { Server } from "bun";
 import type { Database } from "bun:sqlite";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import pkg from "../package.json";
 import { AccountRepository, DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
@@ -27,6 +36,13 @@ export const TOOL_VERSION: string = (pkg as { version?: string }).version || "0.
 
 export const DEFAULT_SERVE_PORT = 8080;
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
+
+/** Session credential file: 0600, current OS user only. Mirrors Clawd's local protocol handshake. */
+export const DEFAULT_TOKEN_FILE = join(homedir(), ".lot-trader", "session.token");
+/** Credential bytes -> 64 hex chars. */
+export const SESSION_TOKEN_BYTES = 32;
+/** `rw-------`: the whole security story of the credential rests on this bitmask. */
+export const TOKEN_FILE_MODE = 0o600;
 
 /** Only these literal hosts may ever be bound. Everything else is rejected. */
 export const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"] as const;
@@ -52,9 +68,16 @@ export interface ServeOptions {
   quoteCacheTtlMs?: number;
   /** Full position cap (hard budget upper bound). Defaults to env or 50000. */
   fullPositionCap?: number;
+  /** Fixed session token. When omitted a 32-byte random hex token is generated. */
+  token?: string;
+  /** Credential file path. Defaults to $LOT_TRADER_TOKEN_FILE / ~/.lot-trader/session.token. */
+  tokenFile?: string;
   /** Suppress the startup banner. */
   quiet?: boolean;
 }
+
+/** `explicit` = supplied by `--token`; `generated` = random, regenerated every run. */
+export type TokenSource = "explicit" | "generated";
 
 export interface ApiLot {
   lot_id: string;
@@ -185,6 +208,13 @@ export interface StartedServe {
   dbPath: string;
   version: string;
   url: string;
+  /** Effective session credential (in-process callers only; never printed by the CLI). */
+  token: string;
+  /** 0600 credential file the token was written to. */
+  tokenFile: string;
+  tokenSource: TokenSource;
+  /** True when the token was auto-generated and the file is removed on stop(). */
+  ephemeralToken: boolean;
   stop(): Promise<void>;
 }
 
@@ -248,6 +278,144 @@ export function formatPortConflictError(host: string, port: number): string {
     `  可能已有一个 trade serve 在运行：先访问 http://${host}:${port}/api/health 确认。`,
     `  或换一个端口重试： trade serve --port ${port === 65535 ? 8081 : port + 1}`,
   ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Session credential (0600 local-protocol handshake)
+//
+// Same-origin / loopback is a *network* boundary, not an *identity* one. The three gates
+// above still leave one theoretical hole: a hostile page can be loaded inside a sandboxed
+// iframe (`Origin: null`), which is indistinguishable from the owner's `file://` dashboard,
+// and blind-fire GETs at 127.0.0.1. The fix is not another header rule but a secret the
+// attacker simply cannot read: a 32-byte random token kept in a `0600` file owned by the
+// current OS user. File permissions become the authentication boundary.
+// ---------------------------------------------------------------------------
+
+/** Resolve the credential file path: explicit flag -> $LOT_TRADER_TOKEN_FILE -> default. */
+export function resolveSessionTokenFile(raw?: string | null): string {
+  const explicit = (raw ?? "").trim();
+  if (explicit) return explicit;
+  const fromEnv = (process.env.LOT_TRADER_TOKEN_FILE ?? "").trim();
+  return fromEnv || DEFAULT_TOKEN_FILE;
+}
+
+/** 32 random bytes -> 64 lowercase hex chars. Entropy is the point; never derive it. */
+export function generateSessionToken(bytes: number = SESSION_TOKEN_BYTES): string {
+  const size = Number.isInteger(bytes) && bytes > 0 ? bytes : SESSION_TOKEN_BYTES;
+  return randomBytes(size).toString("hex");
+}
+
+/**
+ * Persist the credential with `0600` from the very first byte.
+ * `writeFileSync`'s `mode` is masked by umask, so the explicit `chmodSync` is authoritative.
+ */
+export function writeSessionTokenFile(tokenFile: string, token: string): string {
+  const path = resolveSessionTokenFile(tokenFile);
+  const dir = dirname(path);
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Recreate instead of patching: an inherited umask must never widen the file.
+    if (existsSync(path)) chmodSync(path, TOKEN_FILE_MODE);
+    writeFileSync(path, `${token}\n`, { mode: TOKEN_FILE_MODE });
+    chmodSync(path, TOKEN_FILE_MODE);
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`无法写入本地会话 Token 凭证文件 ${path}: ${reason}`);
+  }
+  return path;
+}
+
+/** Read a credential file, or null when it is missing / empty / unreadable. */
+export function readSessionTokenFile(tokenFile: string): string | null {
+  try {
+    const value = readFileSync(tokenFile, "utf8").trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete a credential file (idempotent). Returns true when nothing is left behind.
+ * `expectedToken` guards the shared-file case: a failed second `trade serve` (port already in
+ * use) must not delete the credential the *running* instance just published.
+ */
+export function removeSessionTokenFile(tokenFile: string, expectedToken?: string): boolean {
+  if (expectedToken !== undefined) {
+    const current = readSessionTokenFile(tokenFile);
+    if (current !== null && current !== expectedToken) return false;
+  }
+  try {
+    rmSync(tokenFile, { force: true });
+  } catch {
+    // Fall through to the existence check below: a failed unlink is reported, not thrown.
+  }
+  return !existsSync(tokenFile);
+}
+
+/**
+ * Constant-time credential comparison. Length mismatch short-circuits (timingSafeEqual
+ * throws on unequal lengths) which leaks only the expected length — public knowledge.
+ */
+export function isTokenAuthorized(
+  expected: string | null | undefined,
+  provided: string | null | undefined,
+): boolean {
+  const exp = (expected ?? "").trim();
+  const got = (provided ?? "").trim();
+  if (!exp || !got) return false;
+  const a = Buffer.from(exp, "utf8");
+  const b = Buffer.from(got, "utf8");
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract the credential from a request.
+ *  - `Authorization: Bearer <token>` — normal clients / the dashboard runtime.
+ *  - `?token=<token>` — SSE / static-front-end compatibility channel.
+ */
+export function extractRequestToken(req: Request, url: URL): string | null {
+  const header = req.headers.get("authorization");
+  if (header) {
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+    if (match) {
+      const value = match[1].trim();
+      if (value) return value;
+    }
+  }
+  const query = url.searchParams.get("token");
+  if (query && query.trim()) return query.trim();
+  return null;
+}
+
+/**
+ * The only routes that may answer without a credential.
+ * Both are ledger-free by construction: a liveness probe and the endpoint advertisement.
+ */
+export const PUBLIC_ROUTES = ["/", API_PREFIX, `${API_PREFIX}/health`] as const;
+
+/** True for an explicitly public route (index / liveness). */
+export function isPublicRoute(route: string): boolean {
+  return (PUBLIC_ROUTES as readonly string[]).includes(route);
+}
+
+/**
+ * True for every `/api/*` route that is not explicitly public.
+ *
+ * Fail-closed on purpose: `/api/summary` and `/api/lots` are the ledger endpoints today, but
+ * the next one is protected the moment it is added — nobody has to remember to append it to a
+ * list. A missing route also answers 401 instead of 404 when unauthenticated, so an attacker
+ * cannot even enumerate which endpoints exist.
+ */
+export function isSensitiveRoute(route: string): boolean {
+  const path = route || "/";
+  if (isPublicRoute(path)) return false;
+  return path === API_PREFIX || path.startsWith(`${API_PREFIX}/`);
 }
 
 // ---------------------------------------------------------------------------
@@ -819,7 +987,9 @@ export function checkRequestOrigin(raw: string | null): OriginVerdict {
 function corsHeaders(origin: OriginVerdict): Record<string, string> {
   const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    // `Authorization` is required in the allow-list so a `file://` dashboard's credentialed
+    // GET survives the preflight instead of being rejected by the browser itself.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
     "Cache-Control": "no-store",
@@ -871,9 +1041,28 @@ export interface RuntimeContext {
   priceBook: PriceBook;
   fullPositionCap: number;
   startedAt: number;
+  /** Effective session credential for the sensitive endpoints. */
+  sessionToken: string;
   /** Mutable: overwritten with the OS-assigned port when `port: 0` was requested. */
   host: string;
   port: number;
+}
+
+/**
+ * Flat 401 for a sensitive endpoint without a valid credential.
+ * The body is deliberately **ledger-free** and the refusal happens before any query runs:
+ * a rejected caller learns only that it was rejected.
+ */
+export function unauthorizedResponse(origin: OriginVerdict = NO_ORIGIN): Response {
+  return jsonResponse(
+    {
+      status: "error",
+      code: "UNAUTHORIZED",
+      message: "未授权：请提供合法的本地会话 Token。",
+    },
+    401,
+    origin,
+  );
 }
 
 /** Create the request handler. Kept separate from `Bun.serve` so tests can drive it directly. */
@@ -914,11 +1103,18 @@ export function createRequestHandler(
             version: TOOL_VERSION,
             host: ctx.host,
             port: ctx.port,
+            auth: "bearer",
             endpoints: ["GET /api/health", "GET /api/summary", "GET /api/lots?symbol=&account=&status="],
           },
           200,
           origin,
         );
+      }
+
+      // --- Security gate 3: session credential on every ledger endpoint ---
+      // Runs *before* the payload builders, so an unauthorized call touches no table.
+      if (isSensitiveRoute(route) && !isTokenAuthorized(ctx.sessionToken, extractRequestToken(req, url))) {
+        return unauthorizedResponse(origin);
       }
 
       if (route === `${API_PREFIX}/health`) {
@@ -981,6 +1177,16 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
   const host = resolveServeHost(options.host);
   const port = resolveServePort(options.port);
   const dbPath = resolveServeDbPath(options.dbPath);
+
+  // --- Credential lifecycle: generate (or accept) -> persist 0600 -> drop on shutdown ---
+  // The file is written only *after* the listener is bound: a failed boot (port in use)
+  // must never clobber the credential a running instance just published.
+  const explicitToken = (options.token ?? "").trim();
+  const tokenSource: TokenSource = explicitToken ? "explicit" : "generated";
+  const sessionToken = explicitToken || generateSessionToken();
+  const tokenFile = resolveSessionTokenFile(options.tokenFile);
+  const ephemeralToken = tokenSource === "generated";
+
   const appDb = new AppDatabase(dbPath);
   const db = appDb.getConnection();
   const priceBook = new PriceBook(options.quoteProvider, options.quoteCacheTtlMs);
@@ -991,6 +1197,7 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
     priceBook,
     fullPositionCap: resolveFullPositionCap(options.fullPositionCap),
     startedAt,
+    sessionToken,
     host,
     port,
   };
@@ -1023,6 +1230,19 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
   const actualPort = server.port ?? port;
   ctx.port = actualPort;
 
+  try {
+    writeSessionTokenFile(tokenFile, sessionToken);
+  } catch (err: unknown) {
+    // No credential on disk means no dashboard can ever authenticate: fail loud, not open.
+    try {
+      server.stop(true);
+    } catch {
+      /* already down */
+    }
+    appDb.close();
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+
   return {
     server,
     host,
@@ -1030,6 +1250,10 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
     dbPath,
     version: TOOL_VERSION,
     url: `http://${host}:${actualPort}`,
+    token: sessionToken,
+    tokenFile,
+    tokenSource,
+    ephemeralToken,
     async stop(): Promise<void> {
       try {
         server.stop(true);
@@ -1037,6 +1261,9 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
         // Already stopped: shutting down twice is not an error.
       }
       appDb.close();
+      // Generated credentials die with the process; an explicitly supplied one is the
+      // owner's property and is left in place.
+      if (ephemeralToken) removeSessionTokenFile(tokenFile, sessionToken);
     },
   };
 }

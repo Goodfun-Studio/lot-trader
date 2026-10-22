@@ -915,6 +915,17 @@
   </div>
 
   <!-- =========================================================================
+       LOCAL SESSION CREDENTIAL (injected by `trade dashboard`)
+       The token comes from the 0600 credential file written by `trade serve`. It is the
+       only thing standing between a sandboxed `Origin: null` iframe and the ledger, so an
+       empty string is a valid state: the page then stays in pure standalone mode.
+       ========================================================================= -->
+  <script id="session-token-config">
+    window.__LOT_TRADER_SESSION_TOKEN__ = {{SESSION_TOKEN_JS_LITERAL}};
+    window.__LOT_TRADER_SESSION_AUTH_CONFIGURED__ = {{SESSION_TOKEN_CONFIGURED}};
+  </script>
+
+  <!-- =========================================================================
        DUAL-MODE LIVE CLIENT RUNTIME (pure, dependency-free, unit-tested)
        Everything below is side-effect free at load time and exposed on
        window.LiveClientRuntime so the negative-path tests can drive it directly:
@@ -933,6 +944,40 @@
       var IDLE_REFRESH_MS = 60000;      // 非交易时段休眠降频
       var TENCENT_QUOTE_BASE = 'https://qt.gtimg.cn/q=';
       var DEFAULT_SELL_FEE_RATE = 0.0002;
+      var SESSION_TOKEN_KEY = '__LOT_TRADER_SESSION_TOKEN__';
+
+      /**
+       * Local session credential injected by `trade dashboard`.
+       * Read lazily from the global on every call: the config script may execute before or
+       * after this runtime, and returning '' (instead of throwing) keeps standalone mode safe.
+       */
+      function sessionToken() {
+        try {
+          var raw = root ? root[SESSION_TOKEN_KEY] : undefined;
+          // Only a non-empty string is a credential; numbers / objects / booleans mean
+          // "unconfigured" so a broken injection can never turn into a bogus header.
+          if (typeof raw !== 'string') return '';
+          return raw.trim();
+        } catch (e) {
+          return '';
+        }
+      }
+
+      /** `Authorization: Bearer <token>` header object; `{}` when no credential is configured. */
+      function authHeaders(token) {
+        var value = (token === undefined) ? sessionToken() : String(token === null || token === undefined ? '' : token).trim();
+        if (!value) return {};
+        return { Authorization: 'Bearer ' + value };
+      }
+
+      /** Append the credential as a query parameter too (static proxy / SSE compatibility). */
+      function withSessionToken(url, token) {
+        var raw = String(url === undefined || url === null ? '' : url);
+        var value = (token === undefined) ? sessionToken() : String(token === null || token === undefined ? '' : token).trim();
+        if (!raw || !value) return raw;
+        if (/[?&]token=/.test(raw)) return raw;
+        return raw + (raw.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(value);
+      }
 
       function num(value, fallback) {
         var parsed = typeof value === 'number' ? value : parseFloat(value);
@@ -1140,7 +1185,7 @@
        * Heartbeat probe. Never rejects: returns { ok, reason, data }.
        * A dead service / DNS failure / non-JSON body / timeout all become ok:false.
        */
-      function probeLocalService(fetcher, url, timeoutMs) {
+      function probeLocalService(fetcher, url, timeoutMs, token) {
         return new Promise(function (resolve) {
           var timer = null;
           var controller = null;
@@ -1154,6 +1199,8 @@
           try {
             if (typeof fetcher !== 'function') { finish({ ok: false, reason: 'no_fetch' }); return; }
             var init = { method: 'GET', cache: 'no-store' };
+            var headers = authHeaders(token);
+            if (Object.keys(headers).length) init.headers = headers;
             if (typeof AbortController === 'function') {
               controller = new AbortController();
               init.signal = controller.signal;
@@ -1329,6 +1376,9 @@
         isTradingSession: isTradingSession,
         nextRefreshDelay: nextRefreshDelay,
         nextMode: nextMode,
+        sessionToken: sessionToken,
+        authHeaders: authHeaders,
+        withSessionToken: withSessionToken,
         probeLocalService: probeLocalService,
         fetchTencentQuotes: fetchTencentQuotes,
         formatMoney: formatMoney,
@@ -1989,8 +2039,42 @@
       localBase: LCR ? LCR.LOCAL_API_BASE : 'http://127.0.0.1:8080',
       previousPrices: {},
       quoteTimer: null,
-      heartbeatTimer: null
+      heartbeatTimer: null,
+      // Session-credential state: a 401 from /api/summary means the local engine is alive
+      // but our token is missing/stale -> stay standalone instead of retrying blindly.
+      authRejected: false,
+      authRetryCount: 0
     };
+
+    var AUTH_RETRY_BEATS = 20; // ~60s at HEARTBEAT_MS = 3000
+
+    /** The credential injected by `trade dashboard` (empty string when unconfigured). */
+    function localSessionToken() {
+      try {
+        return LCR ? LCR.sessionToken() : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    /** Build a local API URL carrying `?token=` as a fallback channel. */
+    function localApiUrl(path) {
+      var url = LIVE.localBase + path;
+      try {
+        return LCR ? LCR.withSessionToken(url, localSessionToken()) : url;
+      } catch (e) {
+        return url;
+      }
+    }
+
+    /** Authorization header object for the local engine ({} when no token is set). */
+    function localAuthHeaders() {
+      try {
+        return LCR ? LCR.authHeaders(localSessionToken()) : {};
+      } catch (e) {
+        return {};
+      }
+    }
 
     function liveNum(value, fallback) {
       try {
@@ -2315,7 +2399,9 @@
         : '非交易时段 • 休眠降频 60s';
       var when = LIVE.lastQuoteAt ? nowClock() : '--';
       var srcText = LIVE.mode === 'LOCAL' ? '本地引擎' : '自驱';
-      el.textContent = srcText + '行情 • ' + interval + ' • 最近 ' + when + (LIVE.lastError ? ' • 异常已安全降级' : '');
+      var degraded = (LIVE.lastError && !LIVE.authRejected) ? ' • 异常已安全降级' : '';
+      var authNote = LIVE.authRejected ? ' • 本地服务未授权/Token不匹配，当前保持轻量自驱' : '';
+      el.textContent = srcText + '行情 • ' + interval + ' • 最近 ' + when + degraded + authNote;
     }
 
     function renderModeIndicator() {
@@ -2331,7 +2417,9 @@
         wrap.classList.remove('local');
         wrap.classList.add('standalone');
         text.textContent = '模式：轻量独立（纯前端自驱）';
-        wrap.title = '未检测到本地引擎，页面以纯前端方式自驱动行情（每 5 秒批量轮询）';
+        wrap.title = LIVE.authRejected
+          ? '本地引擎可达但凭证校验未通过（Token 缺失或不匹配）：页面已保持纯前端自驱行情，重新生成看板即可注入最新凭证'
+          : '未检测到本地引擎，页面以纯前端方式自驱动行情（每 5 秒批量轮询）';
       }
     }
 
@@ -2433,15 +2521,28 @@
       try {
         if (typeof fetch !== 'function') return null;
         var init = { method: 'GET', cache: 'no-store' };
+        var auth = localAuthHeaders();
+        if (auth && Object.keys(auth).length) init.headers = auth;
         var controller = typeof AbortController === 'function' ? new AbortController() : null;
         var timer = null;
         if (controller) {
           init.signal = controller.signal;
           timer = setTimeout(function () { try { controller.abort(); } catch (e) {} }, 4000);
         }
-        var resp = await fetch(LIVE.localBase + '/api/summary', init);
+        var resp = await fetch(localApiUrl('/api/summary'), init);
         if (timer) { clearTimeout(timer); timer = null; }
+        if (resp && resp.status === 401) {
+          // Alive but unauthenticated: keep the page self-driving, never blank it.
+          LIVE.authRejected = true;
+          LIVE.lastError = 'unauthorized';
+          if (LIVE.mode !== 'STANDALONE') {
+            LIVE.mode = 'STANDALONE';
+            renderModeIndicator();
+          }
+          return null;
+        }
         if (!resp || !resp.ok) return null;
+        LIVE.authRejected = false;
         var data = await resp.json();
         var quotes = {};
         (data && Array.isArray(data.symbols) ? data.symbols : []).forEach(function (item) {
@@ -2529,12 +2630,28 @@
         var fetcher = typeof fetch === 'function'
           ? function (url, init) { return fetch(url, init); }
           : null;
-        result = await LCR.probeLocalService(fetcher, LIVE.localBase + '/api/health', 2500);
+        // `null` token on purpose: /api/health is public and content-free, so the heartbeat
+        // must not trigger an Authorization preflight every 3 seconds.
+        result = await LCR.probeLocalService(fetcher, LIVE.localBase + '/api/health', 2500, null);
       } catch (e) {
         result = { ok: false };
       }
       LIVE.failCount = (result && result.ok) ? 0 : (LIVE.failCount + 1);
-      var next = LCR.nextMode(LIVE.mode, Boolean(result && result.ok), LIVE.failCount);
+
+      // A rejected credential must not be latched forever: retry it on a slow beat, and only
+      // upgrade back to LOCAL when the retry actually returns data (no badge flicker).
+      if (LIVE.authRejected) {
+        LIVE.authRetryCount = (LIVE.authRetryCount || 0) + 1;
+        if (LIVE.authRetryCount >= AUTH_RETRY_BEATS) {
+          LIVE.authRetryCount = 0;
+          var retried = null;
+          try { retried = await tryLocalEngineQuotes(); } catch (e) { retried = null; }
+          if (retried) applyQuotes(retried);
+        }
+      }
+
+      var probeOk = Boolean(result && result.ok) && !LIVE.authRejected;
+      var next = LCR.nextMode(LIVE.mode, probeOk, LIVE.failCount);
       if (next !== LIVE.mode) {
         LIVE.mode = next;
         renderModeIndicator();

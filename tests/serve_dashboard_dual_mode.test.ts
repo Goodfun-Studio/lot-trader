@@ -9,28 +9,35 @@
  *                                    service or a 502 body can never paint NaN, blank the page, or
  *                                    raise an uncaught exception.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
+  DEFAULT_TOKEN_FILE,
   LOOPBACK_HOSTS,
   TOOL_VERSION,
   PriceBook,
   buildLotsPayload,
   buildSummaryPayload,
+  extractRequestToken,
   formatPortConflictError,
+  generateSessionToken,
   isAllowedHostHeader,
   isAllowedOrigin,
+  isSensitiveRoute,
+  isTokenAuthorized,
   normalizeAccountKey,
+  readSessionTokenFile,
   resolveAllowedOrigin,
   resolveFullPositionCap,
   resolveServeDbPath,
   resolveServeHost,
   resolveServePort,
   startServe,
+  writeSessionTokenFile,
 } from "../src/serve.ts";
 import { AppDatabase } from "../src/db.ts";
 import { QuoteProvider } from "../src/quotes.ts";
@@ -38,6 +45,31 @@ import { QuoteProvider } from "../src/quotes.ts";
 const repoRoot = join(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli.ts");
 const templatePath = join(repoRoot, "scripts", "template_base.html");
+
+// Every in-process `trade serve` publishes a 0600 credential file. Point the default at a
+// throwaway dir so the suite never touches the owner's real ~/.lot-trader/session.token.
+const tokenRoot = mkdtempSync(join(tmpdir(), "dual_tokens_"));
+const defaultTokenFile = join(tokenRoot, "session.token");
+process.env.LOT_TRADER_TOKEN_FILE = defaultTokenFile;
+
+afterAll(() => {
+  rmSync(tokenRoot, { recursive: true, force: true });
+});
+
+/**
+ * Local API fetch that carries the session credential.
+ * `token === null` => deliberately unauthenticated (every negative test uses this).
+ */
+function apiGet(
+  srv: { url: string; token?: string },
+  path: string,
+  init: RequestInit = {},
+  token: string | null | undefined = srv.token,
+): Promise<Response> {
+  const headers: Record<string, string> = { ...((init.headers as Record<string, string>) ?? {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${srv.url}${path}`, { ...init, headers });
+}
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -180,6 +212,7 @@ interface Harness {
   errors: string[];
   rejections: string[];
   fetchCalls: string[];
+  fetchInits: Array<{ url: string; init: any }>;
   runTimers(msFilter?: number): void;
   settle<T = any>(promise: Promise<T> | any): Promise<T>;
   element(id: string): SandboxElement;
@@ -314,6 +347,8 @@ function createHarness(options: {
   quoteMap?: Record<string, string>;
   healthProbe: () => Promise<any> | any;
   summaryBody?: any;
+  /** When true /api/summary answers 401 UNAUTHORIZED (stale or missing credential). */
+  summaryUnauthorized?: boolean;
 }): Harness {
   const template = readFileSync(templatePath, "utf-8");
   const runtimeScript = extractRuntimeScript(template);
@@ -379,6 +414,7 @@ function createHarness(options: {
   const errors: string[] = [];
   const rejections: string[] = [];
   const fetchCalls: string[] = [];
+  const fetchInits: Array<{ url: string; init: any }> = [];
 
   const onRejection = (reason: unknown) => {
     rejections.push(String(reason));
@@ -405,8 +441,17 @@ function createHarness(options: {
   async function fakeFetch(input: any, init?: any): Promise<any> {
     const url = String(input);
     fetchCalls.push(url);
+    fetchInits.push({ url, init: init ?? null });
     if (url.includes("/api/health")) return options.healthProbe();
     if (url.includes("/api/summary")) {
+      if (options.summaryUnauthorized) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ status: "error", code: "UNAUTHORIZED", message: "未授权：请提供合法的本地会话 Token。" }),
+          text: async () => '{"status":"error","code":"UNAUTHORIZED"}',
+        };
+      }
       if (!options.summaryBody) throw new Error("summary offline");
       return { ok: true, status: 200, json: async () => options.summaryBody };
     }
@@ -542,6 +587,7 @@ function createHarness(options: {
     errors,
     rejections,
     fetchCalls,
+    fetchInits,
     runTimers(msFilter?: number) {
       const snapshot = timers.slice();
       for (const timer of snapshot) {
@@ -643,7 +689,7 @@ describe("trade serve: local HTTP engine contract", () => {
     });
     openServers.push(srv);
 
-    const resp = await fetch(`${srv.url}/api/health`);
+    const resp = await apiGet(srv, "/api/health");
     expect(resp.status).toBe(200);
     expect(resp.headers.get("content-type")).toContain("application/json");
 
@@ -668,7 +714,7 @@ describe("trade serve: local HTTP engine contract", () => {
 
     expect(srv.port).toBeGreaterThan(0);
     expect(srv.url).toBe(`http://127.0.0.1:${srv.port}`);
-    const body = (await (await fetch(`${srv.url}/api/health`)).json()) as Record<string, any>;
+    const body = (await (await apiGet(srv, "/api/health")).json()) as Record<string, any>;
     expect(body.port).toBe(srv.port);
   });
 
@@ -683,7 +729,7 @@ describe("trade serve: local HTTP engine contract", () => {
     });
     openServers.push(srv);
 
-    const body = (await (await fetch(`${srv.url}/api/summary`)).json()) as Record<string, any>;
+    const body = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
     expect(body.status).toBe("ok");
     assertNoNaN(body, "summary payload");
     expect(everyNumberFinite(body)).toBe(true);
@@ -742,27 +788,27 @@ describe("trade serve: local HTTP engine contract", () => {
     });
     openServers.push(srv);
 
-    const all = (await (await fetch(`${srv.url}/api/lots`)).json()) as Record<string, any>;
+    const all = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
     expect(all.status).toBe("ok");
     expect(all.total).toBe(4);
     expect(everyNumberFinite(all)).toBe(true);
 
-    const gold = (await (await fetch(`${srv.url}/api/lots?symbol=518880`)).json()) as Record<string, any>;
+    const gold = (await (await apiGet(srv, "/api/lots?symbol=518880")).json()) as Record<string, any>;
     expect(gold.total).toBe(2);
     expect(gold.filters.symbol).toBe("518880.SH");
     expect(gold.lots.every((l: any) => l.symbol === "518880.SH")).toBe(true);
     expect(gold.lots[0].price_source).toBe("live");
 
-    const acc2 = (await (await fetch(`${srv.url}/api/lots?account=ACC2`)).json()) as Record<string, any>;
+    const acc2 = (await (await apiGet(srv, "/api/lots?account=ACC2")).json()) as Record<string, any>;
     expect(acc2.total).toBe(2);
     expect(acc2.lots.every((l: any) => l.account_id === "ACC2")).toBe(true);
 
-    const closed = (await (await fetch(`${srv.url}/api/lots?status=CLOSED`)).json()) as Record<string, any>;
+    const closed = (await (await apiGet(srv, "/api/lots?status=CLOSED")).json()) as Record<string, any>;
     expect(closed.total).toBe(1);
     expect(closed.lots[0].lot_id).toBe("LOT-CLOSED");
     expect(closed.lots[0].status).toBe("CLOSED");
 
-    const active = (await (await fetch(`${srv.url}/api/lots?status=ACTIVE`)).json()) as Record<string, any>;
+    const active = (await (await apiGet(srv, "/api/lots?status=ACTIVE")).json()) as Record<string, any>;
     expect(active.total).toBe(3);
   });
 
@@ -780,7 +826,7 @@ describe("trade serve: local HTTP engine contract", () => {
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new DeadProvider() });
     openServers.push(srv);
 
-    const summary = (await (await fetch(`${srv.url}/api/summary`)).json()) as Record<string, any>;
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
     assertNoNaN(summary, "offline summary");
     expect(everyNumberFinite(summary)).toBe(true);
     for (const sym of summary.symbols) {
@@ -789,7 +835,7 @@ describe("trade serve: local HTTP engine contract", () => {
       expect(sym.market_value).toBeGreaterThan(0);
     }
 
-    const lots = (await (await fetch(`${srv.url}/api/lots`)).json()) as Record<string, any>;
+    const lots = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
     assertNoNaN(lots, "offline lots");
     expect(everyNumberFinite(lots)).toBe(true);
   });
@@ -799,21 +845,21 @@ describe("trade serve: local HTTP engine contract", () => {
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(srv);
 
-    const missing = await fetch(`${srv.url}/api/nope`);
+    const missing = await apiGet(srv, "/api/nope");
     expect(missing.status).toBe(404);
     const missingBody = (await missing.json()) as Record<string, any>;
     expect(missingBody.status).toBe("error");
     expect(JSON.stringify(missingBody)).not.toContain("    at ");
 
-    const badMethod = await fetch(`${srv.url}/api/health`, { method: "POST" });
+    const badMethod = await apiGet(srv, "/api/health", { method: "POST" });
     expect(badMethod.status).toBe(405);
 
-    const badStatus = await fetch(`${srv.url}/api/lots?status=EXPLODED`);
+    const badStatus = await apiGet(srv, "/api/lots?status=EXPLODED");
     expect(badStatus.status).toBe(400);
     const badStatusBody = (await badStatus.json()) as Record<string, any>;
     expect(badStatusBody.message).toContain("非法批次状态");
 
-    const preflight = await fetch(`${srv.url}/api/health`, { method: "OPTIONS" });
+    const preflight = await apiGet(srv, "/api/health", { method: "OPTIONS" });
     expect(preflight.status).toBe(204);
     // No Origin header => no CORS origin is minted. The old `*` wildcard is gone for good.
     expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
@@ -825,7 +871,7 @@ describe("trade serve: local HTTP engine contract", () => {
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(srv);
 
-    const summary = (await (await fetch(`${srv.url}/api/summary`)).json()) as Record<string, any>;
+    const summary = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
     expect(summary.status).toBe("ok");
     expect(summary.portfolio.total_active_lots).toBe(0);
     expect(summary.portfolio.total_cost).toBe(0);
@@ -833,7 +879,7 @@ describe("trade serve: local HTTP engine contract", () => {
     expect(summary.symbols).toEqual([]);
     assertNoNaN(summary, "empty summary");
 
-    const lots = (await (await fetch(`${srv.url}/api/lots`)).json()) as Record<string, any>;
+    const lots = (await (await apiGet(srv, "/api/lots")).json()) as Record<string, any>;
     expect(lots.total).toBe(0);
     expect(lots.lots).toEqual([]);
   });
@@ -946,7 +992,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
       "http://127.0.0.1.attacker.example:8080",
       "chrome-extension://abcdefghijklmnop",
     ]) {
-      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Origin: evil } });
+      const resp = await apiGet(srv, "/api/summary", { headers: { Origin: evil } });
       expect(resp.status, `Origin ${evil} must be blocked`).toBe(403);
       expect(resp.headers.get("access-control-allow-origin")).toBeNull();
 
@@ -958,7 +1004,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
       }
 
       // The preflight path is gated identically.
-      const preflight = await fetch(`${srv.url}/api/summary`, {
+      const preflight = await apiGet(srv, "/api/summary", {
         method: "OPTIONS",
         headers: { Origin: evil, "Access-Control-Request-Method": "GET" },
       });
@@ -977,7 +1023,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
       "localhost.attacker.example",
       "10.0.0.1:8080",
     ]) {
-      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Host: evilHost } });
+      const resp = await apiGet(srv, "/api/summary", { headers: { Host: evilHost } });
       expect(resp.status, `Host ${evilHost} must be blocked`).toBe(403);
       expect(resp.headers.get("access-control-allow-origin")).toBeNull();
 
@@ -988,14 +1034,14 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     }
 
     // Rebinding + a forged friendly Origin is still blocked (Host gate runs first).
-    const both = await fetch(`${srv.url}/api/summary`, {
+    const both = await apiGet(srv, "/api/summary", {
       headers: { Host: "attacker.example", Origin: `http://127.0.0.1:${srv.port}` },
     });
     expect(both.status).toBe(403);
     expect(both.headers.get("access-control-allow-origin")).toBeNull();
 
     // ...and so is a rebinding Host on the preflight path.
-    const preflight = await fetch(`${srv.url}/api/health`, {
+    const preflight = await apiGet(srv, "/api/health", {
       method: "OPTIONS",
       headers: { Host: "attacker.example" },
     });
@@ -1014,7 +1060,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     ];
 
     for (const { sent, echoed } of cases) {
-      const resp = await fetch(`${srv.url}/api/summary`, { headers: { Origin: sent } });
+      const resp = await apiGet(srv, "/api/summary", { headers: { Origin: sent } });
       expect(resp.status, `Origin ${sent} must be served`).toBe(200);
       expect(resp.headers.get("access-control-allow-origin")).toBe(echoed);
       expect(resp.headers.get("access-control-allow-origin")).not.toBe("*");
@@ -1026,7 +1072,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     }
 
     // Preflight from the file:// dashboard must still succeed and echo `null`.
-    const preflight = await fetch(`${srv.url}/api/health`, {
+    const preflight = await apiGet(srv, "/api/health", {
       method: "OPTIONS",
       headers: { Origin: "null", "Access-Control-Request-Method": "GET" },
     });
@@ -1038,7 +1084,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     const { srv } = await bootSecured("host-ok");
 
     for (const okHost of [`127.0.0.1:${srv.port}`, `localhost:${srv.port}`, `[::1]:${srv.port}`, "127.0.0.1"]) {
-      const resp = await fetch(`${srv.url}/api/health`, { headers: { Host: okHost } });
+      const resp = await apiGet(srv, "/api/health", { headers: { Host: okHost } });
       expect(resp.status, `Host ${okHost} must be served`).toBe(200);
       const body = (await resp.json()) as Record<string, any>;
       expect(body.status).toBe("ok");
@@ -1047,7 +1093,7 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     }
 
     // Plain curl-style request: no Origin header at all.
-    const plain = await fetch(`${srv.url}/api/summary`);
+    const plain = await apiGet(srv, "/api/summary");
     expect(plain.status).toBe(200);
     expect(plain.headers.get("access-control-allow-origin")).toBeNull();
     expect((await plain.json()) as Record<string, any>).toMatchObject({ status: "ok" });
@@ -1092,6 +1138,475 @@ describe("trade serve: network security guards (CORS allow-list + DNS rebinding)
     expect(statusOf(dashboard.out)).toBe(200);
     expect(dashboard.out.toLowerCase()).toContain("access-control-allow-origin: null");
   }, 30_000);
+});
+
+// ===========================================================================
+// 1c. Session credential (`0600` local-protocol handshake)
+//
+// The CORS + Host gates turned "any page on this machine" into "a local dashboard or a
+// loopback dev server". That still leaves one theoretical attacker: a hostile page can be
+// rendered inside a sandboxed iframe whose `Origin` is the opaque `null` — byte-identical to
+// the owner's own `file://` dashboard. No header rule can distinguish them, so the boundary
+// moves down to the filesystem: a 32-byte secret in a `0600` file. Every test here is
+// negative-first (no token / wrong token => 401 with zero ledger fields) plus the
+// anti-false-positive half (Bearer, ?token=, public health, legal preflight).
+// ===========================================================================
+
+describe("trade serve: local session credential gate (0600 token)", () => {
+  const FIXED_TOKEN = "0123456789abcdef".repeat(4); // 64 hex chars, explicit --token
+
+  /** Ledger fingerprints that must never appear in a refusal body. */
+  const LEDGER_FIELDS = [
+    "total_cost",
+    "total_market_value",
+    "full_position_cap",
+    "remaining_budget",
+    "realized_pnl",
+    "cost_basis_unit",
+    "remaining_quantity",
+    "portfolio",
+    "symbols",
+    "lots",
+    "accounts",
+    "518880.SH",
+    "159934.SZ",
+    "LOT-GOLD",
+    "LOT-NAS",
+  ];
+
+  function assertLedgerFree(body: string, label: string): void {
+    for (const field of LEDGER_FIELDS) {
+      expect(body.includes(field), `${label} must not leak ${field}`).toBe(false);
+    }
+  }
+
+  async function bootWithCredential(
+    tag: string,
+    options: { token?: string; tokenFile?: string } = {},
+  ) {
+    const dbPath = trackDir(tempDbPath(tag));
+    seedLedger(dbPath);
+    const tokenFile = options.tokenFile ?? join(dirname(dbPath), "session.token");
+    const srv = await startServe({
+      port: 0,
+      dbPath,
+      tokenFile,
+      token: options.token,
+      quoteProvider: new QuoteProvider({ "518880.SH": 6.6, "159934.SZ": 7.35 }),
+    });
+    openServers.push(srv);
+    return { srv, dbPath, tokenFile };
+  }
+
+  it("unit: token comparison is exact-match, token generation is high-entropy hex", () => {
+    expect(isTokenAuthorized("abc", "abc")).toBe(true);
+    expect(isTokenAuthorized("abc", " abc ")).toBe(true); // a trailing newline in the file is fine
+    expect(isTokenAuthorized("abc", "abcd")).toBe(false);
+    expect(isTokenAuthorized("abc", "ABC")).toBe(false);
+    expect(isTokenAuthorized("abc", "")).toBe(false);
+    expect(isTokenAuthorized("abc", null)).toBe(false);
+    expect(isTokenAuthorized("", "")).toBe(false);
+    expect(isTokenAuthorized(undefined, "abc")).toBe(false);
+
+    const a = generateSessionToken();
+    const b = generateSessionToken();
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(b).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+
+    expect(isSensitiveRoute("/api/summary")).toBe(true);
+    expect(isSensitiveRoute("/api/lots")).toBe(true);
+    expect(isSensitiveRoute("/api/health")).toBe(false);
+    expect(isSensitiveRoute("/")).toBe(false);
+    expect(isSensitiveRoute("/api")).toBe(false);
+    // Fail-closed: a ledger route nobody remembered to register is still protected.
+    expect(isSensitiveRoute("/api/nope")).toBe(true);
+    expect(isSensitiveRoute("/api/positions")).toBe(true);
+  });
+
+  it("unit: extractRequestToken reads Bearer and ?token=, ignores junk", () => {
+    const url = new URL("http://127.0.0.1:8080/api/summary");
+    const href = url.toString();
+
+    const bearer = new Request(href, { headers: { Authorization: "Bearer s3cret" } });
+    expect(extractRequestToken(bearer, url)).toBe("s3cret");
+
+    const lower = new Request(href, { headers: { Authorization: "bearer s3cret" } });
+    expect(extractRequestToken(lower, url)).toBe("s3cret");
+
+    const query = new URL("http://127.0.0.1:8080/api/summary?token=s3cret");
+    expect(extractRequestToken(new Request(query.toString()), query)).toBe("s3cret");
+
+    const none = new Request(href);
+    expect(extractRequestToken(none, url)).toBeNull();
+
+    const basic = new Request(href, { headers: { Authorization: "Basic Zm9vOmJhcg==" } });
+    expect(extractRequestToken(basic, url)).toBeNull();
+
+    const blank = new URL("http://127.0.0.1:8080/api/summary?token=%20");
+    expect(extractRequestToken(new Request(blank.toString()), blank)).toBeNull();
+  });
+
+  it("writes a 64-hex credential file with 0600 and nothing wider", async () => {
+    const { srv, tokenFile } = await bootWithCredential("cred-mode");
+
+    expect(existsSync(tokenFile)).toBe(true);
+    // The whole authentication story is this bitmask: rwx for the owner, nothing for anyone else.
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+
+    const stored = readFileSync(tokenFile, "utf8").trim();
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored).toBe(srv.token);
+    expect(srv.tokenSource).toBe("generated");
+    expect(srv.ephemeralToken).toBe(true);
+
+    // A credential re-write must never widen the mode (umask or an inherited 0644 file).
+    chmodSync(tokenFile, 0o644);
+    writeSessionTokenFile(tokenFile, srv.token);
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+    expect(readSessionTokenFile(tokenFile)).toBe(srv.token);
+  });
+
+  it("NEGATIVE: no credential => 401 before any query, and the refusal carries no ledger field", async () => {
+    const { srv, dbPath } = await bootWithCredential("cred-none");
+
+    for (const path of ["/api/summary", "/api/lots", "/api/lots?status=ACTIVE", "/api/lots?symbol=518880"]) {
+      const resp = await apiGet(srv, path, {}, null);
+      expect(resp.status, `${path} without token`).toBe(401);
+      expect(resp.headers.get("content-type")).toContain("application/json");
+
+      const body = await resp.text();
+      assertLedgerFree(body, `${path} 401 body`);
+      expect(body).not.toContain(dbPath);
+      const parsed = JSON.parse(body) as Record<string, any>;
+      expect(parsed.status).toBe("error");
+      expect(parsed.code).toBe("UNAUTHORIZED");
+      expect(parsed.message).toBe("未授权：请提供合法的本地会话 Token。");
+      expect(Object.keys(parsed).sort()).toEqual(["code", "message", "status"]);
+    }
+  });
+
+  it("NEGATIVE: the auth gate runs before the business logic (bad filter still answers 401, not 400)", async () => {
+    const { srv } = await bootWithCredential("cred-order");
+
+    // `status=EXPLODED` normally throws `非法批次状态` -> 400. Reaching that branch would
+    // mean the request was already parsed against the ledger; it must be 401 instead.
+    const resp = await apiGet(srv, "/api/lots?status=EXPLODED", {}, null);
+    expect(resp.status).toBe(401);
+    expect((await resp.json()) as Record<string, any>).toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("NEGATIVE: a wrong token of any shape is refused", async () => {
+    const { srv } = await bootWithCredential("cred-wrong");
+
+    const wrongTokens = [
+      "",
+      " ",
+      "0".repeat(64),
+      srv.token.slice(0, -1),
+      `${srv.token}0`,
+      srv.token.toUpperCase() === srv.token ? "deadbeef" : srv.token.toUpperCase(),
+      "../../etc/passwd",
+      "%00",
+    ];
+
+    for (const wrong of wrongTokens) {
+      const viaHeader = await apiGet(srv, "/api/summary", {}, wrong);
+      expect(viaHeader.status, `Bearer "${wrong}"`).toBe(401);
+
+      const viaQuery = await apiGet(
+        srv,
+        `/api/summary?token=${encodeURIComponent(wrong)}`,
+        {},
+        null,
+      );
+      expect(viaQuery.status, `?token="${wrong}"`).toBe(401);
+      assertLedgerFree(await viaQuery.text(), "wrong-token body");
+    }
+  });
+
+  it("NEGATIVE: Origin:null (sandboxed iframe) + no token is still 401 — the blind-fire hole is closed", async () => {
+    const { srv } = await bootWithCredential("cred-null-origin");
+
+    // `Origin: null` is deliberately allow-listed, because that is what the owner's own
+    // `file://` dashboard sends. The credential is the only thing separating the two.
+    for (const path of ["/api/summary", "/api/lots"]) {
+      const resp = await apiGet(srv, path, { headers: { Origin: "null" } }, null);
+      expect(resp.status).toBe(401);
+      // A readable refusal is required (the dashboard shows "unauthorized"), data is not.
+      expect(resp.headers.get("access-control-allow-origin")).toBe("null");
+      assertLedgerFree(await resp.text(), `Origin:null ${path} body`);
+    }
+
+    // Same attack from a real curl client: zero header games, no credential.
+    const curl = async (args: string[]) => {
+      const proc = Bun.spawn(["curl", "-sS", "--max-time", "8", "-i", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      return out;
+    };
+    const statusOf = (out: string): number => Number((out.split("\r\n")[0] || "").split(" ")[1]);
+
+    const sandboxed = await curl(["-H", "Origin: null", `${srv.url}/api/summary`]);
+    expect(statusOf(sandboxed)).toBe(401);
+    expect(sandboxed).toContain("UNAUTHORIZED");
+    assertLedgerFree(sandboxed, "sandboxed iframe body");
+  }, 30_000);
+
+  it("accepts the Bearer header and the ?token= channel with identical full payloads", async () => {
+    const { srv } = await bootWithCredential("cred-ok");
+
+    const viaHeader = await apiGet(srv, "/api/summary");
+    expect(viaHeader.status).toBe(200);
+    const headerText = await viaHeader.text();
+    const headerBody = JSON.parse(headerText) as Record<string, any>;
+    expect(headerBody.status).toBe("ok");
+    expect(headerBody.portfolio.total_active_lots).toBe(3);
+    expect(headerBody.symbols.length).toBe(2);
+    expect(everyNumberFinite(headerBody)).toBe(true);
+
+    const viaQuery = await apiGet(srv, `/api/summary?token=${srv.token}`, {}, null);
+    expect(viaQuery.status).toBe(200);
+
+    // Query channel must not be a weaker copy of the same data.
+    const queryBody = JSON.parse(await viaQuery.text()) as Record<string, any>;
+    expect(queryBody.portfolio.total_cost).toBe(headerBody.portfolio.total_cost);
+    expect(queryBody.portfolio.total_market_value).toBe(headerBody.portfolio.total_market_value);
+    expect(queryBody.symbols.length).toBe(headerBody.symbols.length);
+
+    const lotsByHeader = await apiGet(srv, "/api/lots?status=CLOSED");
+    expect(lotsByHeader.status).toBe(200);
+    const lotsBody = (await lotsByHeader.json()) as Record<string, any>;
+    expect(lotsBody.total).toBe(1);
+    expect(lotsBody.lots[0].lot_id).toBe("LOT-CLOSED");
+
+    const lotsByQuery = await apiGet(srv, `/api/lots?status=CLOSED&token=${srv.token}`, {}, null);
+    expect(lotsByQuery.status).toBe(200);
+    expect(((await lotsByQuery.json()) as Record<string, any>).total).toBe(1);
+
+    // A cookie-less curl with the Bearer header is a first-class client.
+    const proc = Bun.spawn(
+      ["curl", "-sS", "--max-time", "8", "-H", `Authorization: Bearer ${srv.token}`, `${srv.url}/api/lots`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const curlBody = (await new Response(proc.stdout).text()).trim();
+    expect(await proc.exited).toBe(0);
+    expect((JSON.parse(curlBody) as Record<string, any>).status).toBe("ok");
+  }, 30_000);
+
+  it("/api/health stays public, tokenless and ledger-free (anti-false-positive probe)", async () => {
+    const { srv } = await bootWithCredential("cred-health");
+
+    const resp = await apiGet(srv, "/api/health", {}, null);
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as Record<string, any>;
+    expect(body.status).toBe("ok");
+    expect(body.version).toBe(TOOL_VERSION);
+    expect(body.port).toBe(srv.port);
+
+    // A liveness probe must never become a side door into the ledger.
+    for (const forbidden of ["portfolio", "symbols", "accounts", "lots", "total_cost", "518880.SH"]) {
+      expect(Object.prototype.hasOwnProperty.call(body, forbidden)).toBe(false);
+    }
+    expect(JSON.stringify(body)).not.toContain("LOT-GOLD");
+
+    // The index advertises the auth scheme instead of pretending to be open.
+    const index = (await (await apiGet(srv, "/", {}, null)).json()) as Record<string, any>;
+    expect(index.auth).toBe("bearer");
+    expect(index.symbols).toBeUndefined();
+  });
+
+  it("OPTIONS preflight from a legal Origin allows the Authorization header without a token", async () => {
+    const { srv } = await bootWithCredential("cred-preflight");
+
+    const preflight = await apiGet(
+      srv,
+      "/api/summary",
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "null",
+          "Access-Control-Request-Method": "GET",
+          "Access-Control-Request-Headers": "authorization",
+        },
+      },
+      null,
+    );
+    // Browsers never attach credentials to a preflight: it must pass on the Origin alone.
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("null");
+    expect((preflight.headers.get("access-control-allow-headers") ?? "").toLowerCase()).toContain(
+      "authorization",
+    );
+  });
+
+  it("keeps an explicitly supplied token and never deletes the owner's credential file", async () => {
+    const { srv, tokenFile } = await bootWithCredential("cred-explicit", { token: FIXED_TOKEN });
+
+    expect(srv.token).toBe(FIXED_TOKEN);
+    expect(srv.tokenSource).toBe("explicit");
+    expect(srv.ephemeralToken).toBe(false);
+    expect(readSessionTokenFile(tokenFile)).toBe(FIXED_TOKEN);
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+
+    expect((await apiGet(srv, "/api/summary")).status).toBe(200);
+    expect((await apiGet(srv, "/api/summary", {}, null)).status).toBe(401);
+
+    await srv.stop();
+    openServers.pop();
+    // An owner-supplied credential is the owner's property: it survives the shutdown.
+    expect(existsSync(tokenFile)).toBe(true);
+    expect(readSessionTokenFile(tokenFile)).toBe(FIXED_TOKEN);
+    rmSync(tokenFile, { force: true });
+  });
+
+  it("rotates the token on restart, so a stale file value stops working", async () => {
+    const first = await bootWithCredential("cred-rotate-1");
+    const staleToken = first.srv.token;
+    const tokenFile = first.tokenFile;
+
+    await first.srv.stop();
+    openServers.pop();
+    // Auto-generated credentials die with the process they belong to.
+    expect(existsSync(tokenFile)).toBe(false);
+
+    const second = await startServe({
+      port: 0,
+      dbPath: first.dbPath,
+      tokenFile,
+      quoteProvider: new QuoteProvider({}),
+    });
+    openServers.push(second);
+
+    expect(second.token).not.toBe(staleToken);
+    expect(readSessionTokenFile(tokenFile)).toBe(second.token);
+    expect((await apiGet(second, "/api/summary", {}, staleToken)).status).toBe(401);
+    expect((await apiGet(second, "/api/summary")).status).toBe(200);
+  });
+
+  it("a failed boot (port already taken) never clobbers the running instance's credential", async () => {
+    const first = await bootWithCredential("cred-clobber");
+    const tokenFile = first.tokenFile;
+    const published = readSessionTokenFile(tokenFile);
+
+    let caught: any = null;
+    try {
+      const second = await startServe({
+        port: first.srv.port,
+        dbPath: first.dbPath,
+        tokenFile,
+        quoteProvider: new QuoteProvider({}),
+      });
+      openServers.push(second);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe("PORT_IN_USE");
+    // The losing process must not delete or overwrite the winner's credential.
+    expect(readSessionTokenFile(tokenFile)).toBe(published);
+    expect((await apiGet(first.srv, "/api/summary")).status).toBe(200);
+  });
+
+  it("fails closed when the credential file cannot be written", async () => {
+    const dbPath = trackDir(tempDbPath("cred-nowrite"));
+    seedLedger(dbPath);
+    // A directory where the file should be: open(2) fails, and `serve` must refuse to run
+    // unauthenticated rather than silently serve the ledger without a credential.
+    const tokenFile = join(dirname(dbPath), "blocked-token");
+    mkdirSync(tokenFile, { recursive: true });
+
+    let caught: any = null;
+    try {
+      const srv = await startServe({ port: 0, dbPath, tokenFile, quoteProvider: new QuoteProvider({}) });
+      openServers.push(srv);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(String(caught.message)).toContain("无法写入本地会话 Token 凭证文件");
+  });
+
+  it("exposes the credential flags in `trade serve --help`", async () => {
+    const proc = Bun.spawn([process.execPath, "run", cliPath, "serve", "--help"], {
+      cwd: repoRoot,
+      env: { ...process.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(stdout).toContain("--token");
+    expect(stdout).toContain("--token-file");
+    expect(stdout).toContain("UNAUTHORIZED");
+    expect(stdout).toContain("0600");
+  }, 40_000);
+
+  it("`trade dashboard` injects the live credential into the generated page", async () => {
+    const dbPath = trackDir(tempDbPath("cred-dash"));
+    seedLedger(dbPath);
+    const outPath = join(dbPath, "..", "cred-dashboard.html");
+    const binDir = join(dbPath, "..", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const shim = join(binDir, "trade");
+    writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} run ${JSON.stringify(cliPath)} "$@"\n`);
+    chmodSync(shim, 0o755);
+
+    const tokenFile = join(dbPath, "..", "active-session.token");
+    const injected = "b".repeat(64);
+    writeSessionTokenFile(tokenFile, injected);
+
+    const runDashboard = async (out: string, extraEnv: Record<string, string> = {}) => {
+      const proc = Bun.spawn(
+        [process.execPath, "run", cliPath, "dashboard", "--out", out, "--db", dbPath, "--json"],
+        {
+          cwd: repoRoot,
+          env: {
+            ...process.env,
+            LOT_TRADER_DB: dbPath,
+            TRADE_DB_PATH: dbPath,
+            LOT_TRADER_TOKEN_FILE: tokenFile,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+            ...extraEnv,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited, stderr).toBe(0);
+      expect(JSON.parse(stdout).code).toBe(0);
+      return readFileSync(out, "utf-8");
+    };
+
+    const withCredential = await runDashboard(outPath);
+    expect(withCredential).toContain(`window.__LOT_TRADER_SESSION_TOKEN__ = ${JSON.stringify(injected)};`);
+    expect(withCredential).toContain("window.__LOT_TRADER_SESSION_AUTH_CONFIGURED__ = true;");
+    expect(/\{\{[A-Z_]+\}\}/.test(withCredential)).toBe(false);
+    // The runtime that consumes it is present too.
+    expect(withCredential).toContain("function sessionToken()");
+    expect(withCredential).toContain("Authorization: 'Bearer '");
+
+    // No active credential (file removed): the page must still be generated, marked as
+    // unconfigured, and keep its standalone path intact.
+    rmSync(tokenFile, { force: true });
+    const noCredentialPath = join(dbPath, "..", "no-credential-dashboard.html");
+    const withoutCredential = await runDashboard(noCredentialPath);
+    expect(withoutCredential).toContain("window.__LOT_TRADER_SESSION_TOKEN__ = \"\";");
+    expect(withoutCredential).toContain("window.__LOT_TRADER_SESSION_AUTH_CONFIGURED__ = false;");
+    expect(withoutCredential).toContain("模式：轻量独立（纯前端自驱）");
+    expect(/\{\{[A-Z_]+\}\}/.test(withoutCredential)).toBe(false);
+  }, 90_000);
+
+  it("ships DEFAULT_TOKEN_FILE outside the repo and documents the 0600 contract", () => {
+    expect(DEFAULT_TOKEN_FILE.endsWith(join(".lot-trader", "session.token"))).toBe(true);
+    expect(DEFAULT_TOKEN_FILE.startsWith(repoRoot)).toBe(false);
+  });
 });
 
 // ===========================================================================
@@ -1167,13 +1682,14 @@ describe("trade serve: port conflict and lifecycle guards", () => {
     expect(formatPortConflictError("127.0.0.1", 8080)).toContain("127.0.0.1:8080");
   });
 
-  it("shuts down gracefully on SIGTERM via the CLI and frees the port", async () => {
+  it("shuts down gracefully on SIGTERM, frees the port and drops the generated credential", async () => {
     const dbPath = trackDir(tempDbPath("sigterm"));
     seedLedger(dbPath);
+    const tokenFile = join(dirname(dbPath), "sigterm-session.token");
 
     const proc = Bun.spawn([process.execPath, "run", cliPath, "serve", "--port", "0", "--db", dbPath, "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, LOT_TRADER_DB: dbPath },
+      env: { ...process.env, LOT_TRADER_DB: dbPath, LOT_TRADER_TOKEN_FILE: tokenFile },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1207,9 +1723,35 @@ describe("trade serve: port conflict and lifecycle guards", () => {
     expect(healthBody.status).toBe("ok");
     expect(healthBody.port).toBe(readyPort);
 
+    // --- credential published by the CLI ---
+    expect((ready as any).data.auth).toBe("bearer");
+    expect((ready as any).data.token_file).toBe(tokenFile);
+    expect((ready as any).data.token_source).toBe("generated");
+    expect((ready as any).data.token_ephemeral).toBe(true);
+
+    expect(existsSync(tokenFile)).toBe(true);
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+    const published = readFileSync(tokenFile, "utf8").trim();
+    expect(published).toMatch(/^[0-9a-f]{64}$/);
+    // The startup line reports where the credential lives, never the secret itself.
+    expect(JSON.stringify(ready)).not.toContain(published);
+
+    const denied = await fetch(`http://127.0.0.1:${readyPort}/api/summary`);
+    expect(denied.status).toBe(401);
+    const deniedBody = (await denied.json()) as Record<string, any>;
+    expect(deniedBody.code).toBe("UNAUTHORIZED");
+
+    const authed = await fetch(`http://127.0.0.1:${readyPort}/api/summary`, {
+      headers: { Authorization: `Bearer ${published}` },
+    });
+    expect(authed.status).toBe(200);
+
     proc.kill("SIGTERM");
     const exitCode = await proc.exited;
     expect(exitCode).toBe(0);
+
+    // An auto-generated credential must not outlive the process that published it.
+    expect(existsSync(tokenFile)).toBe(false);
 
     // Port must be released: nothing listens any more.
     let reachable = true;
@@ -1386,7 +1928,13 @@ describe("dashboard dual-mode contract", () => {
 
     const proc = Bun.spawn([process.execPath, "run", cliPath, "dashboard", "--out", outPath, "--db", dbPath, "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, LOT_TRADER_DB: dbPath, TRADE_DB_PATH: dbPath, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      env: {
+        ...process.env,
+        LOT_TRADER_DB: dbPath,
+        TRADE_DB_PATH: dbPath,
+        LOT_TRADER_TOKEN_FILE: join(dirname(dbPath), "dashboard-session.token"),
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1791,5 +2339,188 @@ describe("dashboard front-end: heartbeat upgrade and degradation", () => {
     expect(() => h.hooks.copyServeCommand()).not.toThrow();
     await Bun.sleep(10);
     expect(h.errors).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// 6. Front-end credential injection (dashboard <- 0600 token)
+//
+// The generated page must authenticate transparently when a credential was injected, and
+// degrade to a fully self-driving page (no NaN, no uncaught error) when the local engine
+// answers 401 because the token is missing or stale.
+// ===========================================================================
+
+describe("dashboard front-end: local session credential", () => {
+  let harness: Harness | null = null;
+
+  afterEach(() => {
+    if (harness) harness.stop();
+  });
+
+  const LIVE_QUOTE_BODY =
+    'v_sh518880="1~黄金ETF~518880~6.120~6.050~6.080~12345~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20251022150000~6.15~6.02~6.20~6.00~12345~0~0~0.27";';
+
+  it("unit: sessionToken / authHeaders / withSessionToken stay inert without a credential", () => {
+    const h = createHarness({ healthProbe: async () => ({ ok: false, status: 0 }) });
+    harness = h;
+    const LCR = h.sandbox.LiveClientRuntime;
+
+    expect(LCR.sessionToken()).toBe("");
+    expect(LCR.authHeaders()).toEqual({});
+    expect(LCR.authHeaders(null)).toEqual({});
+    expect(LCR.withSessionToken("http://127.0.0.1:8080/api/summary")).toBe(
+      "http://127.0.0.1:8080/api/summary",
+    );
+
+    h.sandbox.__LOT_TRADER_SESSION_TOKEN__ = "  deadbeef  ";
+    expect(LCR.sessionToken()).toBe("deadbeef");
+    expect(LCR.authHeaders()).toEqual({ Authorization: "Bearer deadbeef" });
+    expect(LCR.authHeaders("other")).toEqual({ Authorization: "Bearer other" });
+    expect(LCR.withSessionToken("http://127.0.0.1:8080/api/summary")).toBe(
+      "http://127.0.0.1:8080/api/summary?token=deadbeef",
+    );
+    expect(LCR.withSessionToken("http://127.0.0.1:8080/api/lots?status=ACTIVE")).toBe(
+      "http://127.0.0.1:8080/api/lots?status=ACTIVE&token=deadbeef",
+    );
+    // Idempotent: an already-tagged URL is never double-tagged.
+    expect(LCR.withSessionToken("http://127.0.0.1:8080/api/lots?token=x")).toBe(
+      "http://127.0.0.1:8080/api/lots?token=x",
+    );
+    expect(LCR.withSessionToken("", "deadbeef")).toBe("");
+
+    // Junk credentials must degrade to "unconfigured", never to a thrown error.
+    for (const junk of [null, undefined, {}, [], 0, true]) {
+      h.sandbox.__LOT_TRADER_SESSION_TOKEN__ = junk;
+      expect(LCR.sessionToken()).toBe("");
+      expect(LCR.authHeaders()).toEqual({});
+    }
+    expect(h.errors).toEqual([]);
+  });
+
+  it("attaches the credential as Bearer + ?token= when the engine speaks", async () => {
+    const h = createHarness({
+      healthProbe: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok", version: "0.1.0", port: 8080 }),
+      }),
+      summaryBody: {
+        status: "ok",
+        symbols: [{ symbol: "518880.SH", current_price: 6.66, price_source: "live" }],
+      },
+    });
+    harness = h;
+    h.sandbox.__LOT_TRADER_SESSION_TOKEN__ = "feedfacefeedface";
+
+    h.runTimers(3000);
+    await Bun.sleep(30);
+    h.runTimers(5000);
+    await Bun.sleep(30);
+
+    const summaryCall = h.fetchInits.find((call) => call.url.includes("/api/summary"));
+    expect(summaryCall).toBeDefined();
+    expect(summaryCall!.init.headers.Authorization).toBe("Bearer feedfacefeedface");
+    expect(summaryCall!.url).toContain("token=feedfacefeedface");
+
+    // The public heartbeat must NOT carry the credential (no preflight every 3s).
+    const healthCall = h.fetchInits.find((call) => call.url.includes("/api/health"));
+    expect(healthCall).toBeDefined();
+    expect(healthCall!.init.headers).toBeUndefined();
+
+    expect(h.element("mode-indicator").classList.contains("local")).toBe(true);
+    expect(h.element("mode-text").textContent).toBe("模式：本地引擎已联动");
+    expect(h.errors).toEqual([]);
+    expect(h.rejections).toEqual([]);
+  });
+
+  it("NEGATIVE: a 401 keeps the page self-driving with zero uncaught exceptions", async () => {
+    const h = createHarness({
+      healthProbe: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok", version: "0.1.0", port: 8080 }),
+      }),
+      summaryUnauthorized: true,
+      quoteBody: LIVE_QUOTE_BODY,
+    });
+    harness = h;
+
+    // Boot tick -> heartbeat upgrades to LOCAL -> /api/summary answers 401 -> demoted again.
+    h.runTimers(3000);
+    await Bun.sleep(30);
+    h.runTimers(5000);
+    await Bun.sleep(30);
+
+    const indicator = h.element("mode-indicator");
+    expect(indicator.classList.contains("standalone")).toBe(true);
+    expect(indicator.classList.contains("local")).toBe(false);
+    expect(h.element("mode-text").textContent).toBe("模式：轻量独立（纯前端自驱）");
+    expect(indicator.title).toContain("凭证校验未通过");
+
+    // The UI says what happened, in plain language, without blanking the status line.
+    const status = h.element("live-status").textContent;
+    expect(status).toContain("未授权/Token不匹配");
+    expect(status).toContain("轻量自驱");
+
+    // Quotes keep flowing from the public feed, and nothing paints NaN / "undefined".
+    const text = h.allText();
+    expect(text.includes("NaN")).toBe(false);
+    expect(text.includes("undefined")).toBe(false);
+    expect(h.fetchInits.some((call) => call.url.includes("qt.gtimg.cn"))).toBe(true);
+    expect(h.errors).toEqual([]);
+    expect(h.rejections).toEqual([]);
+
+    // No credential configured => the request went out bare, and was refused.
+    const summaryCall = h.fetchInits.find((call) => call.url.includes("/api/summary"));
+    expect(summaryCall).toBeDefined();
+    expect(summaryCall!.init.headers).toBeUndefined();
+    expect(summaryCall!.url).not.toContain("token=");
+  });
+
+  it("retries a rejected credential on a slow beat instead of latching the downgrade", async () => {
+    const h = createHarness({
+      healthProbe: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok", version: "0.1.0", port: 8080 }),
+      }),
+      summaryUnauthorized: true,
+      quoteBody: LIVE_QUOTE_BODY,
+    });
+    harness = h;
+
+    h.runTimers(3000);
+    await Bun.sleep(30);
+    h.runTimers(5000);
+    await Bun.sleep(30);
+    expect(h.element("mode-indicator").classList.contains("standalone")).toBe(true);
+    expect(h.element("live-status").textContent).toContain("未授权/Token不匹配");
+
+    // A fresh page with the right credential is the normal path; here we simulate the
+    // credential arriving after the fact and let the slow retry beat pick it up.
+    h.sandbox.__LOT_TRADER_SESSION_TOKEN__ = "cafebabecafebabe";
+
+    for (let beat = 0; beat < 21; beat += 1) {
+      h.runTimers(3000);
+      await Bun.sleep(5);
+    }
+    await Bun.sleep(40);
+
+    // Still unauthorized (the stub answers 401 for every summary call) but the retry must
+    // have carried the new credential instead of latching the old, tokenless verdict.
+    const credentialed = h.fetchInits.filter(
+      (call) =>
+        call.url.includes("/api/summary") &&
+        call.init &&
+        call.init.headers &&
+        call.init.headers.Authorization,
+    );
+    expect(credentialed.length).toBeGreaterThan(0);
+    expect(credentialed[credentialed.length - 1].init.headers.Authorization).toBe(
+      "Bearer cafebabecafebabe",
+    );
+    expect(h.errors).toEqual([]);
+    expect(h.rejections).toEqual([]);
+    expect(h.allText().includes("NaN")).toBe(false);
   });
 });
