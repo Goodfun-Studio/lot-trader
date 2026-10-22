@@ -195,7 +195,7 @@ trade serve --json                       # 结构化就绪行（含 token_file /
 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- |
 | `GET /api/health` | 公开 | 存活探针：`{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}`，不含任何账本字段 |
-| `GET /api/summary` | 需令牌 | 三层快照：`portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/summary` | 需令牌 | 三层快照：`portfolio`（总成本/市值/浮盈；`full_position_cap` 为**单标的**满仓参考额度 `full_position_cap_scope:"per_symbol"`，组合层不输出全局剩余预算，`remaining_budget`/`budget_utilization_rate` 恒为 `null`）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率，含 `cost_position_rate`/`current_position_rate` 单标的额度占用率） |
 | `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE` / `CLOSED` / `CLOSING` / `ALL`），含现价来源 `price_source` |
 
 **本地协议凭证门禁（第三道门，0600 Session Token）**：

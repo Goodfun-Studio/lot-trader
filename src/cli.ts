@@ -1509,20 +1509,36 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const db = new AppDatabase();
-  const engine = new TraderEngine(db.getConnection());
-
   const command = rawArgs[0];
   const restArgs = rawArgs.slice(1);
 
+  // The default ledger is opened LAZILY, and only by the subcommands that truly need it.
+  // Constructing `AppDatabase` eagerly here used to mkdir + create + WAL ~/.trade/trade.db
+  // before a single argument was inspected: `trade serve --db /other.db` still refreshed
+  // the default ledger's -shm, and a typo'd path silently created an empty database.
+  let db: AppDatabase | null = null;
+  let engine: TraderEngine | null = null;
+  const getEngine = (): TraderEngine => {
+    if (!engine) {
+      db = new AppDatabase();
+      engine = new TraderEngine(db.getConnection());
+    }
+    return engine;
+  };
+  const closeDb = (): void => {
+    db?.close();
+    db = null;
+    engine = null;
+  };
+
   // The dashboard primitive renders from the ledger directly; it needs no engine instance.
+  // It brings its own (explicit) `--db` handle, so it must never open the default ledger.
   if (command === "dashboard") {
     if (restArgs[0] === "-h" || restArgs[0] === "--help") {
       printDashboardHelp();
       process.exit(0);
     }
     await handleDashboard(restArgs);
-    db.close();
     return;
   }
 
@@ -1532,7 +1548,6 @@ async function main(): Promise<void> {
       printServeHelp();
       process.exit(0);
     }
-    db.close();
     await handleServe(restArgs);
     return;
   }
@@ -1545,35 +1560,37 @@ async function main(): Promise<void> {
     const subCmd = restArgs[0];
     const subArgs = restArgs.slice(1);
     if (subCmd === "buy") {
-      await handleLotBuy(engine, subArgs);
+      await handleLotBuy(getEngine(), subArgs);
     } else if (subCmd === "add") {
-      await handleLotAdd(engine, subArgs);
+      await handleLotAdd(getEngine(), subArgs);
     } else if (subCmd === "list") {
-      await handleLotList(engine, subArgs);
+      await handleLotList(getEngine(), subArgs);
     } else if (subCmd === "close") {
-      await handleLotClose(engine, subArgs);
+      await handleLotClose(getEngine(), subArgs);
     } else if (subCmd === "edit") {
-      await handleLotEdit(engine, subArgs);
+      await handleLotEdit(getEngine(), subArgs);
     } else {
       printLotHelp();
       process.exit(1);
     }
   } else if (command === "account") {
-    await handleAccount(engine, restArgs);
+    await handleAccount(getEngine(), restArgs);
   } else if (command === "position") {
-    await handlePosition(engine, restArgs);
+    await handlePosition(getEngine(), restArgs);
   } else if (command === "scan") {
-    await handleScan(engine, restArgs);
+    await handleScan(getEngine(), restArgs);
   } else if (command === "stats") {
-    await handleStats(engine, restArgs);
+    await handleStats(getEngine(), restArgs);
   } else if (command === "physics" || command === "radar") {
-    await handlePhysics(engine, restArgs);
+    await handlePhysics(getEngine(), restArgs);
   } else if (command === "dividend") {
-    await handleDividend(engine, restArgs);
+    await handleDividend(getEngine(), restArgs);
   } else {
     printHelp();
     process.exit(1);
   }
+
+  closeDb();
 }
 
 if (import.meta.main) {

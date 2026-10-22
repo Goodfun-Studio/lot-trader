@@ -229,7 +229,7 @@ trade serve --token <固定令牌> | --token-file <凭证文件>
 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- |
 | `GET /api/health` | 公开 | `{status:"ok", version, db_path, timestamp, host, port, uptime_seconds}`，无账本字段 |
-| `GET /api/summary` | 需令牌 | `portfolio`（总成本/市值/浮盈/满仓预算占用）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率） |
+| `GET /api/summary` | 需令牌 | `portfolio`（总成本/市值/浮盈；`full_position_cap` 为**单标的**满仓参考额度，`remaining_budget`/`budget_utilization_rate` 恒为 `null`，不做无意义的全局相减）、`accounts`（多账户汇总+战绩+分红）、`symbols`（逐标的现价/市值/浮盈/收益率 + `cost_position_rate`/`current_position_rate` 单标的额度占用率） |
 | `GET /api/lots?symbol=&account=&status=` | 需令牌 | 批次明细（`ACTIVE`/`CLOSED`/`CLOSING`/`ALL`），含 `price_source` |
 
 - **本地协议凭证门（0600 Session Token）**：令牌默认每次启动随机生成 32 字节（64 hex）并写入 `~/.lot-trader/session.token`（`chmod 0600`），退出即删；调用方用 `Authorization: Bearer <token>` 或 `?token=`；无/错令牌 → 401 `UNAUTHORIZED` 且无任何账本字段（鉴权在查库之前）。`Origin: null` 的沙箱 iframe 也因此彻底失效；

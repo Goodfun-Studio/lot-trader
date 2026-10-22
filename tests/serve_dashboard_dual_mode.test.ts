@@ -10,7 +10,19 @@
  *                                    raise an uncaught exception.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { Database } from "bun:sqlite";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
 import {
@@ -22,6 +34,7 @@ import {
   PriceBook,
   buildLotsPayload,
   buildSummaryPayload,
+  createRequestHandler,
   extractRequestToken,
   formatPortConflictError,
   generateSessionToken,
@@ -30,6 +43,7 @@ import {
   isSensitiveRoute,
   isTokenAuthorized,
   normalizeAccountKey,
+  readLedgerLots,
   readSessionTokenFile,
   resolveAllowedOrigin,
   resolveFullPositionCap,
@@ -105,6 +119,15 @@ function seedLedger(dbPath: string): void {
     `INSERT INTO trades (trade_id, account_id, lot_id, action, price, quantity, fee, realized_pnl, executed_at)
      VALUES ('TR-1', 'ACC2', 'LOT-CLOSED', 'SELL_REGULAR', 7.00, 300, 0.42, 149.37, '2025-01-20T09:30:00')`,
   );
+  db.close();
+}
+
+/**
+ * Materialize a schema-only ledger file (no lots). `trade serve` is read-only and refuses to
+ * create a missing database, so every negative/empty-book fixture must exist on disk first.
+ */
+function createEmptyLedger(dbPath: string): void {
+  const db = new AppDatabase(dbPath);
   db.close();
 }
 
@@ -709,6 +732,7 @@ describe("trade serve: local HTTP engine contract", () => {
 
   it("binds an OS-assigned ephemeral port and reports it back on the health payload", async () => {
     const dbPath = trackDir(tempDbPath("ephemeral"));
+    createEmptyLedger(dbPath);
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(srv);
 
@@ -742,10 +766,11 @@ describe("trade serve: local HTTP engine contract", () => {
     expect(body.portfolio.total_cost).toBeGreaterThan(0);
     expect(body.portfolio.total_market_value).toBeGreaterThan(body.portfolio.total_cost);
     expect(body.portfolio.total_floating_pnl).toBeGreaterThan(0);
-    expect(body.portfolio.remaining_budget).toBeCloseTo(
-      body.portfolio.full_position_cap - body.portfolio.total_market_value,
-      2,
-    );
+    // Layer 1 must not fabricate a portfolio-wide budget out of the Layer 2 per-symbol cap:
+    // the old `cap - total_market_value` produced a negative budget and a 2412% utilisation.
+    expect(body.portfolio.full_position_cap_scope).toBe("per_symbol");
+    expect(body.portfolio.remaining_budget).toBeNull();
+    expect(body.portfolio.budget_utilization_rate).toBeNull();
 
     // Layer 1b: multi-account roll-up
     const accountIds = body.accounts.map((a: any) => a.account_id).sort();
@@ -842,6 +867,7 @@ describe("trade serve: local HTTP engine contract", () => {
 
   it("answers 404/405/preflight without leaking a stack trace", async () => {
     const dbPath = trackDir(tempDbPath("http"));
+    createEmptyLedger(dbPath);
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(srv);
 
@@ -868,6 +894,7 @@ describe("trade serve: local HTTP engine contract", () => {
 
   it("serves an empty ledger without throwing", async () => {
     const dbPath = trackDir(tempDbPath("empty"));
+    createEmptyLedger(dbPath);
     const srv = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(srv);
 
@@ -1616,6 +1643,7 @@ describe("trade serve: local session credential gate (0600 token)", () => {
 describe("trade serve: port conflict and lifecycle guards", () => {
   it("throws a readable error (not a raw stack) when the port is already taken", async () => {
     const dbPath = trackDir(tempDbPath("conflict"));
+    createEmptyLedger(dbPath);
     const first = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(first);
 
@@ -1765,6 +1793,7 @@ describe("trade serve: port conflict and lifecycle guards", () => {
 
   it("CLI reports the port conflict as a friendly message and exits 1", async () => {
     const dbPath = trackDir(tempDbPath("cli-conflict"));
+    createEmptyLedger(dbPath);
     const holder = await startServe({ port: 0, dbPath, quoteProvider: new QuoteProvider({}) });
     openServers.push(holder);
 
@@ -1873,6 +1902,347 @@ describe("trade serve: payload builders and price cache", () => {
     expect(normalizeAccountKey(undefined)).toBe("DEFAULT");
     expect(normalizeAccountKey("  ")).toBe("DEFAULT");
     expect(normalizeAccountKey("ACC2")).toBe("ACC2");
+  });
+});
+
+// ===========================================================================
+// 3b. Runtime defect matrix
+//
+// Four live-test defects found by the owner, each guarded by a negative-first test:
+//   1. a typo'd `--db` silently created a database / the default ledger was touched anyway;
+//   2. `readLedgerLots` swallowed `SQLITE_BUSY` into `[]` (fake 200 + "empty book");
+//   3. Layer 1 subtracted the Layer 2 per-symbol cap from the whole portfolio (-117万 / 2412%);
+//   4. `?account=cmb` matched nothing and `?account=NOPE` answered 200 + empty list.
+// ===========================================================================
+
+describe("trade serve: runtime defect matrix (negative guards)", () => {
+  /** Ledger where the account id really is `CMB` (the exact shape the owner reported). */
+  function seedCmbLedger(dbPath: string): void {
+    createEmptyLedger(dbPath);
+    const db = new AppDatabase(dbPath);
+    db.getConnection().run(
+      `INSERT INTO lots (lot_id, account_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status)
+       VALUES ('LOT-CMB', 'CMB', '518880.SH', '2025-04-02T09:30:00', 6.10, 1000, 1000, 6.10, 'ACTIVE')`,
+    );
+    db.close();
+  }
+
+  /** A book worth far more than one symbol's 50k cap: the shape that produced -117万. */
+  function seedOverCapLedger(dbPath: string): void {
+    createEmptyLedger(dbPath);
+    const db = new AppDatabase(dbPath);
+    db.getConnection().run(
+      `INSERT INTO lots (lot_id, account_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status)
+       VALUES ('LOT-BIG', 'DEFAULT', '518880.SH', '2025-01-02T09:30:00', 6.10, 200000, 200000, 6.10, 'ACTIVE')`,
+    );
+    db.close();
+  }
+
+  /**
+   * Materialize a fixture in a CHILD process, optionally running one seed statement.
+   *
+   * Two reasons this must not happen in-process:
+   *   * `bun:sqlite` checkpoints a closed WAL lazily, so a live process can still rewrite the
+   *     `-wal`/`-shm` ~1s after `close()` — that would make the "untouchable" default ledger
+   *     move *after* we snapshot it (false positive);
+   *   * a lingering parent connection keeps a lock on the file, and a second process opening
+   *     it can fail with `database is locked`.
+   * A separate process flushes and releases everything on exit.
+   */
+  function createLedgerInSubprocess(dbPath: string, seedSql?: string): void {
+    const script = `import { AppDatabase } from "./src/db.ts";
+const db = new AppDatabase(process.argv[1]);
+const sql = process.argv[2];
+if (sql) db.getConnection().run(sql);
+db.close();`;
+    const proc = Bun.spawnSync([process.execPath, "-e", script, dbPath, seedSql ?? ""], {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) {
+      throw new Error(`fixture creation failed: ${proc.stderr.toString()}`);
+    }
+    if (!existsSync(dbPath)) throw new Error(`fixture was not created: ${dbPath}`);
+  }
+
+  /**
+   * Spawn `trade serve` and wait for its `--json` ready line.
+   *
+   * stdio goes to FILES rather than pipes, so the child never competes with the test runner for
+   * a pipe, and the raw output stays on disk: a failure reports the child's exit code plus the
+   * exact `{"code":1,...}` line it emitted instead of a bare timeout.
+   */
+  async function spawnServe(args: string[], env: Record<string, string>) {
+    const logDir = mkdtempSync(join(tmpdir(), "defect_spawn_"));
+    tempDirs.push(logDir);
+    const outPath = join(logDir, "stdout.log");
+    const errPath = join(logDir, "stderr.log");
+    const outFd = openSync(outPath, "a");
+    const errFd = openSync(errPath, "a");
+
+    const proc = Bun.spawn([process.execPath, "run", cliPath, "serve", ...args], {
+      cwd: repoRoot,
+      env: { ...process.env, ...env },
+      stdout: outFd,
+      stderr: errFd,
+      stdin: "ignore",
+    });
+    // The child owns the inherited descriptors now; the parent must drop its copies.
+    closeSync(outFd);
+    closeSync(errFd);
+
+    const readOut = (): string => (existsSync(outPath) ? readFileSync(outPath, "utf8") : "");
+    const readErr = (): string => (existsSync(errPath) ? readFileSync(errPath, "utf8") : "");
+
+    let ready: any = null;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !ready) {
+      for (const line of readOut().split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.code === 0 && parsed.data?.port) {
+            ready = parsed;
+            break;
+          }
+        } catch {
+          /* partial line */
+        }
+      }
+      if (ready || proc.exitCode !== null) break;
+      await Bun.sleep(50);
+    }
+    return { proc, ready, readOut, readErr };
+  }
+
+  it("defect 4 unit: account keys are case-insensitive and blank maps to the generic fallback", () => {
+    expect(normalizeAccountKey(null)).toBe("DEFAULT");
+    expect(normalizeAccountKey(undefined)).toBe("DEFAULT");
+    expect(normalizeAccountKey("  ")).toBe("DEFAULT");
+    expect(normalizeAccountKey("ACC2")).toBe("ACC2");
+    expect(normalizeAccountKey("cmb")).toBe("CMB");
+    expect(normalizeAccountKey("Cmb")).toBe("CMB");
+    expect(normalizeAccountKey(" CMB ")).toBe("CMB");
+  });
+
+  it("defect 1: a non-existent --db exits 1, prints a friendly refusal and creates NO file/WAL", async () => {
+    const dir = join(tmpdir(), `defect1_ghost_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    tempDirs.push(dir);
+    const ghost = join(dir, "ghost.db");
+
+    const { proc, ready, readOut, readErr } = await spawnServe(["--port", "0", "--db", ghost, "--json"], {
+      LOT_TRADER_TOKEN_FILE: join(dir, "session.token"),
+    });
+    const exitCode = await proc.exited;
+    const stdout = readOut();
+    const stderr = readErr();
+
+    expect(ready).toBeNull();
+    expect(exitCode).toBe(1);
+    const payload = JSON.parse(stdout.trim().split("\n").pop() as string);
+    expect(payload.code).toBe(1);
+    expect(payload.msg).toContain("数据库文件不存在");
+    expect(payload.msg).toContain("拒绝隐式建库");
+    // The whole point: no implicit create, no SQLite sidecar files, not even the directory.
+    expect(existsSync(ghost)).toBe(false);
+    expect(existsSync(`${ghost}-wal`)).toBe(false);
+    expect(existsSync(`${ghost}-shm`)).toBe(false);
+    expect(existsSync(dir)).toBe(false);
+    expect(`${stdout}${stderr}`).not.toContain("    at ");
+
+    // The in-process API must fail closed too (no CLI-only guard).
+    await expect(
+      startServe({ port: 0, dbPath: ghost, quoteProvider: new QuoteProvider({}) }),
+    ).rejects.toThrow(/数据库文件不存在/);
+    expect(existsSync(ghost)).toBe(false);
+  }, 40_000);
+
+  it("defect 1: `serve --db <other>` never opens or touches the default ~/.trade ledger", async () => {
+    const home = join(tmpdir(), `defect1_home_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    tempDirs.push(home);
+    mkdirSync(home, { recursive: true });
+
+    const defaultLedger = join(home, ".trade", "trade.db");
+    createLedgerInSubprocess(defaultLedger);
+    const artifacts = [defaultLedger, `${defaultLedger}-wal`, `${defaultLedger}-shm`];
+    const fingerprint = (): string[] =>
+      artifacts.map((p) => (existsSync(p) ? `${statSync(p).mtimeMs}|${statSync(p).size}` : "absent"));
+    const before = fingerprint();
+
+    const other = trackDir(tempDbPath("defect1_other"));
+    // Created in a subprocess: this process must hold NO handle on the ledger under test.
+    createLedgerInSubprocess(
+      other,
+      `INSERT INTO lots (lot_id, account_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status)
+       VALUES ('LOT-OTHER', 'DEFAULT', '518880.SH', '2025-01-02T09:30:00', 6.10, 1000, 1000, 6.10, 'ACTIVE')`,
+    );
+
+    const tokenFile = join(home, "session.token");
+    const { proc, ready, readOut, readErr } = await spawnServe(["--port", "0", "--db", other, "--json"], {
+      HOME: home,
+      LOT_TRADER_TOKEN_FILE: tokenFile,
+    });
+    try {
+      expect(
+        ready,
+        `trade serve did not start (exit=${proc.exitCode}) out=${readOut()} err=${readErr()}`,
+      ).not.toBeNull();
+      // The engine is genuinely alive and bound to the EXPLICIT ledger.
+      const port = Number((ready as any).data.port);
+      const health = await fetch(`http://127.0.0.1:${port}/api/health`);
+      expect(health.status).toBe(200);
+      expect(((await health.json()) as Record<string, any>).db_path).toBe(other);
+
+      // Read-only + isolated: the default ledger (and its shm/wal) is untouched.
+      expect(fingerprint()).toEqual(before);
+    } finally {
+      proc.kill("SIGTERM");
+      await proc.exited;
+    }
+
+    expect(fingerprint()).toEqual(before);
+  }, 40_000);
+
+  it("defect 2: a real database failure is a 500 DATABASE_ERROR, never a fake 200 empty book", async () => {
+    const dbPath = trackDir(tempDbPath("defect2"));
+    seedLedger(dbPath);
+
+    const lockedDb = {
+      query() {
+        throw new Error("SQLITE_BUSY: database is locked");
+      },
+    } as unknown as Database;
+    const handler = createRequestHandler(lockedDb, {
+      dbPath,
+      priceBook: new PriceBook(new QuoteProvider({})),
+      fullPositionCap: 50000,
+      startedAt: Date.now(),
+      sessionToken: "defect-token",
+      host: "127.0.0.1",
+      port: 8080,
+    });
+
+    for (const route of ["/api/summary", "/api/lots"]) {
+      const resp = await handler(
+        new Request(`http://127.0.0.1:8080${route}`, {
+          headers: { Host: "127.0.0.1:8080", Authorization: "Bearer defect-token" },
+        }),
+      );
+      expect(resp.status).toBe(500);
+      const body = (await resp.json()) as Record<string, any>;
+      expect(body.status).toBe("error");
+      expect(body.code).toBe("DATABASE_ERROR");
+      expect(body.message).toContain("数据库查询失败");
+      expect(body.message).toContain("SQLITE_BUSY");
+      // A refusal must never look like a legitimately empty portfolio.
+      expect(JSON.stringify(body)).not.toContain("total_cost");
+      expect(JSON.stringify(body)).not.toContain("total\": 0");
+    }
+  });
+
+  it("defect 2 anti-false-positive: a legacy ledger missing the newest columns still serves", () => {
+    const dbPath = trackDir(tempDbPath("defect2_legacy"));
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE lots (
+        lot_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, buy_time TEXT NOT NULL,
+        buy_price REAL NOT NULL, buy_quantity INTEGER NOT NULL, remaining_quantity INTEGER NOT NULL,
+        cost_basis_unit REAL NOT NULL, status TEXT NOT NULL
+      );
+    `);
+    legacy.run(
+      `INSERT INTO lots (lot_id, symbol, buy_time, buy_price, buy_quantity, remaining_quantity, cost_basis_unit, status)
+       VALUES ('L1', '518880.SH', '2025-01-02T09:30:00', 6.1, 1000, 1000, 6.1, 'ACTIVE')`,
+    );
+    legacy.close();
+
+    const db = new Database(dbPath);
+    const rows = readLedgerLots(db);
+    db.close();
+
+    expect(rows.length).toBe(1);
+    // Known-missing columns fall back per column; the row is NOT silently dropped.
+    expect(rows[0].account_id).toBe("DEFAULT");
+    expect(rows[0].peak_price).toBeNull();
+    expect(rows[0].realized_pnl).toBe(0);
+    expect(rows[0].trailing_stop_active).toBe(0);
+  });
+
+  it("defect 4: ?account=cmb / CMB / Cmb agree, and ?account=NOPE is a 400 (not an empty 200)", async () => {
+    const dbPath = trackDir(tempDbPath("defect4"));
+    seedCmbLedger(dbPath);
+    const srv = await startServe({
+      port: 0,
+      dbPath,
+      quoteProvider: new QuoteProvider({ "518880.SH": 6.6 }),
+    });
+    openServers.push(srv);
+
+    const bodies = await Promise.all(
+      ["cmb", "CMB", "Cmb"].map(async (value) => {
+        const resp = await apiGet(srv, `/api/lots?account=${value}`);
+        expect(resp.status).toBe(200);
+        return (await resp.json()) as Record<string, any>;
+      }),
+    );
+
+    expect(bodies[0].total).toBe(1);
+    expect(bodies[1].total).toBe(1);
+    expect(bodies[2].total).toBe(1);
+    expect(bodies[0].filters.account).toBe("CMB");
+    expect(bodies[1].filters.account).toBe("CMB");
+    expect(bodies[2].filters.account).toBe("CMB");
+    expect(bodies[0].lots[0].account_id).toBe("CMB");
+
+    // `ALL` stays a legal wildcard, never an account lookup.
+    const all = (await (await apiGet(srv, "/api/lots?account=ALL")).json()) as Record<string, any>;
+    expect(all.status).toBe("ok");
+    expect(all.total).toBe(1);
+    expect(all.filters.account).toBeNull();
+
+    // An unregistered account is a client error, not a silent empty list.
+    const nope = await apiGet(srv, "/api/lots?account=NOPE");
+    expect(nope.status).toBe(400);
+    const nopeBody = (await nope.json()) as Record<string, any>;
+    expect(nopeBody.status).toBe("error");
+    expect(nopeBody.message).toContain("非法账户代码");
+    expect(nopeBody.message).toContain("NOPE");
+    expect(nopeBody.message).toContain("未在系统中登记");
+    expect(JSON.stringify(nopeBody)).not.toContain("LOT-CMB");
+  });
+
+  it("defect 3: the portfolio never fabricates a budget; symbols keep a per-symbol utilisation", async () => {
+    const dbPath = trackDir(tempDbPath("defect3"));
+    seedOverCapLedger(dbPath);
+    const srv = await startServe({
+      port: 0,
+      dbPath,
+      fullPositionCap: 50000,
+      quoteProvider: new QuoteProvider({ "518880.SH": 6.6 }),
+    });
+    openServers.push(srv);
+
+    const body = (await (await apiGet(srv, "/api/summary")).json()) as Record<string, any>;
+    const p = body.portfolio;
+
+    // The exact shape that used to yield `remaining_budget = -1,170,601.42` and `24.412`.
+    expect(p.total_market_value).toBeGreaterThan(50000);
+    expect(p.full_position_cap).toBe(50000);
+    expect(p.full_position_cap_scope).toBe("per_symbol");
+    expect(p.remaining_budget).toBeNull();
+    expect(p.budget_utilization_rate).toBeNull();
+    // Nothing in the payload may carry a negative "budget" or >100% "utilisation" any more.
+    expect(JSON.stringify(p)).not.toContain("remaining_budget\": -");
+
+    // Layer 2 keeps the *meaningful* single-symbol utilisation.
+    expect(body.symbols.length).toBe(1);
+    const sym = body.symbols[0];
+    expect(sym.full_position_cap).toBe(50000);
+    expect(sym.current_position_rate).toBeCloseTo(sym.market_value / 50000, 4);
+    expect(sym.cost_position_rate).toBeCloseTo(sym.total_cost_basis / 50000, 4);
+    expect(sym.current_position_rate).toBeGreaterThan(0);
+    expect(sym.current_position_rate).toBeCloseTo(1320000 / 50000, 4);
   });
 });
 

@@ -126,6 +126,12 @@ export interface ApiSymbolSummary {
   floating_pnl: number;
   return_rate: number;
   active_lots: number;
+  /** Layer 2 budget for this single symbol (same value for every symbol). */
+  full_position_cap: number;
+  /** `total_cost_basis / full_position_cap` — cost-side utilisation of the symbol budget. */
+  cost_position_rate: number;
+  /** `market_value / full_position_cap` — live utilisation of the symbol budget. */
+  current_position_rate: number;
 }
 
 export interface ApiAccountSummary {
@@ -154,9 +160,20 @@ export interface ApiPortfolioSummary {
   total_market_value: number;
   total_floating_pnl: number;
   overall_return_rate: number;
+  /**
+   * Layer 2 reference: the **per-symbol** full-position budget. It is deliberately *not*
+   * a portfolio-wide wallet, so it must never be used for a global subtraction.
+   */
   full_position_cap: number;
-  remaining_budget: number;
-  budget_utilization_rate: number;
+  /** Explains what `full_position_cap` measures: always `"per_symbol"`. */
+  full_position_cap_scope: "per_symbol";
+  /**
+   * Always `null`. A portfolio-wide remaining budget requires a real total-capital config;
+   * the old `cap - portfolioMarketValue` was a unit-mismatched subtraction and is gone.
+   */
+  remaining_budget: number | null;
+  /** Always `null`. See `remaining_budget`: no portfolio-wide cap exists to divide by. */
+  budget_utilization_rate: number | null;
   total_active_lots: number;
   total_symbols_count: number;
   total_quantity: number;
@@ -508,9 +525,26 @@ function toFinite(value: unknown, fallback = 0): number {
   return Number.isFinite(num) ? num : fallback;
 }
 
+/**
+ * Canonical account key: trimmed, **upper-cased**, blank -> `DEFAULT`.
+ *
+ * Account ids are case-insensitive by contract: the ledger stores `CMB`, so `?account=cmb`,
+ * `?account=CMB` and `?account=Cmb` must all resolve to the same account. Normalizing on both
+ * the filter side and the row side is what makes that true (a one-sided `.toUpperCase()` would
+ * silently return zero rows).
+ */
 export function normalizeAccountKey(raw?: string | null): string {
-  const value = (raw ?? "").trim();
+  const value = (raw ?? "").trim().toUpperCase();
   return value || DEFAULT_ACCOUNT_ID;
+}
+
+/**
+ * True only for the *expected* legacy-ledger shapes: a schema object that does not exist yet.
+ * Everything else (`SQLITE_BUSY`, `SQLITE_LOCKED`, disk I/O, corruption) must stay loud.
+ */
+function isMissingSchemaError(err: unknown): boolean {
+  const message = String((err as { message?: string })?.message ?? err ?? "");
+  return /no such (table|column)/i.test(message);
 }
 
 function normalizeStatusFilter(raw?: string | null): string {
@@ -524,25 +558,115 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor((b.getTime() - a.getTime()) / 86_400_000);
 }
 
-/** Read the whole ledger once, joined with symbol metadata. */
+/** Columns every historical trader ledger is guaranteed to carry. */
+const REQUIRED_LOT_COLUMNS = [
+  "lot_id",
+  "symbol",
+  "buy_time",
+  "buy_price",
+  "buy_quantity",
+  "remaining_quantity",
+  "cost_basis_unit",
+  "status",
+] as const;
+
+/**
+ * Columns introduced by later migrations. A pre-migration ledger is tolerated by mapping the
+ * *documented* fallback for that exact column — never by pretending the whole table is empty.
+ */
+const OPTIONAL_LOT_COLUMN_FALLBACKS: Record<string, string> = {
+  account_id: `'${DEFAULT_ACCOUNT_ID}'`,
+  pyramid_level: "0",
+  is_day_trading: "0",
+  peak_price: "NULL",
+  trailing_stop_active: "0",
+  buy_reason: "NULL",
+  close_reason: "NULL",
+  close_time: "NULL",
+  close_avg_price: "NULL",
+  realized_pnl: "0",
+};
+
+/** Physical column names of a table. Unknown table => empty set (schema-level, not an error). */
+function tableColumns(db: Database, table: string): Set<string> {
+  const rows = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  return new Set(rows.map((row) => row.name));
+}
+
+/**
+ * Read the whole ledger once, joined with symbol metadata.
+ *
+ * Deliberately **not** wrapped in a blanket `try { ... } catch { return []; }`: that used to
+ * launder `SQLITE_BUSY` / `SQLITE_LOCKED` / I/O failures into "the owner holds nothing", a false
+ * 200 with an empty book. Legacy-schema compatibility is handled *explicitly* per column via
+ * `PRAGMA table_info`, so a genuine database failure propagates and becomes an HTTP 500.
+ */
 export function readLedgerLots(db: Database): LedgerLotRow[] {
+  const lotCols = tableColumns(db, "lots");
+  const missing = REQUIRED_LOT_COLUMNS.filter((col) => !lotCols.has(col));
+  if (missing.length > 0) {
+    throw new Error(
+      `数据库查询失败: lots 表缺少必需列 [${missing.join(", ")}]，该文件不是可用的 trade 账本。`,
+    );
+  }
+
+  const lotExpr = (col: string): string => {
+    if (lotCols.has(col)) return `l.${col}`;
+    const fallback = OPTIONAL_LOT_COLUMN_FALLBACKS[col];
+    if (fallback === undefined) {
+      throw new Error(`数据库查询失败: lots 表缺少列 ${col}。`);
+    }
+    return `${fallback} AS ${col}`;
+  };
+
+  const symbolCols = tableColumns(db, "symbols");
+  const hasSymbols = symbolCols.size > 0;
+  const symExpr = (col: string, alias: string): string =>
+    hasSymbols && symbolCols.has(col) ? `s.${col} AS ${alias}` : `NULL AS ${alias}`;
+
   const sql = `
-    SELECT l.lot_id, l.account_id, l.symbol,
-           s.name AS symbol_name, s.asset_class, s.settlement_mode,
-           l.buy_time, l.buy_price, l.buy_quantity, l.remaining_quantity,
-           l.cost_basis_unit, l.status, l.pyramid_level, l.is_day_trading,
-           l.peak_price, l.trailing_stop_active,
-           l.buy_reason, l.close_reason, l.close_time, l.close_avg_price, l.realized_pnl
+    SELECT ${lotExpr("lot_id")}, ${lotExpr("account_id")}, ${lotExpr("symbol")},
+           ${symExpr("name", "symbol_name")}, ${symExpr("asset_class", "asset_class")},
+           ${symExpr("settlement_mode", "settlement_mode")},
+           ${lotExpr("buy_time")}, ${lotExpr("buy_price")}, ${lotExpr("buy_quantity")},
+           ${lotExpr("remaining_quantity")},
+           ${lotExpr("cost_basis_unit")}, ${lotExpr("status")}, ${lotExpr("pyramid_level")},
+           ${lotExpr("is_day_trading")},
+           ${lotExpr("peak_price")}, ${lotExpr("trailing_stop_active")},
+           ${lotExpr("buy_reason")}, ${lotExpr("close_reason")}, ${lotExpr("close_time")},
+           ${lotExpr("close_avg_price")}, ${lotExpr("realized_pnl")}
     FROM lots l
-    LEFT JOIN symbols s ON l.symbol = s.symbol
+    ${hasSymbols ? "LEFT JOIN symbols s ON l.symbol = s.symbol" : ""}
     ORDER BY datetime(l.buy_time) DESC, l.lot_id ASC
   `;
-  try {
-    return db.query<LedgerLotRow, []>(sql).all();
-  } catch {
-    // A pre-migration ledger without the newest columns must still serve a payload.
-    return [];
+  return db.query<LedgerLotRow, []>(sql).all();
+}
+
+/**
+ * Every account id the ledger or the registry knows about, normalized to the canonical key.
+ * Used to reject `?account=NOPE` with a 400 instead of a misleading 200 + empty list.
+ * Only a missing table / column is tolerated; real database errors propagate.
+ */
+export function readKnownAccountKeys(db: Database): Set<string> {
+  const keys = new Set<string>();
+  const collect = (sql: string): void => {
+    try {
+      for (const row of db.query<{ account_id: string | null }, []>(sql).all()) {
+        const key = normalizeAccountKey(row.account_id);
+        if (key) keys.add(key);
+      }
+    } catch (err: unknown) {
+      if (!isMissingSchemaError(err)) throw err;
+      // Pre-registry / pre-ledger schema: this source simply contributes no accounts.
+    }
+  };
+
+  collect("SELECT account_id FROM accounts");
+  for (const table of ["lots", "trades", "dividends"]) {
+    collect(`SELECT DISTINCT account_id FROM ${table} WHERE account_id IS NOT NULL`);
   }
+  if (keys.size === 0) keys.add(DEFAULT_ACCOUNT_ID);
+  return keys;
 }
 
 /** Build the per-lot API shape from a raw row + a resolved price. */
@@ -628,7 +752,15 @@ export async function buildLotsPayload(
       symbolFilter = options.symbol.trim().toUpperCase();
     }
   }
-  const accountFilter = options.account && options.account.trim() ? options.account.trim() : null;
+  // Account filter: blank / `ALL` means "no filter"; anything else is case-insensitively
+  // normalized and validated against the registry + ledger before a single row is read.
+  const rawAccount = (options.account ?? "").trim();
+  const accountFilter =
+    !rawAccount || rawAccount.toUpperCase() === "ALL" ? null : rawAccount.toUpperCase();
+  if (accountFilter && !readKnownAccountKeys(db).has(accountFilter)) {
+    // A 200 with an empty list would be a lie: the account simply is not registered.
+    throw new Error(`非法账户代码: "${rawAccount}"。该账户未在系统中登记。`);
+  }
 
   const rows = readLedgerLots(db).filter((row) => {
     if (status !== "ALL" && String(row.status ?? "").toUpperCase() !== status) return false;
@@ -670,7 +802,9 @@ function readTradeStats(db: Database): Map<string, TradeStats> {
         "SELECT account_id, realized_pnl, action FROM trades WHERE action LIKE 'SELL%'",
       )
       .all();
-  } catch {
+  } catch (err: unknown) {
+    // Only a genuinely absent `trades` table degrades to "no closed trades".
+    if (!isMissingSchemaError(err)) throw err;
     rows = [];
   }
   for (const row of rows) {
@@ -698,8 +832,10 @@ function readDividends(db: Database): Map<string, number> {
       const key = normalizeAccountKey(row.account_id);
       map.set(key, round((map.get(key) ?? 0) + toFinite(row.amount), 2));
     }
-  } catch {
+  } catch (err: unknown) {
     // No dividends table (pre-migration ledger): zero dividends is the honest answer.
+    // A real query failure, however, must not be dressed up as "no dividends".
+    if (!isMissingSchemaError(err)) throw err;
   }
   return map;
 }
@@ -721,7 +857,9 @@ export async function buildSummaryPayload(
   let accounts: Array<{ account_id: string; name: string; broker_code: string; currency: string; is_active: boolean }> = [];
   try {
     accounts = accountsRepo.listAccounts(true);
-  } catch {
+  } catch (err: unknown) {
+    // Pre-account-registry ledger: no registry rows to enrich with.
+    if (!isMissingSchemaError(err)) throw err;
     accounts = [];
   }
 
@@ -732,6 +870,8 @@ export async function buildSummaryPayload(
   });
 
   // --- per-symbol aggregation -------------------------------------------------
+  // Layer 2 is the only layer where `full_position_cap` is meaningful: it is the
+  // *per-symbol* budget, so "how full is this symbol" is a well-defined question here.
   const symbolMap = new Map<string, ApiSymbolSummary>();
   for (const lot of lotViewsAll) {
     const existing = symbolMap.get(lot.symbol);
@@ -751,6 +891,9 @@ export async function buildSummaryPayload(
         floating_pnl: lot.floating_pnl,
         return_rate: 0,
         active_lots: 1,
+        full_position_cap: cap,
+        cost_position_rate: 0,
+        current_position_rate: 0,
       });
     } else {
       if (!existing.accounts.includes(lot.account_id)) existing.accounts.push(lot.account_id);
@@ -773,6 +916,9 @@ export async function buildSummaryPayload(
   let portfolioQty = 0;
   for (const item of symbolMap.values()) {
     item.return_rate = item.total_cost_basis > 0 ? round(item.floating_pnl / item.total_cost_basis, 4) : 0;
+    // Single-symbol utilisation against the single-symbol cap (Layer 2 semantics).
+    item.cost_position_rate = cap > 0 ? round(item.total_cost_basis / cap, 4) : 0;
+    item.current_position_rate = cap > 0 ? round(item.market_value / cap, 4) : 0;
     portfolioCost = round(portfolioCost + item.total_cost_basis, 2);
     portfolioMkt = round(portfolioMkt + item.market_value, 2);
     portfolioPnl = round(portfolioPnl + item.floating_pnl, 2);
@@ -786,10 +932,11 @@ export async function buildSummaryPayload(
   for (const lot of lotViewsAll) accountIds.add(lot.account_id);
   for (const id of tradeStats.keys()) accountIds.add(id);
   for (const id of dividendMap.keys()) accountIds.add(id);
-  for (const acc of accounts) accountIds.add(acc.account_id);
+  // Registry ids are normalized too, so a lower-case legacy row can never fork a second summary.
+  for (const acc of accounts) accountIds.add(normalizeAccountKey(acc.account_id));
   if (accountIds.size === 0) accountIds.add(DEFAULT_ACCOUNT_ID);
 
-  const registered = new Map(accounts.map((a) => [a.account_id, a]));
+  const registered = new Map(accounts.map((a) => [normalizeAccountKey(a.account_id), a]));
   const accountSummaries: ApiAccountSummary[] = [];
   for (const accountId of Array.from(accountIds).sort()) {
     const ownLots = lotViewsAll.filter((lot) => lot.account_id === accountId);
@@ -851,9 +998,15 @@ export async function buildSummaryPayload(
       total_market_value: portfolioMkt,
       total_floating_pnl: portfolioPnl,
       overall_return_rate: portfolioCost > 0 ? round(portfolioPnl / portfolioCost, 4) : 0,
+      // Layer 1 must NOT pretend to own a wallet. `full_position_cap` is the Layer 2
+      // (per-symbol) budget; subtracting the whole portfolio's market value from one
+      // symbol's budget produced absurd numbers (-1,170,601.42 remaining budget and a
+      // 2412% utilisation). A portfolio-wide budget needs a real total-capital config,
+      // which does not exist yet, so the honest answer is `null` + an explicit scope tag.
       full_position_cap: cap,
-      remaining_budget: round(cap - portfolioMkt, 2),
-      budget_utilization_rate: cap > 0 ? round(portfolioMkt / cap, 4) : 0,
+      full_position_cap_scope: "per_symbol" as const,
+      remaining_budget: null,
+      budget_utilization_rate: null,
       total_active_lots: activeRows.length,
       total_symbols_count: symbols.length,
       total_quantity: portfolioQty,
@@ -1162,9 +1315,20 @@ export function createRequestHandler(
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      const path = new URL(req.url).pathname;
+      // A real database failure (SQLITE_BUSY / SQLITE_LOCKED / I/O) is a 500 with an
+      // explicit `DATABASE_ERROR` code — never a 200 carrying a fabricated empty book.
+      if (
+        /SQLITE_|database is locked|database table is locked|disk I\/O error|not a database|malformed|数据库查询失败/i.test(
+          message,
+        )
+      ) {
+        const detail = message.startsWith("数据库查询失败") ? message : `数据库查询失败: ${message}`;
+        return jsonResponse({ status: "error", code: "DATABASE_ERROR", message: detail, path }, 500, origin);
+      }
       // Read-only service: a bad filter is a client error, everything else is ours.
-      const status = /非法批次状态|非法端口/.test(message) ? 400 : 500;
-      return jsonResponse({ status: "error", message, path: new URL(req.url).pathname }, status, origin);
+      const status = /非法批次状态|非法端口|非法账户/.test(message) ? 400 : 500;
+      return jsonResponse({ status: "error", message, path }, status, origin);
     }
   };
 }
@@ -1177,6 +1341,16 @@ export async function startServe(options: ServeOptions = {}): Promise<StartedSer
   const host = resolveServeHost(options.host);
   const port = resolveServePort(options.port);
   const dbPath = resolveServeDbPath(options.dbPath);
+
+  // --- Read-only service: never materialize a ledger ------------------------------
+  // `AppDatabase` used to mkdir + create + WAL an empty SQLite file when the path was a typo,
+  // then serve a green "status: ok" with an all-zero portfolio. A read-only engine must refuse:
+  // no file, no `-wal`, no `-shm`, exit code 1 with a friendly message.
+  if (dbPath !== ":memory:" && !existsSync(dbPath)) {
+    throw new Error(
+      `数据库文件不存在: ${dbPath}。trade serve 为只读服务，拒绝隐式建库。`,
+    );
+  }
 
   // --- Credential lifecycle: generate (or accept) -> persist 0600 -> drop on shutdown ---
   // The file is written only *after* the listener is bound: a failed boot (port in use)
