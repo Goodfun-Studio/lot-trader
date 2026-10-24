@@ -1,0 +1,530 @@
+# tp-5a3bfad8 · L2 运行目录历史披露（只追加，不覆盖）
+# 生成时间：2026-10-23 14:43:06 +0800  · 生成者：persona-lot-trader-qa（L2 line-qa-e2e-flow）
+#
+# 规则声明（自本条起生效）：**今后不再删除任何运行证据目录**。
+#   作废的运行一律保留原目录，并在目录内写 ABANDONED.txt 说明作废原因、时间、以及它是否被后续运行取代。
+#   本条之前的删除行为已不可逆，全部逐条披露如下。
+#
+# 版本说明第 1 条（只追加更正）：本文件首次生成时，两处行内反引号被 shell 当成命令替换执行，导致
+#   「E2E-P-08 FAIL 的 signals Δ=2」与「证据链接渲染为 /docs/qa/...」两处文字被吞掉；随即用脚本重写为当前正确内容
+#   （重写发生在任何人读取之前，且未改变任何事实陈述）。自本行起恢复「只追加」。
+
+## 1. 已删除的运行目录（逐个披露）
+
+### tp-5a3bfad8-L2-20261023-130648-commit-20812431
+- 生成：2026-10-23 13:06:48 +0800 ｜ 删除：约 13:08（本线第 1 次试跑收尾）
+- 性质与删除原因：**过滤试跑**（QA_E2E_ONLY 只跑 stage0 的 8 条：E2E-P-01..P-05、E2E-N-01..N-03），用于验证执行器基础链路；不是全量实跑、不作为交付证据，故删除。
+- (ID, 结果)：仅 8 条子集，8/8 PASS；无全量 116 条结果。
+- 与最终结果是否一致：不可比（子集）。
+
+### tp-5a3bfad8-L2-20261023-130723-commit-20812431
+- 生成：2026-10-23 13:07:23 +0800 ｜ 删除：约 13:08
+- 性质与删除原因：**过滤试跑**（同上 8 条），修复「行数快照 SQL 拼接错误（Δ 恒为 0）」后复跑验证；非全量，故删除。
+- (ID, 结果)：8 条子集，8/8 PASS；无全量结果。
+- 与最终结果是否一致：不可比（子集）。
+
+### tp-5a3bfad8-L2-20261023-130738-commit-20812431
+- 生成：2026-10-23 13:07:38 +0800 ｜ 删除：约 13:08
+- 性质与删除原因：**过滤试跑**（6 条：E2E-P-01..P-05、E2E-N-06），验证「每用例预热建库」修复与隔离守卫自检；非全量，故删除。
+- (ID, 结果)：6 条子集全 PASS；无全量结果。
+- 与最终结果是否一致：不可比（子集）。
+
+### tp-5a3bfad8-L2-20261023-130746-commit-20812431
+- 生成：2026-10-23 13:07:46 +0800 ｜ 删除：约 13:08
+- 性质与删除原因：**过滤试跑**（1 条：E2E-N-06 单独跑），FAIL：报「指定的父批次不存在: undefined」——暴露「单独跑依赖前置链路的用例」这一用法问题；非全量，故删除。
+- (ID, 结果)：{E2E-N-06: FAIL}。
+- 与最终结果是否一致：**不一致**（该条在最终全量链路中为 PASS）；此 FAIL 是调用方式造成的，不是产品判定。
+
+### tp-5a3bfad8-L2-20261023-130753-commit-20812431
+- 生成：2026-10-23 13:07:53 +0800 ｜ 删除：约 13:08
+- 性质与删除原因：**过滤试跑**（19 条：全部 positive + E2E-N-06），用于验证 stage1 完整链路；E2E-P-08 FAIL（signals 增量 = 2，因 E2E-P-06 加仓价远离市价导致链路批次也越线）→ 据此把 P-06 加仓价改为贴近市价；非全量，故删除。
+- (ID, 结果)：19 条子集中 18 PASS / 1 FAIL（E2E-P-08）；无全量结果。
+- 与最终结果是否一致：**不一致**（E2E-P-08 在最终为 PASS；差异源于测试构造，非产品）。
+
+### tp-5a3bfad8-L2-20261023-130838-commit-20812431
+- 生成：2026-10-23 13:08:38 +0800 ｜ 删除：约 13:11（准备第 1 组全量实跑）
+- 性质与删除原因：**过滤试跑**（19 条，P-06 价改市价后复跑），stage1 全 PASS；非全量，故删除。
+- (ID, 结果)：19 条子集全 PASS；无全量结果。
+- 与最终结果是否一致：不可比（子集）。
+
+### tp-5a3bfad8-L2-20261023-130859-commit-20812431
+- 生成：2026-10-23 13:08:59 +0800 ｜ 删除：约 13:11
+- 性质与删除原因：**过滤试跑**（91 条：stage2 全部负向守卫），当时暴露 3 条**断言设计**缺陷（E2E-N-46 remaining 算错应为 60、E2E-N-66 用了不成立的「+12% 零信号」前提、E2E-N-76 文案正则过窄），并复现 D-01/D-02/D-07/D-09/D-04；缺 stage0/1，非全量，故删除。
+- (ID, 结果)：91 条子集：76 PASS / 8 FAIL / 7 BLOCKED（当时 E2E-N-46/N-66/N-76 为断言缺陷所致 FAIL，后已修正）。
+- 与最终结果是否一致：**不一致**（E2E-N-46、E2E-N-66、E2E-N-76 在最终为 PASS；E2E-N-98 当时不存在）。
+
+### tp-5a3bfad8-L2-20261023-131144-commit-20812431 与 …-131252-…
+- 生成：2026-10-23 13:11:44 / 13:12:52 ｜ 删除：约 13:14
+- 性质与删除原因：**第 1 组全量两次实跑**（各 116 条），两次 (ID,结果) 互相一致；随后发现 runner 回写 md 的证据链接渲染为 /docs/qa/… （相对仓库根的写法，点开不可用），需修 runner 重跑，故两个目录一并作废删除。
+- (ID, 结果)：116 条，两次均为 pass=101 / fail=5 / blocked=10 / legal_fail=0。
+- 与最终结果是否一致：**差异 2 条** —— E2E-N-85 当时 PASS（本轮改为 pair_na，不再计入 PASS）、E2E-N-98 当时 BLOCKED（本轮撤销口径后为 PASS）；其余 114 条完全一致。
+
+### tp-5a3bfad8-L2-20261023-131449-commit-20812431 与 …-131556-…
+- 生成：2026-10-23 13:14:49 / 13:15:56 ｜ 删除：约 13:18
+- 性质与删除原因：**第 2 组全量两次实跑**（各 116 条），两次 (ID,结果) 互相一致（已核对，diff 为空）；随后发现「浏览器 DOM / 截图 / 8080 占用记录写进 /tmp 沙箱，收工删沙箱后丢失」这一取证缺陷，需修 runner 重跑，故两个目录一并作废删除。
+- (ID, 结果)：116 条，两次均为 pass=101 / fail=5 / blocked=10 / legal_fail=0。
+- 与最终结果是否一致：**差异 2 条** —— E2E-N-85 PASS→pair_na、E2E-N-98 BLOCKED→PASS；其余 114 条完全一致（逐条 diff 见本文件 §3.3）。
+
+### tp-5a3bfad8-L2-20261023-131800-commit-20812431
+- 生成：2026-10-23 13:18:00 ｜ 删除：约 13:19
+- 性质与删除原因：**过滤试跑**（2 条：E2E-P-16/E2E-P-17），验证「浏览器产物归档进证据目录」生效；E2E-P-17 在孤立过滤下 FAIL（生命周期库无持仓，看板无标的可渲染），属过滤跑副作用；非全量，故删除。
+- (ID, 结果)：{E2E-P-16: PASS, E2E-P-17: FAIL}。
+- 与最终结果是否一致：**不一致**（E2E-P-17 在最终全量为 PASS）。
+
+## 2. 现存运行目录（未删除，含本轮新增）
+```
+  docs/qa/evidence/tp-5a3bfad8-L2-20261023-015759-commit-20812431
+  docs/qa/evidence/tp-5a3bfad8-L2-20261023-131811-commit-20812431
+  docs/qa/evidence/tp-5a3bfad8-L2-20261023-131915-commit-20812431
+  docs/qa/evidence/tp-5a3bfad8-L2-20261023-143904-commit-20812431
+  docs/qa/evidence/tp-5a3bfad8-L2-20261023-144014-commit-20812431
+```
+
+## 3. 附：已删除目录中保留下来可抄录的 (ID, 结果) 原始清单（来自 /tmp，抄录后 /tmp 副本即删除）
+
+### 3.1 tp-5a3bfad8-L2-20261023-131449-commit-20812431（116 条）
+```
+E2E-N-01	PASS
+E2E-N-02	PASS
+E2E-N-03	PASS
+E2E-N-04	BLOCKED
+E2E-N-05	BLOCKED
+E2E-N-06	PASS
+E2E-N-07	PASS
+E2E-N-08	PASS
+E2E-N-09	PASS
+E2E-N-10	PASS
+E2E-N-11	PASS
+E2E-N-12	PASS
+E2E-N-13	PASS
+E2E-N-14	PASS
+E2E-N-15	PASS
+E2E-N-16	PASS
+E2E-N-17	PASS
+E2E-N-18	PASS
+E2E-N-19	PASS
+E2E-N-20	PASS
+E2E-N-21	PASS
+E2E-N-22	PASS
+E2E-N-23	PASS
+E2E-N-24	PASS
+E2E-N-25	PASS
+E2E-N-26	PASS
+E2E-N-27	PASS
+E2E-N-28	PASS
+E2E-N-29	PASS
+E2E-N-30	PASS
+E2E-N-31	PASS
+E2E-N-32	PASS
+E2E-N-33	PASS
+E2E-N-34	PASS
+E2E-N-35	BLOCKED
+E2E-N-36	PASS
+E2E-N-37	PASS
+E2E-N-38	PASS
+E2E-N-39	PASS
+E2E-N-40	PASS
+E2E-N-41	FAIL
+E2E-N-42	PASS
+E2E-N-43	PASS
+E2E-N-44	PASS
+E2E-N-45	PASS
+E2E-N-46	PASS
+E2E-N-47	PASS
+E2E-N-48	PASS
+E2E-N-49	PASS
+E2E-N-50	PASS
+E2E-N-51	PASS
+E2E-N-52	PASS
+E2E-N-53	PASS
+E2E-N-54	PASS
+E2E-N-55	PASS
+E2E-N-56	PASS
+E2E-N-57	PASS
+E2E-N-58	PASS
+E2E-N-59	PASS
+E2E-N-60	PASS
+E2E-N-61	PASS
+E2E-N-62	PASS
+E2E-N-63	PASS
+E2E-N-64	PASS
+E2E-N-65	FAIL
+E2E-N-66	PASS
+E2E-N-67	PASS
+E2E-N-68	PASS
+E2E-N-69	BLOCKED
+E2E-N-70	PASS
+E2E-N-71	PASS
+E2E-N-72	PASS
+E2E-N-73	PASS
+E2E-N-74	PASS
+E2E-N-75	PASS
+E2E-N-76	PASS
+E2E-N-77	PASS
+E2E-N-78	PASS
+E2E-N-79	PASS
+E2E-N-80	PASS
+E2E-N-81	PASS
+E2E-N-82	PASS
+E2E-N-83	PASS
+E2E-N-84	PASS
+E2E-N-85	PASS
+E2E-N-86	PASS
+E2E-N-87	PASS
+E2E-N-88	FAIL
+E2E-N-89	PASS
+E2E-N-90	FAIL
+E2E-N-91	PASS
+E2E-N-92	BLOCKED
+E2E-N-93	FAIL
+E2E-N-94	BLOCKED
+E2E-N-95	BLOCKED
+E2E-N-96	BLOCKED
+E2E-N-97	BLOCKED
+E2E-N-98	BLOCKED
+E2E-P-01	PASS
+E2E-P-02	PASS
+E2E-P-03	PASS
+E2E-P-04	PASS
+E2E-P-05	PASS
+E2E-P-06	PASS
+E2E-P-07	PASS
+E2E-P-08	PASS
+E2E-P-09	PASS
+E2E-P-10	PASS
+E2E-P-11	PASS
+E2E-P-12	PASS
+E2E-P-13	PASS
+E2E-P-14	PASS
+E2E-P-15	PASS
+E2E-P-16	PASS
+E2E-P-17	PASS
+E2E-P-18	PASS
+```
+
+### 3.2 tp-5a3bfad8-L2-20261023-131556-commit-20812431（116 条，与 3.1 逐条一致）
+```
+E2E-N-01	PASS
+E2E-N-02	PASS
+E2E-N-03	PASS
+E2E-N-04	BLOCKED
+E2E-N-05	BLOCKED
+E2E-N-06	PASS
+E2E-N-07	PASS
+E2E-N-08	PASS
+E2E-N-09	PASS
+E2E-N-10	PASS
+E2E-N-11	PASS
+E2E-N-12	PASS
+E2E-N-13	PASS
+E2E-N-14	PASS
+E2E-N-15	PASS
+E2E-N-16	PASS
+E2E-N-17	PASS
+E2E-N-18	PASS
+E2E-N-19	PASS
+E2E-N-20	PASS
+E2E-N-21	PASS
+E2E-N-22	PASS
+E2E-N-23	PASS
+E2E-N-24	PASS
+E2E-N-25	PASS
+E2E-N-26	PASS
+E2E-N-27	PASS
+E2E-N-28	PASS
+E2E-N-29	PASS
+E2E-N-30	PASS
+E2E-N-31	PASS
+E2E-N-32	PASS
+E2E-N-33	PASS
+E2E-N-34	PASS
+E2E-N-35	BLOCKED
+E2E-N-36	PASS
+E2E-N-37	PASS
+E2E-N-38	PASS
+E2E-N-39	PASS
+E2E-N-40	PASS
+E2E-N-41	FAIL
+E2E-N-42	PASS
+E2E-N-43	PASS
+E2E-N-44	PASS
+E2E-N-45	PASS
+E2E-N-46	PASS
+E2E-N-47	PASS
+E2E-N-48	PASS
+E2E-N-49	PASS
+E2E-N-50	PASS
+E2E-N-51	PASS
+E2E-N-52	PASS
+E2E-N-53	PASS
+E2E-N-54	PASS
+E2E-N-55	PASS
+E2E-N-56	PASS
+E2E-N-57	PASS
+E2E-N-58	PASS
+E2E-N-59	PASS
+E2E-N-60	PASS
+E2E-N-61	PASS
+E2E-N-62	PASS
+E2E-N-63	PASS
+E2E-N-64	PASS
+E2E-N-65	FAIL
+E2E-N-66	PASS
+E2E-N-67	PASS
+E2E-N-68	PASS
+E2E-N-69	BLOCKED
+E2E-N-70	PASS
+E2E-N-71	PASS
+E2E-N-72	PASS
+E2E-N-73	PASS
+E2E-N-74	PASS
+E2E-N-75	PASS
+E2E-N-76	PASS
+E2E-N-77	PASS
+E2E-N-78	PASS
+E2E-N-79	PASS
+E2E-N-80	PASS
+E2E-N-81	PASS
+E2E-N-82	PASS
+E2E-N-83	PASS
+E2E-N-84	PASS
+E2E-N-85	PASS
+E2E-N-86	PASS
+E2E-N-87	PASS
+E2E-N-88	FAIL
+E2E-N-89	PASS
+E2E-N-90	FAIL
+E2E-N-91	PASS
+E2E-N-92	BLOCKED
+E2E-N-93	FAIL
+E2E-N-94	BLOCKED
+E2E-N-95	BLOCKED
+E2E-N-96	BLOCKED
+E2E-N-97	BLOCKED
+E2E-N-98	BLOCKED
+E2E-P-01	PASS
+E2E-P-02	PASS
+E2E-P-03	PASS
+E2E-P-04	PASS
+E2E-P-05	PASS
+E2E-P-06	PASS
+E2E-P-07	PASS
+E2E-P-08	PASS
+E2E-P-09	PASS
+E2E-P-10	PASS
+E2E-P-11	PASS
+E2E-P-12	PASS
+E2E-P-13	PASS
+E2E-P-14	PASS
+E2E-P-15	PASS
+E2E-P-16	PASS
+E2E-P-17	PASS
+E2E-P-18	PASS
+```
+
+### 3.3 上述两次与最终结果（tp-5a3bfad8-L2-20261023-144014-…）的逐条 diff
+```
+$ diff <131449 的 (ID,结果)> <最终 (ID,结果)>
+85c85
+< E2E-N-85	PASS
+---
+> E2E-N-85	pair_na
+98c98
+< E2E-N-98	BLOCKED
+---
+> E2E-N-98	PASS
+```
+
+### 3.4 本轮保留的两个上一轮目录与最终结果的逐条 diff
+```
+$ diff <tp-5a3bfad8-L2-20261023-131811-… 的 (ID,结果)> <最终 (ID,结果)>
+85c85
+< E2E-N-85	PASS
+---
+> E2E-N-85	pair_na
+98c98
+< E2E-N-98	BLOCKED
+---
+> E2E-N-98	PASS
+$ diff <tp-5a3bfad8-L2-20261023-131915-… 的 (ID,结果)> <最终 (ID,结果)>
+85c85
+< E2E-N-85	PASS
+---
+> E2E-N-85	pair_na
+98c98
+< E2E-N-98	BLOCKED
+---
+> E2E-N-98	PASS
+```
+
+## 4. 本线确认不属自己的 /tmp 残留（未删除，仅声明）
+- /tmp/l4-probe-ctrl-20261023-1437/、/tmp/l4-probe-shm-20261023-1437/、/tmp/l4_probe_dir.txt（L4 的探针，时间戳 14:37–14:39，本线未触碰）
+- /tmp/cp_probe.txt、gh_probe.json、kibana_probe.json、lot-trader-qa-final-1792653371/、patrol-probe.cjs、pipeline_billing_probe.sh、qa_browser_probe.py、uvhome-probe/、ver_probe.ts、ver_probe_bin（其他线/persona 的产物，本线未触碰）
+
+## 5. 第 3 轮追加披露（只追加）
+### tp-5a3bfad8-L2-20261023-143904-commit-20812431 与 …-144014-…
+- 生成：2026-10-23 14:39:04 / 14:40:14 ｜ 作废决定：同日 14:43（**保留目录，未删除**，目录内已写 ABANDONED.txt）
+- 性质：第 3 轮修复后的第 1 组全量两次实跑（各 116 条，pass=101 / fail=5 / blocked=9 / legal_fail=0，pair_na=1）。
+- 作废原因：收尾核对 isolation diff 时发现快照的 `~/.lot-trader/` 清单仍带 `..` 行（父目录 mtime 会被无关写入刷新），
+  造成与产品无关的噪声差异；修掉过滤器后重跑。**不是发现产品问题而作废。**
+- 与最终结果是否一致：**完全一致（116/116）**，逐条 diff 为空；差异只在 isolation 快照文本。
+- 保留证据：-144014 目录内含 `MUTATION-SELFTEST.txt`（第 3 轮五项变异自检的首次运行输出）。
+### 工具自检产物（非运行证据目录，已在 /tmp 清理时删除）
+- /tmp/l2-trial-fix/、/tmp/l2-mutation/、/tmp/l2runE.log、/tmp/l2runF.log、/tmp/final-*.txt：本线 `--out/--no-writeback` 与变异自检的临时产物，
+  按 /tmp 卫生要求删除；需要留证的内容已分别抄入本文件、`…-144518-…/MUTATION-SELFTEST.txt` 与第 3 轮回报。
+### 更正（只追加）：第 3 轮 ABANDONED 说明的落盘更正
+- 本线在写 ABANDONED 说明时，脚本变量曾把「最终有效的一对」与「被取代的一对」写反，
+  导致 ABANDONED.txt 一度落到 tp-5a3bfad8-L2-20261023-144410/-144518（**最终有效的那对**）里。
+- 已当场纠正：两个文件被移动到真正的被取代目录 tp-5a3bfad8-L2-20261023-143904/-144014；
+  最终目录 144410/144518 内不再有 ABANDONED.txt（它们未作废，不应有该文件）。
+- 当前状态：ABANDONED.txt 出现在 015759、131811、131915、143904、144014 五个目录；
+  有效运行目录为 144410（第 1 次）与 144518（第 2 次）。
+## 6. 第 3 轮最终有效的一对实跑（保留，未作废）
+- 第 1 次：docs/qa/evidence/tp-5a3bfad8-L2-20261023-144410-commit-20812431/（3168 文件 → 3195 文件含归档产物）
+- 第 2 次：docs/qa/evidence/tp-5a3bfad8-L2-20261023-144518-commit-20812431/
+- 两次 (ID, 结果) 逐条 diff：
+```
+(diff 输出为空：116 条逐条一致)
+```
+- 第 2 次的 (ID, 结果) 全集：
+```
+E2E-N-01	PASS
+E2E-N-02	PASS
+E2E-N-03	PASS
+E2E-N-04	BLOCKED
+E2E-N-05	BLOCKED
+E2E-N-06	PASS
+E2E-N-07	PASS
+E2E-N-08	PASS
+E2E-N-09	PASS
+E2E-N-10	PASS
+E2E-N-11	PASS
+E2E-N-12	PASS
+E2E-N-13	PASS
+E2E-N-14	PASS
+E2E-N-15	PASS
+E2E-N-16	PASS
+E2E-N-17	PASS
+E2E-N-18	PASS
+E2E-N-19	PASS
+E2E-N-20	PASS
+E2E-N-21	PASS
+E2E-N-22	PASS
+E2E-N-23	PASS
+E2E-N-24	PASS
+E2E-N-25	PASS
+E2E-N-26	PASS
+E2E-N-27	PASS
+E2E-N-28	PASS
+E2E-N-29	PASS
+E2E-N-30	PASS
+E2E-N-31	PASS
+E2E-N-32	PASS
+E2E-N-33	PASS
+E2E-N-34	PASS
+E2E-N-35	BLOCKED
+E2E-N-36	PASS
+E2E-N-37	PASS
+E2E-N-38	PASS
+E2E-N-39	PASS
+E2E-N-40	PASS
+E2E-N-41	FAIL
+E2E-N-42	PASS
+E2E-N-43	PASS
+E2E-N-44	PASS
+E2E-N-45	PASS
+E2E-N-46	PASS
+E2E-N-47	PASS
+E2E-N-48	PASS
+E2E-N-49	PASS
+E2E-N-50	PASS
+E2E-N-51	PASS
+E2E-N-52	PASS
+E2E-N-53	PASS
+E2E-N-54	PASS
+E2E-N-55	PASS
+E2E-N-56	PASS
+E2E-N-57	PASS
+E2E-N-58	PASS
+E2E-N-59	PASS
+E2E-N-60	PASS
+E2E-N-61	PASS
+E2E-N-62	PASS
+E2E-N-63	PASS
+E2E-N-64	PASS
+E2E-N-65	FAIL
+E2E-N-66	PASS
+E2E-N-67	PASS
+E2E-N-68	PASS
+E2E-N-69	BLOCKED
+E2E-N-70	PASS
+E2E-N-71	PASS
+E2E-N-72	PASS
+E2E-N-73	PASS
+E2E-N-74	PASS
+E2E-N-75	PASS
+E2E-N-76	PASS
+E2E-N-77	PASS
+E2E-N-78	PASS
+E2E-N-79	PASS
+E2E-N-80	PASS
+E2E-N-81	PASS
+E2E-N-82	PASS
+E2E-N-83	PASS
+E2E-N-84	PASS
+E2E-N-85	pair_na
+E2E-N-86	PASS
+E2E-N-87	PASS
+E2E-N-88	FAIL
+E2E-N-89	PASS
+E2E-N-90	FAIL
+E2E-N-91	PASS
+E2E-N-92	BLOCKED
+E2E-N-93	FAIL
+E2E-N-94	BLOCKED
+E2E-N-95	BLOCKED
+E2E-N-96	BLOCKED
+E2E-N-97	BLOCKED
+E2E-N-98	PASS
+E2E-P-01	PASS
+E2E-P-02	PASS
+E2E-P-03	PASS
+E2E-P-04	PASS
+E2E-P-05	PASS
+E2E-P-06	PASS
+E2E-P-07	PASS
+E2E-P-08	PASS
+E2E-P-09	PASS
+E2E-P-10	PASS
+E2E-P-11	PASS
+E2E-P-12	PASS
+E2E-P-13	PASS
+E2E-P-14	PASS
+E2E-P-15	PASS
+E2E-P-16	PASS
+E2E-P-17	PASS
+E2E-P-18	PASS
+```
+
+## 7. 第 4 轮（老板 2026-10-24 裁定 K-01~K-05）追加披露
+### 因本轮整改而作废、但**保留**的成对实跑（均已写 ABANDONED.txt）
+| 目录 | 用例数 | 结果 | 作废原因 | 与最终一致性 |
+|---|---|---|---|---|
+| tp-5a3bfad8-L2-20261024-162950 / -163055 | 116 | pass=103 fail=8 blocked=4 pair_na=1（两次一致） | 用例表回写时 E2E-N-69 的「预期」字段残留竖线，把该行 markdown 切成 9 列 → checker 解析错列（本线工具缺陷，非产品） | 结果集合一致；差异仅该行渲染 |
+| tp-5a3bfad8-L2-20261024-163329 / -163435 | 116 | pass=103 fail=8 blocked=4 pair_na=1（两次一致） | 缺 G-18 的 violation 侧用例（K-01 改判 legal 后 G-18 单侧）→ checker 报 unpaired=1；新增 E2E-N-99 后重跑 | 其余 116 条一致；本目录缺 E2E-N-99 |
+
+### 本轮工具缺陷的两处修复（自曝）
+1. 用例表单元格竖线：单元格文本里出现 `|` 会把 markdown 行切开（E2E-N-69 的「cost_basis_unit|buy_price」）。
+   修复：①文本改用全角「／」；②runner 渲染层加兜底 `cell()` 把任意 `|` 换成「／」；
+   ③checker 增加硬校验——用例行列数不等于 8 一律 `FATAL`（不再静默错列）。
+2. 过滤运行误回写：`renderCaseTables()` 会把未跑用例写成 `PENDING`。
+   修复：当 `selected().length !== CASES.length` 时自动跳过回写并打印说明（等价 --no-writeback）。
+
+### 本轮新增用例
+- `E2E-N-99`（stage2 / G-18 / violation）：「K-01 裁定的边界：组合内已有其他标的时 30% 组合窗口照常拦截」，
+  用于在 K-01 改判后保持 G-18 成对（空组合且无预算 → 放行 = legal；一旦组合内有其他标的 → 窗口越线照常拦截 = violation）。
+
+### 第 4 轮追加：上一轮（第 3 轮）验收快照也补写 ABANDONED.txt
+- tp-5a3bfad8-L2-20261023-144410 / -144518：第 3 轮验收时的成对实跑（116 条，pass=101 fail=5 blocked=9 pair_na=1），
+  被老板 2026-10-24 裁定取代（5 条改 kind/预期 + 新增 E2E-N-99，总数 117）。保留目录 + ABANDONED.txt，不删除。
+- 当前状态：本线共 13 个 L2 运行目录，11 个带 ABANDONED.txt；有效运行为 tp-5a3bfad8-L2-20261024-163658 与 -163805。
