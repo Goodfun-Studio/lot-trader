@@ -303,13 +303,13 @@ describe("Decision thesis: buy / add / close reason persistence", () => {
 
   it("persists add-lot (pyramid) reason and inherits the parent account", () => {
     const { db, engine } = createTestContext();
-    const later = new Date(Date.now() + 49 * 3600 * 1000);
+    const backfilled = new Date(Date.now() - 49 * 3600 * 1000);
 
     const parent = engine.buyLot("510300.SH", 3.5, 1000, undefined, undefined, undefined, true, "YUANHE_MAIN", "首批建仓");
     const child = engine.addLot(parent.lot_id, 3.3, {
       qty: 500,
       skipRiskCheck: true,
-      buyTime: later,
+      buyTime: backfilled,
       reason: "回撤 -5.7% 触及第一档阶梯，按纪律摊薄均价",
     });
 

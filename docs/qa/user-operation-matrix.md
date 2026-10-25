@@ -588,6 +588,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 证据：`ADD-TIME-FORGERY.stdout`、`ADD-FORGED-INVISIBLE.stdout`、`ADD-COOLDOWN-BLOCK.stderr`
 
+**修复状态（`line/tp-458199de-L1`）：已修复。** `src/engine.ts` 的 48h 冷却判定改用**真实时钟**（`checkLineageAntiShake(parentLotId, realNow)`），并且新增「成交时间不得晚于当前」守卫：`--time` 晚于当前时钟、或无法解析为有效时间戳，一律 exit≠0 且零写入（买/加/平三个入口同一条守卫）。原 `ADD-TIME-FORGERY` 复现命令现在 exit `1`、六表行数不变，文案为「成交时间不得晚于当前时间：加仓成交时间 传入 … 晚于当前 …，已拒绝写入账本」。合法回填（过去时间、窗口外）仍然放行。
+
 #### D-02（P2）`scan --help` 给出的阈值示例键与实现不一致，照抄即失效
 
 复现命令（取自 `SCAN-MENU-KEYS.cmd`）：
@@ -680,6 +682,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 证据：`RKO-OVER-30PCT.stderr`
 
+**修复状态（`line/tp-458199de-L1`）：已修复。** 拦截判定与零写入行为未变，只把文案里的占比精度从 2 位小数提高到 4 位小数（`30.0035%`），阈值仍写 `30.00%`，两者不再同值。同一复现命令现在 stderr 为「…估算持仓占比为 30.0035%，超过 30.00% 组合级硬顶红线 (标的总额 3000.50 / 组合总值 10000.50)！」，exit `1`、六表行数不变。
+
 #### D-07（P2）`scan --thresholds` 取值不做类型与键名校验，一个笔误即可静默关闭止盈提醒
 
 复现命令（取自 `SCAN-BAD-THRESHOLD.cmd`）：
@@ -736,6 +740,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 价格解析后没有任何有限性校验就进入落库路径，三种非法取值全部被接受：非数值写成 NaN、零价写成零、负价连规费一起写成负数。非数值批次还会污染派生视图——组合总览的成本与浮盈、批次列表的价格被序列化成空值。同一库上的报表与扫描因为不涉及该字段而没有变化。**第 1 轮把零价与负价误判为「已被拦截」**：那一轮它们与大量其他批次共用同一个库，被 30% 仓位硬顶挡下，退出码非零掩盖了价格校验的缺失；本轮把校验类用例放进独立库后才暴露出来。
 
 证据：`NAN-RAW-ROWS.txt`、`NAN-CONTAMINATION-AUDIT.txt`、`PRICE-GUARD-AUDIT-CORRECTION.txt`、`BUY-PRICE-NAN.stdout`
+
+**修复状态（`line/tp-458199de-L1`）：已修复。** `src/engine.ts` 新增 `assertLegalFillPrice()`，`lot buy` / `lot add` / `lot close` 三个写库入口在**任何落库动作之前**（早于账户自愈与 INSERT）断言价格为有限正数：NaN / ±Infinity / 0 / 负数一律 exit≠0 且零写入，文案含「非法成交价」。非数值批次的 `total_cost: null` / `buy_price: null` 污染路径随之消失；`lot add` 的价格断言还提前到 `amount / price` 换算之前，避免先算出 Infinity/NaN 股数。合法价格未被误杀（`2.0001`、`8.199`、`6.120` 均 exit 0 且 `--fee 0` 时 `cost_basis_unit` 等于成交价）。
 
 ### 14.2 非阻塞观测（输入校验一致性缺口，未升级为缺陷）
 

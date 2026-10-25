@@ -45,7 +45,7 @@ describe("Multi-Account & Core Substitution Isolation Tests", () => {
     const childLot1 = engine.addLot(parentLot.lot_id, 3.40, {
       qty: 500,
       skipRiskCheck: true,
-      buyTime: new Date(Date.now() + 49 * 3600 * 1000), // bypass 48h anti-shake
+      buyTime: new Date(Date.now() - 49 * 3600 * 1000), // real history outside the 48h anti-shake window (D-01: --time may never be in the future)
     });
     expect(childLot1.account_id).toBe("HUATAI");
     expect(childLot1.parent_lot_id).toBe(parentLot.lot_id);
@@ -55,7 +55,7 @@ describe("Multi-Account & Core Substitution Isolation Tests", () => {
       qty: 500,
       skipRiskCheck: true,
       accountId: "GALAXY",
-      buyTime: new Date(Date.now() + 100 * 3600 * 1000),
+      buyTime: new Date(Date.now() - 24 * 3600 * 1000),
     });
     expect(childLot2.account_id).toBe("GALAXY");
     expect(childLot2.parent_lot_id).toBe(parentLot.lot_id);
