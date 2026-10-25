@@ -1,0 +1,1 @@
+accounts=2 lots=4 signals=0 trades=4 dividends=0 symbols=18

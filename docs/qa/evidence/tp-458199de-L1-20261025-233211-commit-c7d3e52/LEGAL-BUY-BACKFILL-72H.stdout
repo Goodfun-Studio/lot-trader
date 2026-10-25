@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-25T15:32:11.959Z",
+  "data": {
+    "lot_id": "LOT-20261022-001",
+    "account_id": "ACCA",
+    "symbol": "510300.SH",
+    "buy_time": "2026-10-22T15:32:11.000Z",
+    "buy_price": 3.5,
+    "buy_quantity": 1000,
+    "cost_basis_unit": 3.5,
+    "buy_fee": 0,
+    "status": "ACTIVE",
+    "pyramid_level": 0,
+    "can_sell_now": false,
+    "buy_reason": null
+  }
+}

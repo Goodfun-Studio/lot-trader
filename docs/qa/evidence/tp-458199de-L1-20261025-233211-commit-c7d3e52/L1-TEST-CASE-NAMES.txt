@@ -1,0 +1,20 @@
+## tests/l1_engine_input_guards.test.ts — case names (describe > it)
+  118:describe("L1 D-09: ledger prices must be finite positive numbers", () => {
+  127:  it("engine: lot buy rejects every non-finite / non-positive price with zero ledger writes", () => {
+  140:  it("engine: lot add rejects every illegal price BEFORE deriving quantity from amount/price", () => {
+  157:  it("engine: lot close rejects every illegal price with zero ledger writes", () => {
+  175:  it("CLI NEGATIVE CONTROL: abc / 0 / -2.5 buys all exit non-zero and write nothing", async () => {
+  201:  it("CLI NEGATIVE CONTROL: illegal prices on lot add and lot close are refused with zero writes", async () => {
+  234:  it("CLI POSITIVE CONTROL: legal prices 2.0001 and 8.199 are never mis-killed (lots+1, trades+1, cost_basis_unit == price)", async () => {
+  259:  it("engine POSITIVE CONTROL: 2.0001 buy keeps cost_basis_unit === buy_price", () => {
+  278:describe("L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times", () => {
+  279:  it("engine: future fill time is refused on buy, add and close with zero writes", () => {
+  304:  it("engine: an unparseable --time is refused instead of inserting a NaN-stamped row", () => {
+  317:  it("engine: a forged future time can no longer bypass the cooldown on a blocked lineage", () => {
+  341:  it("engine POSITIVE CONTROL: history-backfilled pyramid add outside the window is allowed (parent -72h, first add -49h, next add on the real clock)", () => {
+  364:  it("CLI NEGATIVE CONTROL: --time in the future exits non-zero and writes nothing", async () => {
+  388:  it("CLI POSITIVE CONTROL: a -49h backfilled add is accepted and the row is inserted", async () => {
+  421:describe("L1 D-06: 30% hard-cap message prints a ratio distinguishable from the threshold", () => {
+  422:  it("engine: interception still fires, zero writes, and the printed ratio is not '30.00%'", () => {
+  446:  it("CLI: over-cap buy exits 1, mutates nothing, and the ratio is readable (30.0035% > 30.00%)", async () => {
+  473:  it("CLI POSITIVE CONTROL: a buy that stays under the cap is still accepted", async () => {

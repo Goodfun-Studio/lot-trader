@@ -1,0 +1,24 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/l1_engine_input_guards.test.ts:
+(pass) L1 D-09: ledger prices must be finite positive numbers > engine: lot buy rejects every non-finite / non-positive price with zero ledger writes [7.46ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > engine: lot add rejects every illegal price BEFORE deriving quantity from amount/price [1.60ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > engine: lot close rejects every illegal price with zero ledger writes [1.21ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > CLI NEGATIVE CONTROL: abc / 0 / -2.5 buys all exit non-zero and write nothing [299.72ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > CLI NEGATIVE CONTROL: illegal prices on lot add and lot close are refused with zero writes [156.02ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > CLI POSITIVE CONTROL: legal prices 2.0001 and 8.199 are never mis-killed (lots+1, trades+1, cost_basis_unit == price) [111.31ms]
+(pass) L1 D-09: ledger prices must be finite positive numbers > engine POSITIVE CONTROL: 2.0001 buy keeps cost_basis_unit === buy_price [0.66ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > engine: future fill time is refused on buy, add and close with zero writes [0.70ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > engine: an unparseable --time is refused instead of inserting a NaN-stamped row [0.48ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > engine: a forged future time can no longer bypass the cooldown on a blocked lineage [0.80ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > engine POSITIVE CONTROL: history-backfilled pyramid add outside the window is allowed (parent -72h, first add -49h, next add on the real clock) [0.50ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > CLI NEGATIVE CONTROL: --time in the future exits non-zero and writes nothing [109.77ms]
+(pass) L1 D-01: anti-shake cooldown runs on the real clock and refuses future fill times > CLI POSITIVE CONTROL: a -49h backfilled add is accepted and the row is inserted [110.62ms]
+(pass) L1 D-06: 30% hard-cap message prints a ratio distinguishable from the threshold > engine: interception still fires, zero writes, and the printed ratio is not '30.00%' [0.68ms]
+(pass) L1 D-06: 30% hard-cap message prints a ratio distinguishable from the threshold > CLI: over-cap buy exits 1, mutates nothing, and the ratio is readable (30.0035% > 30.00%) [51.40ms]
+(pass) L1 D-06: 30% hard-cap message prints a ratio distinguishable from the threshold > CLI POSITIVE CONTROL: a buy that stays under the cap is still accepted [54.08ms]
+
+ 16 pass
+ 0 fail
+ 109 expect() calls
+Ran 16 tests across 1 file. [946.00ms]

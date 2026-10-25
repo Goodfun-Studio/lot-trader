@@ -1,0 +1,1 @@
+cd /tmp/tp-458199de-L1 && HOME=/tmp/tp-458199de-L1/fakehome env -u LOT_TRADER_DB -u TRADE_DB_PATH bun run src/cli.ts lot buy --symbol 518880.SH --price 2.250 --qty 100 --account ACCA --skip-risk --time 2026-10-27T17:32:11Z --reason forged_future --fee 0 --json --db /tmp/tp-458199de-L1/db/evidence/guards.db

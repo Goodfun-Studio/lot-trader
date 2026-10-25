@@ -1,0 +1,1 @@
+cd /tmp/tp-458199de-L1 && HOME=/tmp/tp-458199de-L1/fakehome env -u LOT_TRADER_DB -u TRADE_DB_PATH bun run src/cli.ts lot buy --symbol 159915.SZ --price 3.0005 --qty 1000 --account ACCB --fee 0 --json --db /tmp/tp-458199de-L1/db/evidence/d06.db

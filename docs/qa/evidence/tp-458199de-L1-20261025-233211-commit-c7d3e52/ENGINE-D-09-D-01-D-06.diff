@@ -1,0 +1,153 @@
+diff --git a/src/engine.ts b/src/engine.ts
+index ae7840b..232fe70 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -11,6 +11,66 @@ import { QuoteProvider, normalizeSymbol, inferSymbolMetadata } from "./quotes.ts
+ import { PositionAggregator, PositionSummary, PositionHierarchicalView } from "./position.ts";
+ import { Account, AccountRepository, DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./accounts.ts";
+ 
++/**
++ * Ledger price guard (D-09).
++ *
++ * Every write path (lot buy / add / close) must carry a finite, strictly positive price.
++ * `parseFloat("abc")` yields NaN, and NaN / Infinity / 0 / negative numbers used to reach the
++ * INSERT untouched, poisoning the ledger with `buy_price = NULL`, `cost_basis_unit = NULL` and
++ * even negative fees. The check therefore runs before any write (and before the transaction), so
++ * a rejected call leaves the ledger byte-for-byte unchanged.
++ */
++export function assertLegalFillPrice(price: number, context: string): void {
++  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
++    throw new Error(
++      "非法成交价：" +
++        context +
++        " 必须为有限正数 (> 0，且非 NaN / Infinity)，当前输入: " +
++        String(price) +
++        "，已拒绝写入账本"
++    );
++  }
++}
++
++/**
++ * Fill-time guard (D-01).
++ *
++ * `--time` exists to backfill history, so a past timestamp is legitimate. A FUTURE timestamp is
++ * not: it used to be silently trusted as "now" for the 48h anti-shake window, which let a caller
++ * forge `--time` to walk straight through the cooldown guard on the same lineage. It is also
++ * refused because every derived stamp (lot_id date, trade_id, buy_time) would otherwise drift
++ * ahead of the real clock. `realNow` must always be the wall clock, never a supplied fill time.
++ */
++export function assertFillTimeNotInFuture(fillTime: Date | undefined, realNow: Date, context: string): void {
++  if (fillTime === undefined || fillTime === null) return;
++  const fillMs = fillTime.getTime();
++  if (Number.isNaN(fillMs)) {
++    throw new Error("非法成交时间：" + context + " 无法解析为有效时间戳，已拒绝写入账本");
++  }
++  if (fillMs > realNow.getTime()) {
++    throw new Error(
++      "成交时间不得晚于当前时间：" +
++        context +
++        " 传入 " +
++        fillTime.toISOString() +
++        " 晚于当前 " +
++        realNow.toISOString() +
++        "，已拒绝写入账本"
++    );
++  }
++}
++
++/**
++ * Hard-cap violation ratio formatter (D-06).
++ *
++ * The guard trips at `ratio > 30% + 1e-6`, i.e. the true ratio is always at least 30.0001%. At 2
++ * decimals the text rounded back to "30.00%" and read as self-contradictory ("30.00% 超过
++ * 30.00%"); 4 decimals keeps every tripping value distinguishable from the threshold.
++ */
++export function formatPositionCapRatio(ratio: number): string {
++  return (ratio * 100).toFixed(4) + "%";
++}
++
+ export interface LotListItem {
+   lot_id: string;
+   account_id: string;
+@@ -178,7 +238,7 @@ export class TraderEngine {
+       const ratio = newTargetSymbolValue / totalBase;
+       if (ratio > 0.3000 + 1e-6) {
+         throw new Error(
+-          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + (ratio * 100).toFixed(2) + "%，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalBase.toFixed(2) + ")！"
++          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + formatPositionCapRatio(ratio) + "，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalBase.toFixed(2) + ")！"
+         );
+       }
+     } else if (otherSymbolsValue > 0) {
+@@ -186,7 +246,7 @@ export class TraderEngine {
+       const ratio = newTargetSymbolValue / totalPortfolioValue;
+       if (ratio > 0.3000 + 1e-6) {
+         throw new Error(
+-          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + (ratio * 100).toFixed(2) + "%，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalPortfolioValue.toFixed(2) + ")！"
++          "单标的持仓硬顶风控拦截：买入后标的 " + stdSymbol + " 估算持仓占比为 " + formatPositionCapRatio(ratio) + "，超过 30.00% 组合级硬顶红线 (标的总额 " + newTargetSymbolValue.toFixed(2) + " / 组合总值 " + totalPortfolioValue.toFixed(2) + ")！"
+         );
+       }
+     }
+@@ -195,6 +255,9 @@ export class TraderEngine {
+   /**
+    * Lineage Guard: Anti-shake cooldown check for pyramid dip buys.
+    * If any lot in the same parent lineage was added within 48 hours (2 trading days), block rapid dip buying.
++   *
++   * D-01: `now` MUST be the real wall clock, never a supplied/backfilled fill timestamp. Passing
++   * the caller's `--time` here is exactly what made the window forgeable.
+    */
+   public checkLineageAntiShake(parentLotId: string, now: Date): void {
+     // Find the root lot id of this lineage
+@@ -250,9 +313,14 @@ export class TraderEngine {
+     buyReason?: string | null
+   ): Lot {
+     const [stdSymbol] = normalizeSymbol(symbolInput);
+-    const now = buyTime || new Date();
++    const realNow = new Date();
++    const now = buyTime || realNow;
+     const accId = normalizeAccountId(accountId);
+ 
++    // D-09 + D-01: both guards run before ANY ledger touch (no account self-heal, no INSERT).
++    assertLegalFillPrice(price, "买入成交价");
++    assertFillTimeNotInFuture(buyTime, realNow, "买入成交时间");
++
+     if (quantity <= 0) {
+       throw new Error("买入数量必须大于 0");
+     }
+@@ -280,8 +348,9 @@ export class TraderEngine {
+       }
+       pyramidLevel = pRow.pyramid_level + 1;
+ 
+-      // Anti-shake cooldown check
+-      this.checkLineageAntiShake(parentLotId, now);
++      // Anti-shake cooldown check. D-01: the window is measured against the REAL clock, so a
++      // backfilled (past) fill time can never shorten or skip the cooldown.
++      this.checkLineageAntiShake(parentLotId, realNow);
+     }
+ 
+     let symRow = this.conn.query<{
+@@ -417,6 +486,13 @@ export class TraderEngine {
+       throw new Error("指定的父批次不存在: " + parentLotId);
+     }
+ 
++    // D-09: guard BEFORE deriving quantity from `amount / price` — division by 0 or NaN would
++    // otherwise yield Infinity/NaN quantities and a misleading "100 的整数倍" error instead of
++    // naming the real problem (the illegal price).
++    assertLegalFillPrice(price, "加仓成交价");
++    // D-01: `lot add` is its own entry point, so the future-fill-time check is named for it too.
++    assertFillTimeNotInFuture(options?.buyTime, new Date(), "加仓成交时间");
++
+     const targetAccountId = options?.accountId && options.accountId.trim() ? options.accountId.trim() : (parentLot.account_id || DEFAULT_ACCOUNT_ID);
+ 
+     let quantity = options?.qty;
+@@ -663,6 +739,11 @@ export class TraderEngine {
+     closeTime?: Date,
+     closeReason?: string | null
+   ): [Lot, Trade] {
++    // D-09 + D-01: `lot close` is a ledger write path too; the same finite-positive-price and
++    // no-future-fill-time guards apply before delegating to the closer.
++    const realNow = new Date();
++    assertLegalFillPrice(closePrice, "平仓成交价");
++    assertFillTimeNotInFuture(closeTime, realNow, "平仓成交时间");
+     return this.closer.closeLot(lotId, closePrice, closeQuantity, substituteCore, fee, closeTime, closeReason);
+   }
+ 
