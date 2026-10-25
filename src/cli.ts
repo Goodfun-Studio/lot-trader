@@ -309,18 +309,52 @@ function wantsJsonOutput(args: string[]): boolean {
 }
 
 /**
- * K-04 (`stats --days`): accept a positive integer number of days only. `NaN`/negative/zero/
- * decimal/empty used to reach SQLite as `-NaN days`, matching no row and silently emptying the
- * report while exiting 0. Shared by the pre-dispatch gate and the handler so the two can't drift.
+ * `stats --days` (D-05 / K-04).
+ *
+ * Two layers, like every other numeric flag:
+ *   layer 1 — is this a legal numeric literal at all? (`parseNumericLiteral`, shared by ALL flags)
+ *             so `--days 1e3` behaves exactly like `--price 1e3`.
+ *   layer 2 — this flag's own rule: a positive whole number of days. `7.0` IS the whole number 7
+ *             and is therefore accepted (== `--days 7`); `1.5`, `-1`, `0` and `abc` are not.
+ * K-04 only ever required that `--days abc` must not succeed and empty the report; it never asked
+ * for `7.0` to be refused — that was an over-strict extra, and refusing it was a false rejection.
  */
 export function validateStatsDays(raw: unknown): { days?: number; error?: string } {
-  if (raw === undefined) return {};
-  const rawDays = String(raw).trim();
-  const parsedDays = Number(rawDays);
-  if (!/^[0-9]+$/.test(rawDays) || !Number.isSafeInteger(parsedDays) || parsedDays <= 0) {
-    return { error: `--days 必须是正整数天数，收到: ${rawDays}` };
+  const parsed = parseNumericLiteral(raw, "--days");
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  const days = parsed.value;
+  if (!Number.isSafeInteger(days) || days <= 0) {
+    return { error: `--days 必须是正整数天数，收到: ${String(raw).trim()}` };
   }
-  return { days: parsedDays };
+  return { days };
+}
+
+/**
+ * `dividend add --shares`: a positive whole share count. This is a holding snapshot rather than an
+ * order, so there is no board-lot (100-share) rule here — only the shared literal layer plus the
+ * whole-number layer. (`--shares 1,000` used to reach `parseInt` and silently record 1 share.)
+ */
+export function validateShares(raw: unknown): { shares?: number; error?: string } {
+  const parsed = parseNumericLiteral(raw, "--shares");
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  const shares = parsed.value;
+  if (!Number.isSafeInteger(shares) || shares <= 0) {
+    return { error: `--shares 必须为正整数股数（单位: 股），收到: ${String(raw).trim()}` };
+  }
+  return { shares };
+}
+
+/** `dividend add --per-share`: a non-negative money amount per share (`0,05` must not become 0). */
+export function validatePerShare(raw: unknown): { perShare?: number; error?: string } {
+  const parsed = parseNumericLiteral(raw, "--per-share");
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  if (parsed.value < 0) {
+    return { error: `--per-share 必须是 >= 0 的有限数值（单位: 元，可为 0），收到: ${String(raw).trim()}` };
+  }
+  return { perShare: parsed.value };
 }
 
 /**
@@ -533,6 +567,14 @@ export function findFlagValueError(commandPath: string, args: string[]): string 
       const amountError = validateAmount(readFlagValue(args, "amount")).error;
       if (amountError) return amountError;
     }
+  }
+  if (commandPath === "dividend add") {
+    const amountError = validateAmount(readFlagValue(args, "amount")).error;
+    if (amountError) return amountError;
+    const sharesError = validateShares(readFlagValue(args, "shares")).error;
+    if (sharesError) return sharesError;
+    const perShareError = validatePerShare(readFlagValue(args, "per-share")).error;
+    if (perShareError) return perShareError;
   }
   if (commandPath === "position") {
     const capError = validateCap(readFlagValue(args, "cap"), "--cap").error;
@@ -2159,14 +2201,23 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
       process.exit(1);
     }
 
+    // round-4: the money/share operands go through the same literal layer as every other numeric
+    // flag (`--amount 1,000` used to be recorded as 1 元, `--per-share 0,05` as 0).
+    const divAmountResult = validateAmount(values.amount);
+    if (divAmountResult.error) reportCliError(isJson, divAmountResult.error);
+    const divSharesResult = validateShares(values.shares);
+    if (divSharesResult.error) reportCliError(isJson, divSharesResult.error);
+    const divPerShareResult = validatePerShare(values["per-share"]);
+    if (divPerShareResult.error) reportCliError(isJson, divPerShareResult.error);
+
     try {
       const div = engine.addDividend({
         symbol: values.symbol as string,
-        amount: parseFloat(values.amount as string),
+        amount: divAmountResult.amount!,
         exDate: values.date as string | undefined,
         accountId: values.account as string | undefined,
-        sharesCount: values.shares ? parseInt(values.shares as string, 10) : undefined,
-        dividendPerShare: values["per-share"] ? parseFloat(values["per-share"] as string) : undefined,
+        sharesCount: divSharesResult.shares,
+        dividendPerShare: divPerShareResult.perShare,
         notes: values.notes as string | undefined,
       });
 

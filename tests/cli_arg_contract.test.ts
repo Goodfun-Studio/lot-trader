@@ -356,7 +356,9 @@ describe("D-05 `stats --days` rejects non-positive-integer values without touchi
     expect(baselineData.total_trades).toBe(1);
     const baselineRows = countRows(dbPath);
 
-    for (const bad of ["abc", "-5", "0", "1.5", "7.0", "", "1e3", "NaN", "0x10"]) {
+    // `7.0` and `1e3` are legal literals and are now ACCEPTED (== 7 and 1000); everything that is
+    // not a positive whole number of days stays rejected, so K-04's ruling is untouched.
+    for (const bad of ["abc", "-5", "0", "1.5", "-0.5", "", "NaN", "Infinity", "0x10", "8,199", "1_000", "2.5abc"]) {
       const res = await runCli(["stats", "--days", bad, "--json"], dbPath);
       expect(res.exitCode, `--days ${JSON.stringify(bad)} should be a usage error`).toBe(1);
       expect(res.stderr).toMatch(/--days/);
@@ -389,6 +391,8 @@ describe("D-05 `stats --days` rejects non-positive-integer values without touchi
     const unfiltered = statsData(await runCli(["stats", "--json"], dbPath));
     expect(unfiltered.total_trades).toBe(1);
 
+    // `7.0` and `1e3` were in the round-1 must-reject list; they are legal literals resolving to 7
+    // and 1000 days and are covered by the must-ACCEPT test below. (Kept as a note on purpose.)
     for (const days of ["7", "3650"]) {
       const res = await runCli(["stats", "--days", days, "--json"], dbPath);
       expect(res.exitCode, `${res.stderr}`).toBe(0);
@@ -640,25 +644,47 @@ describe("B4-1 every numeric flag shares one literal contract", () => {
     expect(res.exitCode, `lot close --qty 150 :: ${combined(res)}`).toBe(0);
     expect(JSON.parse(res.stdout).data.close_quantity).toBe(150);
   });
-  it("documents the ONE deliberate divergence: `--days` keeps D-05's digits-only grammar", async () => {
-    const root = tempRoot("b41-days");
+  it("LEGAL anti-false-positive: every legal numeric literal is accepted and lands on the SAME day count", async () => {
+    const root = tempRoot("days-legal");
     const dbPath = join(root, "ledger.db");
     await seedClosedTrade(dbPath);
 
-    // D-05/K-04 explicitly requires "非数值 / 负数 / 零 / 小数一律 exit≠0", so `--days 7.0` may NOT
-    // be normalised to 7 the way a money/price literal would be. Same for `--days 1e3` even though
-    // `--price 1e3` is legal. This divergence is spec-mandated, and pinned here so it stays visible.
-    const priceSci = await runCli(["lot", "buy", "--symbol", SYMBOL, "--price", "1e3", "--qty", "100", "--skip-risk", "--json"], dbPath);
-    expect(priceSci.exitCode, "--price 1e3 is a legal literal").toBe(0);
+    // One legal baseline first, so the report is fully materialised before any comparison (avoids
+    // the AppDatabase seeding of accounts/symbols looking like a difference).
+    const baselineRes = await runCli(["stats", "--json"], dbPath);
+    expect(baselineRes.exitCode, baselineRes.stderr).toBe(0);
+    const baselineData = statsData(baselineRes);
+    const baselineRows = countRows(dbPath);
+    expect(baselineData.total_trades).toBe(1);
 
-    for (const bad of ["1e3", "7.0", "7.5", "-5", "0"]) {
-      const res = await runCli(["stats", "--days", bad, "--json"], dbPath);
-      expect(res.exitCode, `--days ${bad} must stay rejected (D-05)`).toBe(1);
-      expect(combined(res)).toContain("--days");
+    // Same literal, same layer-1 verdict as `--price`: `1e3` and `7.0` are LEGAL literals and must be
+    // accepted; `7.0` IS the whole number 7, so it is the same day count as `--days 7`.
+    const sameResult: Array<[string, string]> = [
+      ["1e3", "1000"],
+      ["7.0", "7"],
+      ["3650", "3650"],
+    ];
+
+    // Same literal -> same layer-1 verdict on `--price` AND `--days` (the round-3/round-4 complaint).
+    // Uses its own ledger so the stats ledger above stays a pure read (asserted at the end).
+    const priceLedger = join(root, "price-consistency.db");
+    await seedLedger(priceLedger);
+    const priceSci = await runCli(["lot", "buy", "--symbol", SYMBOL, "--price", "1e3", "--qty", "100", "--skip-risk", "--json"], priceLedger);
+    expect(priceSci.exitCode, "--price 1e3 is a legal literal").toBe(0);
+    expect(readLatestLot(priceLedger).buy_price).toBe(1000);
+
+    for (const [literal, equivalent] of sameResult) {
+      const res = await runCli(["stats", "--days", literal, "--json"], dbPath);
+      expect(res.exitCode, `--days ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(statsData(res), `--days ${literal} report`).toEqual(baselineData);
+
+      const ref = await runCli(["stats", "--days", equivalent, "--json"], dbPath);
+      expect(ref.exitCode, ref.stderr).toBe(0);
+      // Not just the exit code: the report body must be identical to the equivalent spelling.
+      expect(statsData(res), `--days ${literal} == --days ${equivalent}`).toEqual(statsData(ref));
     }
 
-    const ok = await runCli(["stats", "--days", "7", "--json"], dbPath);
-    expect(ok.exitCode, ok.stderr).toBe(0);
+    expect(countRows(dbPath), "stats must not write").toEqual(baselineRows);
   });
 });
 
@@ -742,6 +768,62 @@ describe("B4-2 `--price` is guarded at the literal layer (D-09 closed)", () => {
     }
 
     expect(countRows(dbPath)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// round-4 audit — every remaining numeric flag joined the shared literal layer
+// ---------------------------------------------------------------------------
+
+describe("round-4 audit: `dividend add --amount` / `--shares` / `--per-share` share the literal layer", () => {
+  it("rejects illegal literals with zero writes, accepts legal ones with exact ledger values", async () => {
+    const root = tempRoot("r4-dividend");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    // `--amount 1,000` used to be recorded as 1 元 and `--per-share 0,05` as 0 元.
+    const illegal: Array<[string, string[]]> = [
+      ["--amount", ["--amount", "1,000"]],
+      ["--amount", ["--amount", "1_000"]],
+      ["--amount", ["--amount", "2.5abc"]],
+      ["--amount", ["--amount", "abc"]],
+      ["--amount", ["--amount", "0"]],
+      ["--shares", ["--amount", "1000", "--shares", "1,000"]],
+      ["--shares", ["--amount", "1000", "--shares", "1.5"]],
+      ["--shares", ["--amount", "1000", "--shares", "-100"]],
+      ["--shares", ["--amount", "1000", "--shares", "0"]],
+      ["--per-share", ["--amount", "1000", "--per-share", "0,05"]],
+      ["--per-share", ["--amount", "1000", "--per-share", "-1"]],
+      ["--per-share", ["--amount", "1000", "--per-share", "2.5abc"]],
+    ];
+
+    for (const [flag, extra] of illegal) {
+      const res = await runCli(["dividend", "add", "--symbol", SYMBOL, ...extra, "--json"], dbPath);
+      expect(res.exitCode, `dividend add ${extra.join(" ")} must be rejected :: ${combined(res)}`).toBe(1);
+      expect(combined(res), `dividend add ${extra.join(" ")} names ${flag}`).toContain(flag);
+      expect(countRows(dbPath), `dividend add ${extra.join(" ")} wrote rows`).toEqual(before);
+    }
+
+    // LEGAL + literal-layer equivalents: `1e3` == 1000 元, `1E2` == 100 shares, `0.05` per share.
+    const ok = await runCli(
+      ["dividend", "add", "--symbol", SYMBOL, "--amount", "1e3", "--date", "2026-01-01", "--shares", "1E2", "--per-share", "0.05", "--json"],
+      dbPath,
+    );
+    expect(ok.exitCode, `legal dividend add :: ${combined(ok)}`).toBe(0);
+    const data = JSON.parse(ok.stdout).data;
+    expect(data.amount).toBe(1000);
+    expect(data.shares_count).toBe(100);
+    expect(data.dividend_per_share).toBe(0.05);
+
+    const db = new Database(dbPath, { readonly: true });
+    const row = db
+      .query<{ amount: number; shares_count: number; dividend_per_share: number; ex_date: string }, []>(
+        "SELECT amount, shares_count, dividend_per_share, ex_date FROM dividends",
+      )
+      .get()!;
+    db.close();
+    expect(row).toEqual({ amount: 1000, shares_count: 100, dividend_per_share: 0.05, ex_date: "2026-01-01" });
   });
 });
 
