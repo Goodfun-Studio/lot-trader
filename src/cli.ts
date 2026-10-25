@@ -77,6 +77,294 @@ export function extractGlobalOption(args: string[], name: string): { value?: str
   return { value, rest };
 }
 
+// ==== DECLARED FLAG CONTRACT ==============================================================
+// Single source of truth for the flags every command path declares. Each entry is handed to
+// `parseArgs` verbatim (so the parser can never accept anything this table does not declare)
+// AND to `findUndeclaredFlag`, which rejects undeclared flags in `main()` BEFORE the ledger is
+// ever opened. `parseArgs({strict:false})` alone silently swallowed e.g. `dividend add
+// --ex-date 2026-01-01`, so the spelling mistake was dropped on the floor while the command
+// still exited 0.
+type CliFlagSpec =
+  | { type: "string"; short?: string; default?: string }
+  | { type: "boolean"; short?: string; default?: boolean };
+
+/**
+ * The `dashboard` subcommand block is intentionally absent: it belongs to the dashboard line and
+ * must not be modified here, so its arguments stay exactly as they were.
+ */
+export const CLI_FLAG_SPECS: Record<string, Record<string, CliFlagSpec>> = {
+  serve: {
+    port: { type: "string", short: "p" },
+    host: { type: "string" },
+    db: { type: "string" },
+    token: { type: "string" },
+    "token-file": { type: "string" },
+    json: { type: "boolean", default: false },
+    quiet: { type: "boolean", default: false },
+  },
+  "account list": {
+    all: { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+  },
+  "account add": {
+    id: { type: "string" },
+    name: { type: "string" },
+    broker: { type: "string" },
+    currency: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  "lot buy": {
+    symbol: { type: "string" },
+    price: { type: "string" },
+    qty: { type: "string" },
+    account: { type: "string" },
+    reason: { type: "string" },
+    fee: { type: "string" },
+    time: { type: "string" },
+    parent: { type: "string" },
+    "skip-risk": { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+  },
+  "lot add": {
+    "parent-lot-id": { type: "string" },
+    parent: { type: "string" },
+    price: { type: "string" },
+    amount: { type: "string" },
+    qty: { type: "string" },
+    account: { type: "string" },
+    reason: { type: "string" },
+    fee: { type: "string" },
+    time: { type: "string" },
+    "skip-risk": { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+  },
+  "lot list": {
+    status: { type: "string", default: "ACTIVE" },
+    symbol: { type: "string" },
+    account: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  "lot close": {
+    "lot-id": { type: "string" },
+    price: { type: "string" },
+    qty: { type: "string" },
+    account: { type: "string" },
+    reason: { type: "string" },
+    "substitute-core": { type: "boolean", default: false },
+    fee: { type: "string" },
+    time: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  "lot edit": {
+    "lot-id": { type: "string" },
+    reason: { type: "string" },
+    "buy-reason": { type: "string" },
+    "close-reason": { type: "string" },
+    append: { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+  },
+  position: {
+    symbol: { type: "string" },
+    cap: { type: "string" },
+    "full-position-cap": { type: "string" },
+    account: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  scan: {
+    thresholds: { type: "string" },
+    account: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  stats: {
+    days: { type: "string" },
+    symbol: { type: "string" },
+    account: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  physics: {
+    symbol: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  "dividend add": {
+    symbol: { type: "string" },
+    amount: { type: "string" },
+    date: { type: "string" },
+    account: { type: "string" },
+    shares: { type: "string" },
+    "per-share": { type: "string" },
+    notes: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  "dividend list": {
+    symbol: { type: "string" },
+    account: { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+};
+
+/** The threshold keys `SignalScanner` actually reads (see src/scanner.ts). */
+export const SIGNAL_THRESHOLD_KEYS = [
+  "take_profit_min",
+  "trailing_activate",
+  "trailing_pullback",
+  "dip_1",
+  "deep_value",
+] as const;
+
+/** `trade radar` is an alias of `trade physics`. */
+export function resolveCommandPath(argv: string[]): string | undefined {
+  const command = argv[0];
+  if (!command) return undefined;
+  const top = command === "radar" ? "physics" : command;
+  if (top === "lot" || top === "account" || top === "dividend") {
+    return argv[1] ? `${top} ${argv[1]}` : top;
+  }
+  return top;
+}
+
+/** Options object for `parseArgs`, taken from the one declared contract table. */
+export function flagsFor(commandPath: string): Record<string, CliFlagSpec> {
+  return CLI_FLAG_SPECS[commandPath] ?? {};
+}
+
+/**
+ * Return the first token that is not a declared flag for `commandPath`, or `null` when every
+ * `-`-prefixed token is declared. Positionals (and the value token of a declared string flag)
+ * are not flags and are left alone.
+ */
+export function findUndeclaredFlag(commandPath: string, args: string[]): string | null {
+  const spec = CLI_FLAG_SPECS[commandPath];
+  if (!spec) return null;
+
+  const longs = new Map<string, CliFlagSpec>();
+  const shorts = new Map<string, CliFlagSpec>();
+  for (const [name, def] of Object.entries(spec)) {
+    longs.set(name, def);
+    if (def.short) shorts.set(def.short, def);
+  }
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === "--") break; // everything after `--` is positional
+    if (token === "-" || !token.startsWith("-")) continue; // positional
+
+    if (token.startsWith("--")) {
+      const body = token.slice(2);
+      const eq = body.indexOf("=");
+      const name = eq === -1 ? body : body.slice(0, eq);
+      const def = longs.get(name);
+      if (!def) return token;
+      if (def.type === "string" && eq === -1) {
+        if (args[i + 1] !== undefined) i += 1; // consume the flag's value
+      }
+      continue;
+    }
+
+    // Short option, possibly clustered (`-p 8080`, `-p=8080`, `-p8080`).
+    let j = 1;
+    while (j < token.length) {
+      const def = shorts.get(token[j]);
+      if (!def) return token;
+      if (def.type === "string") {
+        if (j === token.length - 1 && args[i + 1] !== undefined) i += 1;
+        break;
+      }
+      j += 1;
+    }
+  }
+
+  return null;
+}
+
+/** Print a contract violation and exit non-zero without touching the ledger. */
+function reportCliError(isJson: boolean, message: string): never {
+  if (isJson) {
+    console.error(JSON.stringify({ code: 1, msg: message, data: null }));
+  } else {
+    console.error(`❌ 错误: ${message}`);
+  }
+  process.exit(1);
+}
+
+/** Read the raw value of `--name <value>` / `--name=<value>` exactly like `parseArgs` does. */
+export function readFlagValue(args: string[], name: string): string | boolean | undefined {
+  const long = `--${name}`;
+  const eqPrefix = `${long}=`;
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === "--") return undefined; // everything after `--` is positional
+    if (token === long) {
+      const next = args[i + 1];
+      // A string option swallows the next token verbatim; a valueless trailing flag becomes `true`.
+      return next === undefined ? true : next;
+    }
+    if (token.startsWith(eqPrefix)) return token.slice(eqPrefix.length);
+  }
+  return undefined;
+}
+
+/** True when `--json` (or `--json=true`) is present, so the error can be machine-readable. */
+function wantsJsonOutput(args: string[]): boolean {
+  return args.some((token) => token === "--json" || token === "--json=true");
+}
+
+/**
+ * K-04 (`stats --days`): accept a positive integer number of days only. `NaN`/negative/zero/
+ * decimal/empty used to reach SQLite as `-NaN days`, matching no row and silently emptying the
+ * report while exiting 0. Shared by the pre-dispatch gate and the handler so the two can't drift.
+ */
+export function validateStatsDays(raw: unknown): { days?: number; error?: string } {
+  if (raw === undefined) return {};
+  const rawDays = String(raw).trim();
+  const parsedDays = Number(rawDays);
+  if (!/^[0-9]+$/.test(rawDays) || !Number.isSafeInteger(parsedDays) || parsedDays <= 0) {
+    return { error: `--days 必须是正整数天数，收到: ${rawDays}` };
+  }
+  return { days: parsedDays };
+}
+
+/**
+ * K-05 (`scan --thresholds`): malformed JSON, a non-object payload, an unknown key or a
+ * non-finite value all used to be swallowed by the scanner — `'{"take_profit_min":"high"}'`
+ * silently disarmed the take-profit alert and still exited 0. Shared by the gate and the handler.
+ */
+export function validateScanThresholds(
+  raw: unknown,
+): { thresholds?: Record<string, number>; error?: string } {
+  const rawText = raw === undefined ? "" : String(raw).trim();
+  if (rawText === "") return {};
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return { error: `--thresholds 不是合法 JSON: ${rawText}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: `--thresholds 必须是 JSON 对象，例如 '{"take_profit_min":0.05}'` };
+  }
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!(SIGNAL_THRESHOLD_KEYS as readonly string[]).includes(key)) {
+      return { error: `--thresholds 含未知键 '${key}'；支持: ${SIGNAL_THRESHOLD_KEYS.join(", ")}` };
+    }
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return { error: `--thresholds['${key}'] 必须是有限数值，收到: ${JSON.stringify(value ?? null)}` };
+    }
+  }
+  return { thresholds: parsed as Record<string, number> };
+}
+
+/** Value-level contract violation for a command path, resolved before the ledger is opened. */
+export function findFlagValueError(commandPath: string, args: string[]): string | null {
+  if (commandPath === "stats") {
+    return validateStatsDays(readFlagValue(args, "days")).error ?? null;
+  }
+  if (commandPath === "scan") {
+    return validateScanThresholds(readFlagValue(args, "thresholds")).error ?? null;
+  }
+  return null;
+}
+
 function formatCurrency(val: number): string {
   return val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -149,15 +437,7 @@ notes:
 async function handleServe(args: string[], explicitDb?: string): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: {
-      port: { type: "string", short: "p" },
-      host: { type: "string" },
-      db: { type: "string" },
-      token: { type: "string" },
-      "token-file": { type: "string" },
-      json: { type: "boolean", default: false },
-      quiet: { type: "boolean", default: false },
-    },
+    options: flagsFor("serve"),
     strict: false,
   });
 
@@ -421,7 +701,14 @@ function printScanHelp(): void {
 Scan active lots for pyramid-add / trailing-stop signals.
 
 options:
-  --thresholds JSON   Override signal thresholds, e.g. '{"add":-0.1,"take":0.1}'
+  --thresholds JSON   Override signal thresholds. Keys are exactly the ones the scanner reads,
+                      all values finite numbers:
+                        take_profit_min    take-profit line (default 0.10  = +10%)
+                        trailing_activate  trailing-stop arming line (default 0.15)
+                        trailing_pullback  trailing-stop pullback line (default 0.03)
+                        dip_1              level-1 dip-buy line (default -0.10)
+                        deep_value         deep-value line (default -0.20)
+                      Example: '{"take_profit_min":0.05,"dip_1":-0.08}'
   --account ACC       Filter by broker account
   --json              Emit machine-readable JSON
   --db PATH           SQLite database path (global; default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
@@ -763,10 +1050,7 @@ async function handleAccount(engine: TraderEngine, args: string[]): Promise<void
   if (subAction === "list") {
     const { values } = parseArgs({
       args: restArgs,
-      options: {
-        all: { type: "boolean", default: false },
-        json: { type: "boolean", default: false },
-      },
+      options: flagsFor("account list"),
       strict: false,
     });
     const isJson = Boolean(values.json);
@@ -811,13 +1095,7 @@ async function handleAccount(engine: TraderEngine, args: string[]): Promise<void
   if (subAction === "add") {
     const { values, positionals } = parseArgs({
       args: restArgs,
-      options: {
-        id: { type: "string" },
-        name: { type: "string" },
-        broker: { type: "string" },
-        currency: { type: "string" },
-        json: { type: "boolean", default: false },
-      },
+      options: flagsFor("account add"),
       allowPositionals: true,
       strict: false,
     });
@@ -858,18 +1136,7 @@ async function handleAccount(engine: TraderEngine, args: string[]): Promise<void
 async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      symbol: { type: "string" },
-      price: { type: "string" },
-      qty: { type: "string" },
-      account: { type: "string" },
-      reason: { type: "string" },
-      fee: { type: "string" },
-      time: { type: "string" },
-      parent: { type: "string" },
-      "skip-risk": { type: "boolean", default: false },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("lot buy"),
     allowPositionals: true,
     strict: false,
   });
@@ -942,19 +1209,7 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
 async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      "parent-lot-id": { type: "string" },
-      parent: { type: "string" },
-      price: { type: "string" },
-      amount: { type: "string" },
-      qty: { type: "string" },
-      account: { type: "string" },
-      reason: { type: "string" },
-      fee: { type: "string" },
-      time: { type: "string" },
-      "skip-risk": { type: "boolean", default: false },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("lot add"),
     allowPositionals: true,
     strict: false,
   });
@@ -1032,12 +1287,7 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
 async function handleLotList(engine: TraderEngine, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: {
-      status: { type: "string", default: "ACTIVE" },
-      symbol: { type: "string" },
-      account: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("lot list"),
     strict: false,
   });
 
@@ -1115,17 +1365,7 @@ async function handleLotList(engine: TraderEngine, args: string[]): Promise<void
 async function handleLotClose(engine: TraderEngine, args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      "lot-id": { type: "string" },
-      price: { type: "string" },
-      qty: { type: "string" },
-      account: { type: "string" },
-      reason: { type: "string" },
-      "substitute-core": { type: "boolean", default: false },
-      fee: { type: "string" },
-      time: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("lot close"),
     allowPositionals: true,
     strict: false,
   });
@@ -1212,14 +1452,7 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
 async function handleLotEdit(engine: TraderEngine, args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      "lot-id": { type: "string" },
-      reason: { type: "string" },
-      "buy-reason": { type: "string" },
-      "close-reason": { type: "string" },
-      append: { type: "boolean", default: false },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("lot edit"),
     allowPositionals: true,
     strict: false,
   });
@@ -1283,23 +1516,21 @@ async function handleLotEdit(engine: TraderEngine, args: string[]): Promise<void
 async function handleScan(engine: TraderEngine, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: {
-      thresholds: { type: "string" },
-      account: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("scan"),
     strict: false,
   });
 
   const isJson = Boolean(values.json);
   const account = values.account ? (values.account as string).trim() : undefined;
 
-  try {
-    let thresholds: Record<string, number> | undefined;
-    if (values.thresholds) {
-      thresholds = JSON.parse(values.thresholds as string);
-    }
+  // K-05: see `validateScanThresholds` — a typo'd key/value used to silently disarm the alert.
+  // The pre-dispatch gate already rejected it before the ledger was opened; this is the same
+  // validator applied to the parsed value so the two paths cannot drift.
+  const thresholdsResult = validateScanThresholds(values.thresholds);
+  if (thresholdsResult.error) reportCliError(isJson, thresholdsResult.error);
+  const thresholds = thresholdsResult.thresholds;
 
+  try {
     const signals = await engine.scanSignals(thresholds, undefined, account);
 
     if (isJson) {
@@ -1360,17 +1591,17 @@ async function handleScan(engine: TraderEngine, args: string[]): Promise<void> {
 async function handleStats(engine: TraderEngine, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: {
-      days: { type: "string" },
-      symbol: { type: "string" },
-      account: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("stats"),
     strict: false,
   });
 
   const isJson = Boolean(values.json);
-  const days = values.days ? parseInt(values.days as string, 10) : undefined;
+  // K-04: see `validateStatsDays` — `NaN`/negative/zero/decimal used to silently empty the
+  // report while exiting 0. The pre-dispatch gate already rejected it before the ledger was
+  // opened; this is the same validator applied to the parsed value so the two cannot drift.
+  const daysResult = validateStatsDays(values.days);
+  if (daysResult.error) reportCliError(isJson, daysResult.error);
+  const days = daysResult.days;
   const symbol = values.symbol as string | undefined;
   const account = values.account ? (values.account as string).trim() : undefined;
 
@@ -1434,10 +1665,7 @@ async function handleStats(engine: TraderEngine, args: string[]): Promise<void> 
 async function handlePhysics(engine: TraderEngine, args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      symbol: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("physics"),
     allowPositionals: true,
     strict: false,
   });
@@ -1559,13 +1787,7 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
 
   const { values } = parseArgs({
     args: actualArgs,
-    options: {
-      symbol: { type: "string" },
-      cap: { type: "string" },
-      "full-position-cap": { type: "string" },
-      account: { type: "string" },
-      json: { type: "boolean", default: false },
-    },
+    options: flagsFor("position"),
     strict: false,
   });
 
@@ -1705,16 +1927,7 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
   if (subAction === "add") {
     const { values } = parseArgs({
       args: restArgs,
-      options: {
-        symbol: { type: "string" },
-        amount: { type: "string" },
-        date: { type: "string" },
-        account: { type: "string" },
-        shares: { type: "string" },
-        "per-share": { type: "string" },
-        notes: { type: "string" },
-        json: { type: "boolean", default: false },
-      },
+      options: flagsFor("dividend add"),
       strict: false,
     });
 
@@ -1757,11 +1970,7 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
   } else if (subAction === "list") {
     const { values } = parseArgs({
       args: restArgs,
-      options: {
-        symbol: { type: "string" },
-        account: { type: "string" },
-        json: { type: "boolean", default: false },
-      },
+      options: flagsFor("dividend list"),
       strict: false,
     });
 
@@ -1831,6 +2040,26 @@ async function main(): Promise<void> {
 
   const command = argv[0];
   const restArgs = argv.slice(1);
+
+  // ==== UNDECLARED-FLAG GATE ============================================================
+  // Runs BEFORE `getEngine()` is ever called, so a typo'd flag can never create/migrate/WAL the
+  // ledger, let alone write a row. `-h` / `--help` stays a pure no-op and is exempt.
+  if (!hasHelpFlag(argv)) {
+    const commandPath = resolveCommandPath(argv);
+    if (commandPath) {
+      const offender = findUndeclaredFlag(commandPath, restArgs);
+      if (offender) {
+        reportCliError(
+          wantsJsonOutput(restArgs),
+          `未声明的参数 ${offender}（命令: trade ${commandPath}）。运行 'trade ${commandPath} --help' 查看支持的参数。`,
+        );
+      }
+      const valueError = findFlagValueError(commandPath, restArgs);
+      if (valueError) {
+        reportCliError(wantsJsonOutput(restArgs), valueError);
+      }
+    }
+  }
 
   // The ledger is opened LAZILY, and only by the subcommands that truly need it. Constructing
   // `AppDatabase` eagerly here used to mkdir + create + WAL the ledger before a single argument
