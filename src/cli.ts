@@ -355,22 +355,102 @@ export function validateScanThresholds(
 }
 
 /**
+ * B4 (round-3): the ONE numeric literal syntax accepted by every numeric CLI option.
+ *
+ * Round 2 gave `--fee` / `--amount` their own strict regex while `--price` / `--cap` kept raw
+ * `parseFloat`, so the same literal could be accepted by one parameter and rejected by another
+ * (`--price 1e3` = 0 vs `--fee 1e3` = 1) — and `parseFloat` silently truncated garbage:
+ * `8,199` -> 8, `1,000` -> 1, `2.5abc` -> 2.5, `1_000` -> 1, all written to the ledger.
+ *
+ * Accepted: optional sign, digits with optional decimal point, or a bare `.fraction`, with an
+ * optional `e`/`E` exponent — i.e. every literal JavaScript itself treats as a numeric literal.
+ * Rejected: thousands separators, unit suffixes, embedded spaces, `_` separators, hex/octal
+ * prefixes, `NaN`, `Infinity`, empty. Every numeric option calls THIS function, so literal
+ * acceptance cannot drift between parameters; only the range rules differ (fee >= 0, price > 0, ...).
+ */
+export const NUMERIC_LITERAL_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/** Literals every numeric option must reject (asserted from the CLI in tests/evidence). */
+export const NUMERIC_LITERALS_MUST_REJECT = [
+  "8,199",
+  "1,000",
+  "2.5abc",
+  "2.5 9",
+  "1_000",
+  "0x10",
+  "abc",
+  "NaN",
+  "Infinity",
+  "",
+] as const;
+
+/** Literals every numeric option must accept at the literal layer (`--qty` still needs an integer). */
+export const NUMERIC_LITERALS_MUST_ACCEPT = [
+  "2.0001",
+  "8.199",
+  "100",
+  "5.5",
+  "1e3",
+  "1E3",
+  "1.5e2",
+  ".5",
+  "+5",
+  "5.",
+] as const;
+
+/**
+ * Parse a user-supplied numeric literal: syntax + finiteness, nothing else. `undefined` means
+ * "flag absent" and stays absent; `""` is a real (rejected) value, never "absent".
+ */
+export function parseNumericLiteral(
+  raw: unknown,
+  label: string,
+): { value?: number; error?: string } {
+  if (raw === undefined) return {};
+  const text = String(raw).trim();
+  if (text === "") {
+    return { error: `${label} 必须是合法数值字面量（禁止千分位逗号 / 单位后缀 / 下划线 / 十六进制），收到: (空值)` };
+  }
+  if (!NUMERIC_LITERAL_PATTERN.test(text)) {
+    return {
+      error: `${label} 必须是合法数值字面量（禁止千分位逗号 / 单位后缀 / 下划线 / 十六进制），收到: ${text}`,
+    };
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value)) {
+    return { error: `${label} 必须是有限数值（非 NaN / Infinity），收到: ${text}` };
+  }
+  return { value };
+}
+
+/**
+ * `--price`: a finite literal strictly greater than 0 (D-09, now closed at the literal layer).
+ * The `非法成交价：` prefix keeps the wording L1's accepted CLI negative controls match on, while
+ * the body now names the literal problem rather than a merely-impossible parsed value.
+ */
+export function validatePrice(raw: unknown): { price?: number; error?: string } {
+  const parsed = parseNumericLiteral(raw, "--price");
+  if (parsed.error) return { error: `非法成交价：${parsed.error}` };
+  if (parsed.value === undefined) return {};
+  if (parsed.value <= 0) {
+    return { error: `非法成交价：--price 必须为有限正数（> 0），收到: ${String(raw).trim()}` };
+  }
+  return { price: parsed.value };
+}
+
+/**
  * D-10 (`--fee`): a fee must be a finite, non-negative amount. `0` is legal (fee-free fills).
  * `parseFloat("abc")` yields NaN, which used to be written straight into `buy_fee` and
  * `cost_basis_unit` while the command still exited 0.
  */
 export function validateFee(raw: unknown): { fee?: number; error?: string } {
-  if (raw === undefined) return {};
-  const text = String(raw).trim();
-  const reject = (shown: string): { error: string } => ({
-    error: `--fee 必须是 >= 0 的有限数值（单位: 元，可为 0），收到: ${shown}`,
-  });
-  if (text === "") return reject("(空值)");
-  // Decimal literal only: rejects NaN / Infinity / negative / hex / exponent / words up front.
-  if (!/^\+?(?:\d+\.?\d*|\.\d+)$/.test(text)) return reject(text);
-  const fee = Number(text);
-  if (!Number.isFinite(fee) || fee < 0) return reject(text);
-  return { fee };
+  const parsed = parseNumericLiteral(raw, "--fee");
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  if (parsed.value < 0) {
+    return { error: `--fee 必须是 >= 0 的有限数值（单位: 元，可为 0），收到: ${String(raw).trim()}` };
+  }
+  return { fee: parsed.value };
 }
 
 /**
@@ -378,22 +458,20 @@ export function validateFee(raw: unknown): { fee?: number; error?: string } {
  * (`lot buy` / `lot add`) it must also be a whole 100-share board lot, mirroring the engine's own
  * contract — the old code either fell through to the misleading "100 的整数倍" message (NaN) or
  * silently substituted a derived quantity (`lot add --qty abc` wrote 5200 shares!). `lot close`
- * keeps odd-lot closes legal (a 1-share remainder is a real order), so there `requireLotUnit` is
- * false and only the NaN / zero / negative / fractional guard applies.
+ * keeps odd-lot closes legal (a 1-share remainder is a real order, master-confirmed), so there
+ * `requireLotUnit` is false and only the NaN / zero / negative / fractional guard applies.
  */
 export function validateQuantity(
   raw: unknown,
   label = "--qty",
   requireLotUnit = true,
 ): { quantity?: number; error?: string } {
-  if (raw === undefined) return {};
-  const text = String(raw).trim();
-  if (!/^\d+$/.test(text)) {
-    return { error: `${label} 必须为正整数股数（单位: 股），收到: ${text === "" ? "(空值)" : text}` };
-  }
-  const quantity = Number(text);
+  const parsed = parseNumericLiteral(raw, label);
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  const quantity = parsed.value;
   if (!Number.isSafeInteger(quantity) || quantity <= 0) {
-    return { error: `${label} 必须为正整数股数（单位: 股），收到: ${text}` };
+    return { error: `${label} 必须为正整数股数（单位: 股），收到: ${String(raw).trim()}` };
   }
   if (requireLotUnit && quantity % 100 !== 0) {
     return { error: `${label} 必须是 100 股整数倍（一手 = 100 股），收到: ${quantity} 股` };
@@ -402,23 +480,31 @@ export function validateQuantity(
 }
 
 /**
- * D-10 sibling guard (`lot add --amount`): the SAME 48h-fallback branch that let `--qty abc` slip
+ * D-10 sibling guard (`lot add --amount`): the SAME fallback branch that let `--qty abc` slip
  * through (`if (!quantity || quantity <= 0) { baseAmount = amount > 0 ? amount : 10000 }`) turned
  * `--amount abc` / `0` / `-5000` into a silent deployment of the 10000 CNY default (5200 shares).
  * A supplied amount must therefore be a finite positive number; an OMITTED `--amount` keeps the
  * documented "deploy 10000 by default" behaviour untouched.
  */
 export function validateAmount(raw: unknown): { amount?: number; error?: string } {
-  if (raw === undefined) return {};
-  const text = String(raw).trim();
-  const reject = (shown: string): { error: string } => ({
-    error: `--amount 必须是 > 0 的有限数值（单位: 元），收到: ${shown}`,
-  });
-  if (text === "") return reject("(空值)");
-  if (!/^\+?(?:\d+\.?\d*|\.\d+)$/.test(text)) return reject(text);
-  const amount = Number(text);
-  if (!Number.isFinite(amount) || amount <= 0) return reject(text);
-  return { amount };
+  const parsed = parseNumericLiteral(raw, "--amount");
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  if (parsed.value <= 0) {
+    return { error: `--amount 必须是 > 0 的有限数值（单位: 元），收到: ${String(raw).trim()}` };
+  }
+  return { amount: parsed.value };
+}
+
+/** `--cap` / `--full-position-cap`: a finite literal strictly greater than 0. */
+export function validateCap(raw: unknown, label: string): { cap?: number; error?: string } {
+  const parsed = parseNumericLiteral(raw, label);
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value === undefined) return {};
+  if (parsed.value <= 0) {
+    return { error: `${label} 必须为有限正数（> 0），收到: ${String(raw).trim()}` };
+  }
+  return { cap: parsed.value };
 }
 
 /** Value-level contract violation for a command path, resolved before the ledger is opened. */
@@ -429,8 +515,12 @@ export function findFlagValueError(commandPath: string, args: string[]): string 
   if (commandPath === "scan") {
     return validateScanThresholds(readFlagValue(args, "thresholds")).error ?? null;
   }
-  // D-10: `--fee` / `--qty` are numeric and ledger-poisoning when NaN, so they are vetted here too.
+  // D-10 + B4: all numeric flags are vetted here, through the ONE shared literal parser, so an
+  // illegal literal can never open (let alone write) a ledger, and no two parameters can disagree
+  // about what a legal literal looks like.
   if (commandPath === "lot buy" || commandPath === "lot add" || commandPath === "lot close") {
+    const priceError = validatePrice(readFlagValue(args, "price")).error;
+    if (priceError) return priceError;
     const feeError = validateFee(readFlagValue(args, "fee")).error;
     if (feeError) return feeError;
     const qtyError = validateQuantity(
@@ -443,6 +533,12 @@ export function findFlagValueError(commandPath: string, args: string[]): string 
       const amountError = validateAmount(readFlagValue(args, "amount")).error;
       if (amountError) return amountError;
     }
+  }
+  if (commandPath === "position") {
+    const capError = validateCap(readFlagValue(args, "cap"), "--cap").error;
+    if (capError) return capError;
+    const fullCapError = validateCap(readFlagValue(args, "full-position-cap"), "--full-position-cap").error;
+    if (fullCapError) return fullCapError;
   }
   return null;
 }
@@ -1235,7 +1331,11 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
     }
 
     const symbol = symbolArg;
-    const price = parseFloat(priceArg);
+    // B4-2: the price is validated as a LITERAL, not just as its parsed value — `parseFloat`
+    // truncates `8,199` to 8 and `2.5abc` to 2.5, silently writing a wrong-magnitude batch.
+    const buyPriceResult = validatePrice(priceArg);
+    if (buyPriceResult.error) throw new Error(buyPriceResult.error);
+    const price = buyPriceResult.price!;
     // D-10: vet the share count and the fee before any write. Both accept a flag (`--qty` /
     // `--fee`) and `--qty` also has a positional form, so the label names whichever was used.
     const qtyResult = validateQuantity(
@@ -1315,7 +1415,9 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
       throw new Error("Missing required arguments: --parent-lot-id (or --parent), --price (or: trade lot add <lot_id> <price>)");
     }
 
-    const price = parseFloat(priceArg);
+    const addPriceResult = validatePrice(priceArg);
+    if (addPriceResult.error) throw new Error(addPriceResult.error);
+    const price = addPriceResult.price!;
     const addAmountResult = validateAmount(values.amount);
     if (addAmountResult.error) throw new Error(addAmountResult.error);
     const amount = addAmountResult.amount;
@@ -1481,7 +1583,9 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
     }
 
     const lotId = lotIdArg;
-    const price = parseFloat(priceArg);
+    const closePriceResult = validatePrice(priceArg);
+    if (closePriceResult.error) throw new Error(closePriceResult.error);
+    const price = closePriceResult.price!;
     // D-10: an omitted `--qty` still means "close the whole remaining position". When supplied it
     // must be a positive whole share count — `lot close --qty abc` used to blow up mid-write with
     // `NOT NULL constraint failed: lots.remaining_quantity` instead of a clean pre-write rejection.
@@ -1904,8 +2008,11 @@ async function handlePosition(engine: TraderEngine, args: string[]): Promise<voi
 
   const isJson = Boolean(values.json);
   const symbol = values.symbol as string | undefined;
+  const capIsAlias = values.cap !== undefined;
   const capStr = (values.cap as string) || (values["full-position-cap"] as string);
-  const customCap = capStr ? parseFloat(capStr) : undefined;
+  const capResult = validateCap(capStr, capIsAlias ? "--cap" : "--full-position-cap");
+  if (capResult.error) reportCliError(isJson, capResult.error);
+  const customCap = capResult.cap;
   const account = values.account ? (values.account as string).trim() : undefined;
 
   try {

@@ -22,7 +22,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { SIGNAL_THRESHOLD_KEYS } from "../src/cli.ts";
+import { NUMERIC_LITERALS_MUST_ACCEPT, NUMERIC_LITERALS_MUST_REJECT, SIGNAL_THRESHOLD_KEYS } from "../src/cli.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli.ts");
@@ -115,6 +115,20 @@ function readLotRow(
       "SELECT buy_quantity, buy_fee, cost_basis_unit FROM lots WHERE lot_id = ?",
     )
     .get(lotId)!;
+  db.close();
+  return row;
+}
+
+/** The most recently inserted lot row (insertion order == rowid order). */
+function readLatestLot(
+  dbPath: string,
+): { buy_price: number; buy_quantity: number; buy_fee: number; cost_basis_unit: number } {
+  const db = new Database(dbPath, { readonly: true });
+  const row = db
+    .query<{ buy_price: number; buy_quantity: number; buy_fee: number; cost_basis_unit: number }, []>(
+      "SELECT buy_price, buy_quantity, buy_fee, cost_basis_unit FROM lots ORDER BY rowid DESC LIMIT 1",
+    )
+    .get()!;
   db.close();
   return row;
 }
@@ -509,6 +523,229 @@ describe("D-02 `scan --help` example keys match the implementation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B4 (round-3) — numeric literals are validated ONCE, at the literal layer
+// ---------------------------------------------------------------------------
+
+describe("B4-1 every numeric flag shares one literal contract", () => {
+  it("rejects every illegal literal identically on --price / --fee / --qty / --amount / --cap", async () => {
+    const root = tempRoot("b41-reject");
+    const dbPath = join(root, "ledger.db");
+    const parentLotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    for (const literal of NUMERIC_LITERALS_MUST_REJECT) {
+      const label = JSON.stringify(literal);
+      const calls: Array<[string, string[]]> = [
+        ["--price", ["lot", "buy", "--symbol", SYMBOL, "--price", literal, "--qty", "100", "--skip-risk", "--json"]],
+        ["--fee", ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", literal, "--skip-risk", "--json"]],
+        ["--qty", ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", literal, "--skip-risk", "--json"]],
+        ["--amount", ["lot", "add", "--parent-lot-id", parentLotId, "--price", "2.0001", "--amount", literal, "--skip-risk", "--json"]],
+        ["--cap", ["position", "--cap", literal, "--json"]],
+      ];
+
+      for (const [flag, args] of calls) {
+        const res = await runCli(args, dbPath);
+        expect(res.exitCode, `${flag} ${label} must be rejected :: ${combined(res)}`).toBe(1);
+        expect(combined(res), `${flag} ${label} names the flag`).toContain(flag);
+        expect(countRows(dbPath), `${flag} ${label} wrote rows`).toEqual(before);
+      }
+    }
+  });
+
+  it("accepts every legal literal on `--price` and writes the exact magnitude", async () => {
+    const root = tempRoot("b41-price");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    for (const literal of NUMERIC_LITERALS_MUST_ACCEPT) {
+      const expected = Number(literal);
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", literal, "--qty", "100", "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--price ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(readLatestLot(dbPath).buy_price, `--price ${literal} ledger value`).toBe(expected);
+      expect(Number.isFinite(readLatestLot(dbPath).cost_basis_unit)).toBe(true);
+    }
+  });
+
+  it("accepts every legal literal on `--fee` and writes the exact magnitude", async () => {
+    const root = tempRoot("b41-fee");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    for (const literal of NUMERIC_LITERALS_MUST_ACCEPT) {
+      const expected = Number(literal);
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", literal, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--fee ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(readLatestLot(dbPath).buy_fee, `--fee ${literal} ledger value`).toBe(expected);
+      expect(Number.isFinite(readLatestLot(dbPath).cost_basis_unit)).toBe(true);
+    }
+  });
+
+  it("accepts every legal literal on `--cap`", async () => {
+    const root = tempRoot("b41-cap");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    for (const literal of NUMERIC_LITERALS_MUST_ACCEPT) {
+      const expected = Number(literal);
+      const capRes = await runCli(["position", "--cap", literal, "--json"], dbPath);
+      expect(capRes.exitCode, `--cap ${literal} must be accepted :: ${combined(capRes)}`).toBe(0);
+      expect(Number(JSON.parse(capRes.stdout).data.portfolio_summary.full_position_cap)).toBe(expected);
+    }
+  });
+
+  it("accepts legal literals on `--amount` (spot check per family)", async () => {
+    const root = tempRoot("b41-amount");
+
+    // each write needs its own parent: the 48h lineage anti-shake window is not waivable
+    for (const [literal, expectedQty] of [["1e3", 100], ["2.0001", 100]] as Array<[string, number]>) {
+      const fresh = join(root, `amount-${literal}.db`);
+      const parent = await seedLedger(fresh);
+      const res = await runCli(
+        ["lot", "add", "--parent-lot-id", parent, "--price", "8.199", "--amount", literal, "--fee", "0", "--skip-risk", "--json"],
+        fresh,
+      );
+      expect(res.exitCode, `--amount ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(readLatestLot(fresh).buy_quantity).toBe(expectedQty);
+      expect(Number.isFinite(readLatestLot(fresh).cost_basis_unit)).toBe(true);
+    }
+  });
+
+  it("accepts `--qty 1e2` / `--qty 1e3` (legal literals resolving to whole board lots)", async () => {
+    const root = tempRoot("b41-qty-sci");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    for (const [literal, expected] of [["1e2", 100], ["1E3", 1000]] as Array<[string, number]>) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", literal, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--qty ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(readLatestLot(dbPath).buy_quantity).toBe(expected);
+    }
+  });
+
+  it("`lot close --qty 150` stays accepted (odd-lot close, master-confirmed)", async () => {
+    const root = tempRoot("b41-close-150");
+    const dbPath = join(root, "ledger.db");
+    const lotId = await seedLedger(dbPath);
+
+    const res = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "150", "--json"], dbPath);
+    expect(res.exitCode, `lot close --qty 150 :: ${combined(res)}`).toBe(0);
+    expect(JSON.parse(res.stdout).data.close_quantity).toBe(150);
+  });
+  it("documents the ONE deliberate divergence: `--days` keeps D-05's digits-only grammar", async () => {
+    const root = tempRoot("b41-days");
+    const dbPath = join(root, "ledger.db");
+    await seedClosedTrade(dbPath);
+
+    // D-05/K-04 explicitly requires "非数值 / 负数 / 零 / 小数一律 exit≠0", so `--days 7.0` may NOT
+    // be normalised to 7 the way a money/price literal would be. Same for `--days 1e3` even though
+    // `--price 1e3` is legal. This divergence is spec-mandated, and pinned here so it stays visible.
+    const priceSci = await runCli(["lot", "buy", "--symbol", SYMBOL, "--price", "1e3", "--qty", "100", "--skip-risk", "--json"], dbPath);
+    expect(priceSci.exitCode, "--price 1e3 is a legal literal").toBe(0);
+
+    for (const bad of ["1e3", "7.0", "7.5", "-5", "0"]) {
+      const res = await runCli(["stats", "--days", bad, "--json"], dbPath);
+      expect(res.exitCode, `--days ${bad} must stay rejected (D-05)`).toBe(1);
+      expect(combined(res)).toContain("--days");
+    }
+
+    const ok = await runCli(["stats", "--days", "7", "--json"], dbPath);
+    expect(ok.exitCode, ok.stderr).toBe(0);
+  });
+});
+
+describe("B4-2 `--price` is guarded at the literal layer (D-09 closed)", () => {
+  it("rejects prefixed-garbage literals that `parseFloat` would truncate, with zero writes", async () => {
+    const root = tempRoot("b42-price");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    // The control case: `parseFloat("8,199")` is 8 — a finite, strictly positive price that L1's
+    // engine guard MUST let through. So only a literal-layer check can stop it. Assert both halves.
+    expect(parseFloat("8,199")).toBe(8);
+    expect(Number.isFinite(parseFloat("8,199"))).toBe(true);
+    expect(parseFloat("8,199")).toBeGreaterThan(0);
+
+    const illegal = ["8,199", "1,000", "2.5abc", "2.5 9", "1_000", "0x10", "abc", "NaN", "Infinity", ""];
+    for (const literal of illegal) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", literal, "--qty", "100", "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--price ${JSON.stringify(literal)} must be rejected`).toBe(1);
+      expect(combined(res)).toContain("--price");
+      expect(countRows(dbPath), `--price ${JSON.stringify(literal)} wrote rows`).toEqual(before);
+    }
+  });
+
+  it("accepts scientific notation and writes the exact magnitude (1e3 -> 1000, not 1)", async () => {
+    const root = tempRoot("b42-price-legal");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    const expected: Array<[string, number]> = [
+      ["2.0001", 2.0001],
+      ["8.199", 8.199],
+      ["1e3", 1000],
+      ["1E3", 1000],
+      ["1.5e2", 150],
+      [".5", 0.5],
+      ["+5", 5],
+      ["5.", 5],
+      ["100", 100],
+    ];
+
+    for (const [literal, value] of expected) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", literal, "--qty", "100", "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--price ${literal} must be accepted :: ${combined(res)}`).toBe(0);
+      expect(JSON.parse(res.stdout).data.buy_price).toBe(value);
+      expect(readLatestLot(dbPath).buy_price, `ledger buy_price for ${literal}`).toBe(value);
+    }
+  });
+
+  it("guards the same literals on `lot add` and `lot close`, and `--cap`, with zero writes", async () => {
+    const root = tempRoot("b42-others");
+    const dbPath = join(root, "ledger.db");
+    const lotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    const addRes = await runCli(
+      ["lot", "add", "--parent-lot-id", lotId, "--price", "1,000", "--qty", "100", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(addRes.exitCode).toBe(1);
+    expect(combined(addRes)).toContain("--price");
+
+    const closeRes = await runCli(
+      ["lot", "close", "--lot-id", lotId, "--price", "2.5abc", "--qty", "100", "--json"],
+      dbPath,
+    );
+    expect(closeRes.exitCode).toBe(1);
+    expect(combined(closeRes)).toContain("--price");
+
+    for (const literal of ["1,000", "0x10", "2.5abc", ""]) {
+      const capRes = await runCli(["position", "--cap", literal, "--json"], dbPath);
+      expect(capRes.exitCode, `--cap ${JSON.stringify(literal)} must be rejected`).toBe(1);
+      expect(combined(capRes)).toContain("--cap");
+    }
+
+    expect(countRows(dbPath)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Plain calls keep working (the broadest anti-false-positive control)
 // ---------------------------------------------------------------------------
 
@@ -523,7 +760,10 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
     const lotId = await seedLedger(dbPath);
     const before = countRows(dbPath);
 
-    for (const bad of ["abc", "NaN", "Infinity", "-1", "1e3", "0x10", ""]) {
+    // round-2 regression, CORRECTED in round-3: `1e3` is a LEGAL numeric literal (1000 元) that the
+    // baseline accepted and wrote as buy_fee=1000 / cost_basis_unit=12.0001. Round 2 wrongly listed
+    // it here as must-reject (over-strict regex); it now lives in the must-ACCEPT control below.
+    for (const bad of ["abc", "NaN", "Infinity", "-1", "0x10", "8,199", "1_000", "2.5abc"]) {
       const res = await runCli(
         ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", bad, "--skip-risk", "--json"],
         dbPath,
@@ -552,6 +792,18 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
     );
     expect(freshRes.exitCode).toBe(1);
     expect(existsSync(fresh)).toBe(false);
+
+    // MUST-ACCEPT control for the literal round 2 got wrong: scientific notation is a legal numeric
+    // literal and must restore the baseline accounting values exactly. (Runs last: it writes a row.)
+    const sci = await runCli(
+      ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", "1e3", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(sci.exitCode, `--fee 1e3 must be accepted again :: ${sci.stderr}`).toBe(0);
+    const sciData = JSON.parse(sci.stdout).data;
+    expect(sciData.buy_fee).toBe(1000);
+    expect(sciData.cost_basis_unit).toBe(12.0001); // (2.0001 * 100 + 1000) / 100
+    expect(readLatestLot(dbPath).buy_fee).toBe(1000);
   });
 
   it("rejects non-numeric / zero / negative / fractional / non-100-multiple --qty on lot buy, with zero writes", async () => {
@@ -560,14 +812,27 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
     await seedLedger(dbPath);
     const before = countRows(dbPath);
 
-    const shareCountErrors = ["abc", "0", "-100", "1.5", "NaN", "Infinity", "1e2", ""];
-    for (const bad of shareCountErrors) {
+    // Literal-illegal inputs are rejected by the shared literal parser (message names --qty, never
+    // the misleading board-lot wording).
+    const literalIllegal = ["abc", "NaN", "Infinity", "", "8,199", "1_000", "2.5abc"];
+    for (const bad of literalIllegal) {
       const res = await runCli(
         ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", bad, "--skip-risk", "--json"],
         dbPath,
       );
       expect(res.exitCode, `--qty ${JSON.stringify(bad)} must be rejected`).toBe(1);
-      // The message must name the share count, not the misleading "multiple of 100" fallback.
+      expect(combined(res), `--qty ${JSON.stringify(bad)} names the flag`).toContain("--qty");
+      expect(combined(res), `--qty ${JSON.stringify(bad)}: not the 100-multiple fallback`).not.toContain("整数倍");
+      expect(countRows(dbPath), `--qty ${JSON.stringify(bad)} wrote rows`).toEqual(before);
+    }
+
+    // Literal-legal but not a positive whole share count: the message must be about 股数.
+    for (const bad of ["0", "-100", "1.5", ".5"]) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", bad, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--qty ${JSON.stringify(bad)} must be rejected`).toBe(1);
       expect(combined(res), `--qty ${JSON.stringify(bad)}: share-count wording`).toContain("股数");
       expect(combined(res), `--qty ${JSON.stringify(bad)}: not the 100-multiple fallback`).not.toContain("整数倍");
       expect(countRows(dbPath), `--qty ${JSON.stringify(bad)} wrote rows`).toEqual(before);
@@ -587,8 +852,18 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
     // The positional form is guarded by the same validator.
     const positional = await runCli(["lot", "buy", SYMBOL, "2.0001", "abc", "--skip-risk", "--json"], dbPath);
     expect(positional.exitCode).toBe(1);
-    expect(combined(positional)).toContain("股数");
+    expect(combined(positional)).toContain("--qty"); // literal error names the flag/positional slot
     expect(countRows(dbPath)).toEqual(before);
+
+    // was `1e2` in the round-2 must-reject list: it is a LEGAL literal worth 100 shares.
+    // (Runs last: it writes a row.)
+    const sciQty = await runCli(
+      ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "1e2", "--fee", "0", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(sciQty.exitCode, `--qty 1e2 must be accepted :: ${sciQty.stderr}`).toBe(0);
+    expect(JSON.parse(sciQty.stdout).data.buy_quantity).toBe(100);
+    expect(readLatestLot(dbPath).buy_quantity).toBe(100);
   });
 
   it("LEGAL anti-false-positive: --fee 0 and --fee 5.5 are accepted and cost_basis_unit stays finite", async () => {
@@ -643,7 +918,9 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
       dbPath,
     );
     expect(badQty.exitCode).toBe(1);
-    expect(combined(badQty)).toContain("股数");
+    // `abc` is literal-illegal now, so the message names the flag rather than talking about 股数.
+    expect(combined(badQty)).toContain("--qty");
+    expect(combined(badQty)).not.toContain("整数倍");
     expect(countRows(dbPath)).toEqual(before);
 
     const badFee = await runCli(
@@ -712,7 +989,9 @@ describe("D-10 `--fee` / `--qty` numeric guards", () => {
     // Before the guard this died mid-write with `NOT NULL constraint failed: lots.remaining_quantity`.
     const badQty = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "abc", "--json"], dbPath);
     expect(badQty.exitCode).toBe(1);
-    expect(combined(badQty)).toContain("股数");
+    // `abc` is literal-illegal now, so the message names the flag rather than talking about 股数.
+    expect(combined(badQty)).toContain("--qty");
+    expect(combined(badQty)).not.toContain("整数倍");
     expect(countRows(dbPath)).toEqual(before);
 
     for (const bad of ["0", "-100", "1.5"]) {
