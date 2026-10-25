@@ -1,0 +1,1 @@
+cd /tmp/tp-458199de-L1 && HOME=/tmp/tp-458199de-L1/fakehome env -u LOT_TRADER_DB -u TRADE_DB_PATH ./trade lot add --parent-lot-id LOT-20261025-001 --price abc --amount 10000 --account ACCA --fee 0 --skip-risk --json --db /tmp/tp-458199de-L1/db/evidence-bin/guards.db

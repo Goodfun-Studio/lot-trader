@@ -2,3 +2,7 @@ total 8
 drwx------@   3 ivywu  staff    96 Oct 22 17:50 .
 drwxr-x---+ 219 ivywu  staff  7008 Oct 25 23:09 ..
 -rw-------@   1 ivywu  staff    65 Oct 22 16:32 session.token.stale-bak
+total 8
+drwx------@   3 ivywu  staff    96 Oct 22 17:50 .
+drwxr-x---+ 219 ivywu  staff  7008 Oct 25 23:33 ..
+-rw-------@   1 ivywu  staff    65 Oct 22 16:32 session.token.stale-bak

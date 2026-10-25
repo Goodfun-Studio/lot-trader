@@ -1,6 +1,6 @@
 # L1 · engine 层校验加固报告（D-09 / D-01 / D-06）
 
-> 本报告与逐案证据同源：`docs/qa/evidence/tp-458199de-L1-20261025-233211-commit-c7d3e52/`（含 `REPORT.md`、`MANIFEST.txt`、逐案 `.cmd/.stdout/.exit/.rows-*`）。
+> 本报告与逐案证据同源：`docs/qa/evidence/tp-458199de-L1-20261025-233211-commit-c7d3e52/`（含 `REPORT.md`、`MANIFEST.txt`、逐案 `.cmd/.stdout/.exit/.rows-*`，以及编译产物复验 `BIN-*`）。
 
 
 - 分支：`line/tp-458199de-L1`
@@ -257,3 +257,24 @@ D06-OVER-CAP     {"code":1,"msg":"单标的持仓硬顶风控拦截：买入后�
 | 主账本隔离 | `LEDGER-ISOLATION-before.txt`、`LEDGER-ISOLATION-after.txt`、`LOT-TRADER-DIR-before.txt`、`LOT-TRADER-DIR-after.txt` |
 | 违规/合法调用逐案证据 | `<CASE>.cmd` / `.stdout` / `.stderr` / `.exit` / `.rows-before.txt` / `.rows-after.txt` |
 | 证据可复现 | `EVIDENCE-HARNESS.sh`（生成上述全部 `*.cmd`/`*.exit`/`*.rows-*`） |
+
+---
+
+## 6. 编译产物 `./trade` 复验（与源码路径等价）
+
+`bun build --compile src/cli.ts --outfile trade` 在 worktree 内重新编译出 63,627,746 字节的
+`./trade`（sha256 `fd9c82a6276b987ac4e8fe6679757b8063295496e03c1202ebaadc36939f4d7d`，见
+`BIN-ARTIFACT.txt`），并用**该二进制**重跑了关键 8 条调用（`BIN-*.{cmd,stdout,stderr,exit,rows-*}`），
+结论与 `bun run src/cli.ts` 路径完全一致：
+
+| 案例 | exit | 六表 Δ | 备注 |
+|---|---|---|---|
+| `BIN-LEGAL-BUY-2.0001` | 0 | `lots`+1、`trades`+1 | `cost_basis_unit == 2.0001` |
+| `BIN-BUY-PRICE-NAN` / `ZERO` / `NEG` | 1 / 1 / 1 | 0 | 均「非法成交价」 |
+| `BIN-ADD-PRICE-NAN` | 1 | 0 | 「非法成交价：加仓成交价 …」 |
+| `BIN-CLOSE-PRICE-NEG` | 1 | 0 | 「非法成交价：平仓成交价 …」 |
+| `BIN-ADD-TIME-FORGERY` | 1 | 0 | 「成交时间不得晚于当前时间：加仓成交时间 …」 |
+| `BIN-LEGAL-BUY-8.199` | 0 | `lots`+1、`trades`+1 | `cost_basis_unit == 8.199` |
+
+二进制复验结束后主账本哈希仍为 `1ec361a6…59`（`LEDGER-ISOLATION-after-binary.txt`），
+`~/.lot-trader/` 仍只有 `session.token.stale-bak`。
