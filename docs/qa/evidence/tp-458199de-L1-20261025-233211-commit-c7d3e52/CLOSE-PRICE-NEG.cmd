@@ -1,0 +1,1 @@
+cd /tmp/tp-458199de-L1 && HOME=/tmp/tp-458199de-L1/fakehome env -u LOT_TRADER_DB -u TRADE_DB_PATH bun run src/cli.ts lot close --lot-id LOT-20261025-001 --price -2.5 --qty 100 --fee 0 --json --db /tmp/tp-458199de-L1/db/evidence/guards.db

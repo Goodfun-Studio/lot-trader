@@ -1,0 +1,1 @@
+DB_ABSENT (ledger file not created)

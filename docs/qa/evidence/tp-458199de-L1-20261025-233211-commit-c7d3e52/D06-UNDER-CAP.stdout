@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "msg": "success",
+  "timestamp": "2026-10-25T15:32:12.100Z",
+  "data": {
+    "lot_id": "LOT-20261025-002",
+    "account_id": "ACCB",
+    "symbol": "159915.SZ",
+    "buy_time": "2026-10-25T15:32:12.098Z",
+    "buy_price": 3,
+    "buy_quantity": 900,
+    "cost_basis_unit": 3,
+    "buy_fee": 0,
+    "status": "ACTIVE",
+    "pyramid_level": 0,
+    "can_sell_now": false,
+    "buy_reason": null
+  }
+}

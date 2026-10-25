@@ -1,0 +1,98 @@
+diff --git a/tests/phase2_strategy.test.ts b/tests/phase2_strategy.test.ts
+index 2517ab3..694f7ce 100644
+--- a/tests/phase2_strategy.test.ts
++++ b/tests/phase2_strategy.test.ts
+@@ -19,14 +19,16 @@ describe("Phase 2 Core Strategy Logic Tests", () => {
+   it("pyramid dip add: correctly inherits lineage, calculates amount, and increments pyramid level", () => {
+     const { engine } = createTestEngine();
+ 
+-    // 1. Initial base lot buy
+-    const baseLot = engine.buyLot("518880.SH", 6.00, 2000);
++    // 1. Initial base lot buy, backfilled 72h into the past (D-01: --time may never be in the
++    // future, so tests express "history" with real past timestamps).
++    const baseLot = engine.buyLot("518880.SH", 6.00, 2000, undefined, new Date(Date.now() - 72 * 3600 * 1000));
+     expect(baseLot.pyramid_level).toBe(0);
+     expect(baseLot.parent_lot_id).toBeNull();
+ 
+     // 2. Add lot via trade lot add primitive (default base amount = 10,000 yuan)
+     // At price 5.40, 10000 / 5.40 = 1851.85 -> 1800 shares (nearest 100-share lot)
+-    const addTime = new Date(Date.now() + 50 * 3600 * 1000); // 50h later to avoid anti-shake window
++    // Backfilled -49h: the root lot is exempt from the cooldown, so this tier is legal.
++    const addTime = new Date(Date.now() - 49 * 3600 * 1000);
+     const addedLot = engine.addLot(baseLot.lot_id, 5.40, {
+       amount: 10000,
+       buyTime: addTime,
+@@ -39,11 +41,10 @@ describe("Phase 2 Core Strategy Logic Tests", () => {
+     expect(addedLot.buy_quantity).toBe(1800);
+     expect(addedLot.status).toBe(LotStatus.ACTIVE);
+ 
+-    // 3. Add second tier (L2) with explicit qty
+-    const addTime2 = new Date(addTime.getTime() + 50 * 3600 * 1000);
++    // 3. Add second tier (L2) with explicit qty, on the REAL clock: the lineage's last non-root
++    // addition was 49h ago, i.e. already outside the 48h cooldown window.
+     const addedLot2 = engine.addLot(addedLot.lot_id, 4.80, {
+       qty: 2500,
+-      buyTime: addTime2,
+     });
+ 
+     expect(addedLot2.parent_lot_id).toBe(addedLot.lot_id);
+@@ -53,40 +54,45 @@ describe("Phase 2 Core Strategy Logic Tests", () => {
+ 
+   it("lineage guard: anti-shake cooldown intercepts rapid dip additions within 48 hours", () => {
+     const { engine } = createTestEngine();
++    const nowMs = Date.now();
+ 
+-    // Initial lot
+-    const baseLot = engine.buyLot("518880.SH", 6.00, 2000);
++    // Initial lot backfilled 120h into the past. D-01: the window is measured against the REAL
++    // clock, so the past fills below are legal history rather than clock forgeries.
++    const baseLot = engine.buyLot("518880.SH", 6.00, 2000, undefined, new Date(nowMs - 120 * 3600 * 1000));
+ 
+-    // First dip addition at T + 1 hour
+-    const t1 = new Date(Date.now() + 1 * 3600 * 1000);
++    // First dip addition 1 real hour ago: no non-root lot existed yet in this lineage, so it is legal.
+     const lotL1 = engine.addLot(baseLot.lot_id, 5.40, {
+       amount: 10000,
+-      buyTime: t1,
++      buyTime: new Date(nowMs - 1 * 3600 * 1000),
+     });
+     expect(lotL1.pyramid_level).toBe(1);
+ 
+-    // Rapid second dip addition at T + 10 hours (within 48 hours cooldown window)
+-    const t2 = new Date(t1.getTime() + 9 * 3600 * 1000);
++    // Rapid second dip addition on the real clock, only ~1h after the L1 add -> inside the window.
+     expect(() => {
+       engine.addLot(baseLot.lot_id, 5.00, {
+         amount: 10000,
+-        buyTime: t2,
+       });
+     }).toThrow("防抖冷却窗口守卫拦截");
+ 
+-    // Also adding from child lot within cooldown window must be intercepted
++    // Also adding from the child lot inside the window must be intercepted.
+     expect(() => {
+       engine.addLot(lotL1.lot_id, 5.00, {
+         amount: 10000,
+-        buyTime: t2,
+       });
+     }).toThrow("防抖冷却窗口守卫拦截");
+ 
+-    // Addition after 49 hours (> 48 hours) must succeed
+-    const t3 = new Date(t1.getTime() + 49 * 3600 * 1000);
+-    const lotL2 = engine.addLot(lotL1.lot_id, 5.00, {
++    // Addition after 48 real hours must succeed: parent backfilled -72h, first add -49h, then the
++    // next tier on the real clock (49h later, i.e. outside the window).
++    const { engine: agedEngine } = createTestEngine();
++    const agedBase = agedEngine.buyLot("518880.SH", 6.00, 2000, undefined, new Date(nowMs - 72 * 3600 * 1000));
++    const agedL1 = agedEngine.addLot(agedBase.lot_id, 5.00, {
++      amount: 10000,
++      buyTime: new Date(nowMs - 49 * 3600 * 1000),
++    });
++    expect(agedL1.pyramid_level).toBe(1);
++
++    const lotL2 = agedEngine.addLot(agedL1.lot_id, 5.00, {
+       amount: 10000,
+-      buyTime: t3,
+     });
+     expect(lotL2.pyramid_level).toBe(2);
+   });

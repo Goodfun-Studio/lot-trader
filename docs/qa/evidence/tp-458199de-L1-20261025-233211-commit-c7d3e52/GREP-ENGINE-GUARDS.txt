@@ -1,0 +1,6 @@
+$ grep -n "48 \* 3600\|cooldownMs\|isFinite\|Number.isFinite" src/engine.ts
+24:  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+286:    const cooldownMs = 48 * 3600 * 1000; // 48 hours (2 trading days)
+294:        if (diffMs >= 0 && diffMs < cooldownMs) {
+295:          const hoursLeft = ((cooldownMs - diffMs) / (3600 * 1000)).toFixed(1);
+914:    if (!isFinite(amount) || amount <= 0) {
