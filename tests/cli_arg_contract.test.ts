@@ -99,6 +99,26 @@ function signalsFingerprint(dbPath: string): string {
   return JSON.stringify(rows);
 }
 
+/** stdout+stderr, so a guard's message is found wherever it is emitted (JSON errors go to both). */
+function combined(res: RunResult): string {
+  return `${res.stdout}${res.stderr}`;
+}
+
+/** The accounting columns a poisoned fill would corrupt. */
+function readLotRow(
+  dbPath: string,
+  lotId: string,
+): { buy_quantity: number; buy_fee: number; cost_basis_unit: number } {
+  const db = new Database(dbPath, { readonly: true });
+  const row = db
+    .query<{ buy_quantity: number; buy_fee: number; cost_basis_unit: number }, [string]>(
+      "SELECT buy_quantity, buy_fee, cost_basis_unit FROM lots WHERE lot_id = ?",
+    )
+    .get(lotId)!;
+  db.close();
+  return row;
+}
+
 async function seedLedger(dbPath: string): Promise<string> {
   const res = await runCli(
     ["lot", "buy", "--symbol", SYMBOL, "--price", "6.12", "--qty", "2000", "--json"],
@@ -491,6 +511,241 @@ describe("D-02 `scan --help` example keys match the implementation", () => {
 // ---------------------------------------------------------------------------
 // Plain calls keep working (the broadest anti-false-positive control)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// D-10 — `--fee` / `--qty` numeric guards (NaN must never reach the ledger)
+// ---------------------------------------------------------------------------
+
+describe("D-10 `--fee` / `--qty` numeric guards", () => {
+  it("rejects non-numeric / negative / infinite --fee on lot buy, with zero writes and no ledger file", async () => {
+    const root = tempRoot("d10-fee");
+    const dbPath = join(root, "ledger.db");
+    const lotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    for (const bad of ["abc", "NaN", "Infinity", "-1", "1e3", "0x10", ""]) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", bad, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--fee ${JSON.stringify(bad)} must be rejected`).toBe(1);
+      expect(combined(res), `--fee ${JSON.stringify(bad)} must name --fee`).toContain("--fee");
+      expect(countRows(dbPath), `--fee ${JSON.stringify(bad)} wrote rows`).toEqual(before);
+    }
+
+    // The exact reproduction from the ticket: NaN reached buy_fee + cost_basis_unit and exited 0.
+    const repro = await runCli(
+      ["lot", "buy", "518880.SH", "--price", "2.0001", "--qty", "100", "--fee", "abc", "--account", "ACC", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(repro.exitCode).toBe(1);
+    expect(countRows(dbPath)).toEqual(before);
+    const row = readLotRow(dbPath, lotId);
+    expect(Number.isFinite(row.cost_basis_unit)).toBe(true);
+    expect(Number.isFinite(row.buy_fee)).toBe(true);
+
+    // An illegal --fee must be rejected before the ledger is even opened.
+    const fresh = join(root, "never-created.db");
+    const freshRes = await runCli(
+      ["lot", "buy", SYMBOL, "--price", "2.0001", "--qty", "100", "--fee", "abc", "--skip-risk", "--json"],
+      fresh,
+    );
+    expect(freshRes.exitCode).toBe(1);
+    expect(existsSync(fresh)).toBe(false);
+  });
+
+  it("rejects non-numeric / zero / negative / fractional / non-100-multiple --qty on lot buy, with zero writes", async () => {
+    const root = tempRoot("d10-qty");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    const shareCountErrors = ["abc", "0", "-100", "1.5", "NaN", "Infinity", "1e2", ""];
+    for (const bad of shareCountErrors) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", bad, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--qty ${JSON.stringify(bad)} must be rejected`).toBe(1);
+      // The message must name the share count, not the misleading "multiple of 100" fallback.
+      expect(combined(res), `--qty ${JSON.stringify(bad)}: share-count wording`).toContain("股数");
+      expect(combined(res), `--qty ${JSON.stringify(bad)}: not the 100-multiple fallback`).not.toContain("整数倍");
+      expect(countRows(dbPath), `--qty ${JSON.stringify(bad)} wrote rows`).toEqual(before);
+    }
+
+    // A non-lot quantity is rejected with an explicit 100-share message (no NaN wording).
+    const nonLot = await runCli(
+      ["lot", "buy", "--symbol", SYMBOL, "--price", "2.0001", "--qty", "150", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(nonLot.exitCode).toBe(1);
+    expect(combined(nonLot)).toContain("100 股整数倍");
+    expect(combined(nonLot)).toContain("150");
+    expect(combined(nonLot)).not.toContain("NaN");
+    expect(countRows(dbPath)).toEqual(before);
+
+    // The positional form is guarded by the same validator.
+    const positional = await runCli(["lot", "buy", SYMBOL, "2.0001", "abc", "--skip-risk", "--json"], dbPath);
+    expect(positional.exitCode).toBe(1);
+    expect(combined(positional)).toContain("股数");
+    expect(countRows(dbPath)).toEqual(before);
+  });
+
+  it("LEGAL anti-false-positive: --fee 0 and --fee 5.5 are accepted and cost_basis_unit stays finite", async () => {
+    const root = tempRoot("d10-fee-legal");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    const price = 2.0001;
+    const qty = 100;
+    for (const fee of ["0", "5.5"]) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", "159934.SZ", "--price", String(price), "--qty", String(qty), "--fee", fee, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `${res.stderr}`).toBe(0);
+      const data = JSON.parse(res.stdout).data;
+      expect(data.buy_fee).toBe(Number(fee));
+      expect(Number.isFinite(data.cost_basis_unit)).toBe(true);
+      // cost_basis_unit = (price*qty + fee) / qty, rounded to 4 decimals by computeCostBasis.
+      const expected = Math.round(((price * qty + Number(fee)) / qty) * 10000) / 10000;
+      expect(data.cost_basis_unit).toBe(expected);
+    }
+  });
+
+  it("LEGAL anti-false-positive: --qty 100 and --qty 200 are accepted and the written quantity is exact", async () => {
+    const root = tempRoot("d10-qty-legal");
+    const dbPath = join(root, "ledger.db");
+    await seedLedger(dbPath);
+
+    for (const qty of [100, 200]) {
+      const res = await runCli(
+        ["lot", "buy", "--symbol", "159934.SZ", "--price", "7.10", "--qty", String(qty), "--fee", "0", "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `${res.stderr}`).toBe(0);
+      const data = JSON.parse(res.stdout).data;
+      expect(data.buy_quantity).toBe(qty);
+      expect(Number.isFinite(data.cost_basis_unit)).toBe(true);
+      expect(readLotRow(dbPath, data.lot_id).buy_quantity).toBe(qty);
+    }
+  });
+
+  it("guards `lot add`: --fee abc and --qty abc no longer write NaN or a silently derived quantity", async () => {
+    const root = tempRoot("d10-add");
+    const dbPath = join(root, "ledger.db");
+    const parentLotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    // `lot add --qty abc` used to fall through to a DERIVED quantity (5200 shares) and exit 0.
+    const badQty = await runCli(
+      ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--qty", "abc", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(badQty.exitCode).toBe(1);
+    expect(combined(badQty)).toContain("股数");
+    expect(countRows(dbPath)).toEqual(before);
+
+    const badFee = await runCli(
+      ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--amount", "10000", "--fee", "abc", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(badFee.exitCode).toBe(1);
+    expect(combined(badFee)).toContain("--fee");
+    expect(countRows(dbPath)).toEqual(before);
+
+    const nonLot = await runCli(
+      ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--qty", "150", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(nonLot.exitCode).toBe(1);
+    expect(combined(nonLot)).toContain("100 股整数倍");
+    expect(countRows(dbPath)).toEqual(before);
+
+    // LEGAL control: a declared amount/qty/fee combination still writes a finite cost basis.
+    const legal = await runCli(
+      ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--qty", "200", "--fee", "5.5", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(legal.exitCode, legal.stderr).toBe(0);
+    const data = JSON.parse(legal.stdout).data;
+    expect(data.buy_quantity).toBe(200);
+    expect(data.buy_fee).toBe(5.5);
+    expect(Number.isFinite(data.cost_basis_unit)).toBe(true);
+  });
+
+  it("guards `lot add --amount`: abc / 0 / negative no longer deploy the 10000 CNY default", async () => {
+    const root = tempRoot("d10-amount");
+    const dbPath = join(root, "ledger.db");
+    const parentLotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    // Same fallback branch that let `--qty abc` through: `amount > 0 ? amount : 10000` meant these
+    // three all silently bought the default 10000 CNY (5200 shares) and exited 0.
+    for (const bad of ["abc", "0", "-5000", "NaN", "Infinity", ""]) {
+      const res = await runCli(
+        ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--amount", bad, "--skip-risk", "--json"],
+        dbPath,
+      );
+      expect(res.exitCode, `--amount ${JSON.stringify(bad)} must be rejected`).toBe(1);
+      expect(combined(res)).toContain("--amount");
+      expect(countRows(dbPath), `--amount ${JSON.stringify(bad)} wrote rows`).toEqual(before);
+    }
+
+    // LEGAL control: a supplied positive amount (and an omitted one) still deploy normally.
+    const legal = await runCli(
+      ["lot", "add", "--parent-lot-id", parentLotId, "--price", "1.9", "--amount", "10000", "--fee", "0", "--skip-risk", "--json"],
+      dbPath,
+    );
+    expect(legal.exitCode, legal.stderr).toBe(0);
+    const data = JSON.parse(legal.stdout).data;
+    expect(data.buy_quantity).toBe(5200); // floor(10000 / 1.9 / 100) * 100
+    expect(Number.isFinite(data.cost_basis_unit)).toBe(true);
+  });
+
+  it("guards `lot close`: --fee abc / --qty abc are clean pre-write rejections", async () => {
+    const root = tempRoot("d10-close");
+    const dbPath = join(root, "ledger.db");
+    const lotId = await seedLedger(dbPath);
+    const before = countRows(dbPath);
+
+    // Before the guard this died mid-write with `NOT NULL constraint failed: lots.remaining_quantity`.
+    const badQty = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "abc", "--json"], dbPath);
+    expect(badQty.exitCode).toBe(1);
+    expect(combined(badQty)).toContain("股数");
+    expect(countRows(dbPath)).toEqual(before);
+
+    for (const bad of ["0", "-100", "1.5"]) {
+      const res = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", bad, "--json"], dbPath);
+      expect(res.exitCode, `--qty ${bad}`).toBe(1);
+      expect(countRows(dbPath)).toEqual(before);
+    }
+
+    const badFee = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "100", "--fee", "abc", "--json"], dbPath);
+    expect(badFee.exitCode).toBe(1);
+    expect(combined(badFee)).toContain("--fee");
+    expect(countRows(dbPath)).toEqual(before);
+
+    // LEGAL control: a legal partial close still works and records a finite realized PnL.
+    const legal = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "100", "--fee", "0", "--json"], dbPath);
+    expect(legal.exitCode, legal.stderr).toBe(0);
+    const data = JSON.parse(legal.stdout).data;
+    expect(data.close_quantity).toBe(100);
+    expect(Number.isFinite(data.realized_pnl)).toBe(true);
+  });
+
+  it("LEGAL anti-false-positive: `lot close --qty 1` (odd lot) is still accepted", async () => {
+    const root = tempRoot("d10-close-odd");
+    const dbPath = join(root, "ledger.db");
+    const lotId = await seedLedger(dbPath);
+
+    // A 1-share remainder is a real order; the 100-share board lot applies to OPENING paths only.
+    // tests/substitute_core_quota.test.ts depends on this reaching the quota guard.
+    const res = await runCli(["lot", "close", "--lot-id", lotId, "--price", "7.05", "--qty", "1", "--json"], dbPath);
+    expect(res.exitCode, res.stderr).toBe(0);
+    expect(JSON.parse(res.stdout).data.close_quantity).toBe(1);
+  });
+});
 
 describe("anti-false-positive: plain invocations without optional flags still exit 0", () => {
   it("lot buy / lot list / position / stats / scan / dividend list all exit 0", async () => {

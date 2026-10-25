@@ -354,6 +354,73 @@ export function validateScanThresholds(
   return { thresholds: parsed as Record<string, number> };
 }
 
+/**
+ * D-10 (`--fee`): a fee must be a finite, non-negative amount. `0` is legal (fee-free fills).
+ * `parseFloat("abc")` yields NaN, which used to be written straight into `buy_fee` and
+ * `cost_basis_unit` while the command still exited 0.
+ */
+export function validateFee(raw: unknown): { fee?: number; error?: string } {
+  if (raw === undefined) return {};
+  const text = String(raw).trim();
+  const reject = (shown: string): { error: string } => ({
+    error: `--fee 必须是 >= 0 的有限数值（单位: 元，可为 0），收到: ${shown}`,
+  });
+  if (text === "") return reject("(空值)");
+  // Decimal literal only: rejects NaN / Infinity / negative / hex / exponent / words up front.
+  if (!/^\+?(?:\d+\.?\d*|\.\d+)$/.test(text)) return reject(text);
+  const fee = Number(text);
+  if (!Number.isFinite(fee) || fee < 0) return reject(text);
+  return { fee };
+}
+
+/**
+ * D-10 (`--qty`): a share count must be a finite positive integer. For the OPENING paths
+ * (`lot buy` / `lot add`) it must also be a whole 100-share board lot, mirroring the engine's own
+ * contract — the old code either fell through to the misleading "100 的整数倍" message (NaN) or
+ * silently substituted a derived quantity (`lot add --qty abc` wrote 5200 shares!). `lot close`
+ * keeps odd-lot closes legal (a 1-share remainder is a real order), so there `requireLotUnit` is
+ * false and only the NaN / zero / negative / fractional guard applies.
+ */
+export function validateQuantity(
+  raw: unknown,
+  label = "--qty",
+  requireLotUnit = true,
+): { quantity?: number; error?: string } {
+  if (raw === undefined) return {};
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) {
+    return { error: `${label} 必须为正整数股数（单位: 股），收到: ${text === "" ? "(空值)" : text}` };
+  }
+  const quantity = Number(text);
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    return { error: `${label} 必须为正整数股数（单位: 股），收到: ${text}` };
+  }
+  if (requireLotUnit && quantity % 100 !== 0) {
+    return { error: `${label} 必须是 100 股整数倍（一手 = 100 股），收到: ${quantity} 股` };
+  }
+  return { quantity };
+}
+
+/**
+ * D-10 sibling guard (`lot add --amount`): the SAME 48h-fallback branch that let `--qty abc` slip
+ * through (`if (!quantity || quantity <= 0) { baseAmount = amount > 0 ? amount : 10000 }`) turned
+ * `--amount abc` / `0` / `-5000` into a silent deployment of the 10000 CNY default (5200 shares).
+ * A supplied amount must therefore be a finite positive number; an OMITTED `--amount` keeps the
+ * documented "deploy 10000 by default" behaviour untouched.
+ */
+export function validateAmount(raw: unknown): { amount?: number; error?: string } {
+  if (raw === undefined) return {};
+  const text = String(raw).trim();
+  const reject = (shown: string): { error: string } => ({
+    error: `--amount 必须是 > 0 的有限数值（单位: 元），收到: ${shown}`,
+  });
+  if (text === "") return reject("(空值)");
+  if (!/^\+?(?:\d+\.?\d*|\.\d+)$/.test(text)) return reject(text);
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount <= 0) return reject(text);
+  return { amount };
+}
+
 /** Value-level contract violation for a command path, resolved before the ledger is opened. */
 export function findFlagValueError(commandPath: string, args: string[]): string | null {
   if (commandPath === "stats") {
@@ -361,6 +428,21 @@ export function findFlagValueError(commandPath: string, args: string[]): string 
   }
   if (commandPath === "scan") {
     return validateScanThresholds(readFlagValue(args, "thresholds")).error ?? null;
+  }
+  // D-10: `--fee` / `--qty` are numeric and ledger-poisoning when NaN, so they are vetted here too.
+  if (commandPath === "lot buy" || commandPath === "lot add" || commandPath === "lot close") {
+    const feeError = validateFee(readFlagValue(args, "fee")).error;
+    if (feeError) return feeError;
+    const qtyError = validateQuantity(
+      readFlagValue(args, "qty"),
+      "--qty",
+      commandPath !== "lot close",
+    ).error;
+    if (qtyError) return qtyError;
+    if (commandPath === "lot add") {
+      const amountError = validateAmount(readFlagValue(args, "amount")).error;
+      if (amountError) return amountError;
+    }
   }
   return null;
 }
@@ -1154,10 +1236,19 @@ async function handleLotBuy(engine: TraderEngine, args: string[]): Promise<void>
 
     const symbol = symbolArg;
     const price = parseFloat(priceArg);
-    const qty = parseInt(qtyArg, 10);
+    // D-10: vet the share count and the fee before any write. Both accept a flag (`--qty` /
+    // `--fee`) and `--qty` also has a positional form, so the label names whichever was used.
+    const qtyResult = validateQuantity(
+      qtyArg,
+      values.qty !== undefined ? "--qty" : "--qty（或位置参数 3 <qty>）",
+    );
+    if (qtyResult.error) throw new Error(qtyResult.error);
+    const qty = qtyResult.quantity!;
     const account = values.account ? (values.account as string).trim() : undefined;
     const reason = values.reason !== undefined ? (values.reason as string) : undefined;
-    const fee = values.fee ? parseFloat(values.fee as string) : undefined;
+    const feeResult = validateFee(values.fee);
+    if (feeResult.error) throw new Error(feeResult.error);
+    const fee = feeResult.fee;
     const time = values.time ? new Date(values.time as string) : undefined;
     const parent = values.parent as string | undefined;
     const skipRisk = Boolean(values["skip-risk"]);
@@ -1225,11 +1316,19 @@ async function handleLotAdd(engine: TraderEngine, args: string[]): Promise<void>
     }
 
     const price = parseFloat(priceArg);
-    const amount = values.amount ? parseFloat(values.amount as string) : undefined;
-    const qty = values.qty ? parseInt(values.qty as string, 10) : undefined;
+    const addAmountResult = validateAmount(values.amount);
+    if (addAmountResult.error) throw new Error(addAmountResult.error);
+    const amount = addAmountResult.amount;
+    // D-10: `lot add --qty abc` used to fall through to a DERIVED quantity (`!NaN` is true) and
+    // silently write thousands of shares; `--fee abc` wrote NaN into cost_basis_unit.
+    const addQtyResult = validateQuantity(values.qty, "--qty");
+    if (addQtyResult.error) throw new Error(addQtyResult.error);
+    const qty = addQtyResult.quantity;
     const account = values.account ? (values.account as string).trim() : undefined;
     const reason = values.reason !== undefined ? (values.reason as string) : undefined;
-    const fee = values.fee ? parseFloat(values.fee as string) : undefined;
+    const addFeeResult = validateFee(values.fee);
+    if (addFeeResult.error) throw new Error(addFeeResult.error);
+    const fee = addFeeResult.fee;
     const time = values.time ? new Date(values.time as string) : undefined;
     const skipRisk = Boolean(values["skip-risk"]);
 
@@ -1383,10 +1482,22 @@ async function handleLotClose(engine: TraderEngine, args: string[]): Promise<voi
 
     const lotId = lotIdArg;
     const price = parseFloat(priceArg);
-    const qty = qtyArg !== undefined ? parseInt(qtyArg, 10) : undefined;
+    // D-10: an omitted `--qty` still means "close the whole remaining position". When supplied it
+    // must be a positive whole share count — `lot close --qty abc` used to blow up mid-write with
+    // `NOT NULL constraint failed: lots.remaining_quantity` instead of a clean pre-write rejection.
+    // Odd-lot closes stay legal here (a 1-share remainder is a real order), hence requireLotUnit=false.
+    const closeQtyResult = validateQuantity(
+      qtyArg,
+      values.qty !== undefined ? "--qty" : "--qty（或位置参数 3 <qty>）",
+      false,
+    );
+    if (closeQtyResult.error) throw new Error(closeQtyResult.error);
+    const qty = closeQtyResult.quantity;
     const substituteCore = Boolean(values["substitute-core"]);
     const reason = values.reason !== undefined ? (values.reason as string) : undefined;
-    const fee = values.fee ? parseFloat(values.fee as string) : undefined;
+    const closeFeeResult = validateFee(values.fee);
+    if (closeFeeResult.error) throw new Error(closeFeeResult.error);
+    const fee = closeFeeResult.fee;
     const time = values.time ? new Date(values.time as string) : undefined;
     const account = values.account ? (values.account as string).trim() : undefined;
 
