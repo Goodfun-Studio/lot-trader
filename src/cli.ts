@@ -20,6 +20,12 @@ import { dirname, isAbsolute, join, resolve } from "path";
 
 const DASHBOARD_DEFAULT_OUT = "lot-trader-global-dashboard.html";
 
+/**
+ * Default probe base baked into the generated dashboard page. Kept in lockstep with
+ * `DEFAULT_SERVE_HOST`/`DEFAULT_SERVE_PORT` so "no --api-base" means "do not change anything".
+ */
+const DASHBOARD_DEFAULT_API_BASE = `http://${DEFAULT_SERVE_HOST}:${DEFAULT_SERVE_PORT}`;
+
 const HELP_FLAGS = new Set(["-h", "--help"]);
 
 /** True when `-h` / `--help` appears anywhere in the token list. */
@@ -89,10 +95,22 @@ type CliFlagSpec =
   | { type: "boolean"; short?: string; default?: boolean };
 
 /**
- * The `dashboard` subcommand block is intentionally absent: it belongs to the dashboard line and
- * must not be modified here, so its arguments stay exactly as they were.
+ * The `dashboard` block lives here too: the subcommand takes its declared flags from this table
+ * like every other path, so an undeclared flag (`trade dashboard --zzz-bogus`, which used to be
+ * swallowed silently and still exit 0) is now rejected before the ledger is ever opened.
  */
 export const CLI_FLAG_SPECS: Record<string, Record<string, CliFlagSpec>> = {
+  dashboard: {
+    out: { type: "string", short: "o" },
+    open: { type: "boolean", default: false },
+    template: { type: "string", short: "t" },
+    db: { type: "string" },
+    token: { type: "string" },
+    "token-file": { type: "string" },
+    "scripts-dir": { type: "string" },
+    "api-base": { type: "string" },
+    json: { type: "boolean", default: false },
+  },
   serve: {
     port: { type: "string", short: "p" },
     host: { type: "string" },
@@ -541,8 +559,34 @@ export function validateCap(raw: unknown, label: string): { cap?: number; error?
   return { cap: parsed.value };
 }
 
+/**
+ * D-08 (`dashboard --api-base`): the probe base baked into the generated page must be an absolute
+ * http(s) origin — scheme + host + optional port, no path / query / fragment and no character that
+ * could escape the JS string literal it lands in. A typo'd base used to be impossible to express
+ * at all (the address was hardcoded), so the flag is the only new surface: refusing garbage here
+ * is what keeps `--api-base http://127.0.0.1:18080` from silently probing the wrong endpoint.
+ */
+export const API_BASE_PATTERN = /^https?:\/\/[A-Za-z0-9\[](?:[A-Za-z0-9\-.:\[\]]*)\/?$/;
+
+export function validateApiBase(raw: unknown): { apiBase?: string; error?: string } {
+  if (raw === undefined) return {};
+  const text = String(raw).trim();
+  if (text === "") {
+    return { error: `--api-base 不能为空（省略该参数即使用默认值 ${DASHBOARD_DEFAULT_API_BASE}）` };
+  }
+  if (!API_BASE_PATTERN.test(text)) {
+    return {
+      error: `--api-base 必须是形如 ${DASHBOARD_DEFAULT_API_BASE} 的探活基址（仅 http/https + 主机[:端口]，不含路径 / 查询串），收到: ${text}`,
+    };
+  }
+  return { apiBase: text };
+}
+
 /** Value-level contract violation for a command path, resolved before the ledger is opened. */
 export function findFlagValueError(commandPath: string, args: string[]): string | null {
+  if (commandPath === "dashboard") {
+    return validateApiBase(readFlagValue(args, "api-base")).error ?? null;
+  }
   if (commandPath === "stats") {
     return validateStatsDays(readFlagValue(args, "days")).error ?? null;
   }
@@ -743,7 +787,7 @@ async function handleServe(args: string[], explicitDb?: string): Promise<void> {
 
 function printDashboardHelp(): void {
   console.log(`usage: trade dashboard [-h] [--out <path>] [--open] [--template <path>] [--db <path>]
-                         [--token <string>] [--token-file <path>]
+                         [--token <string>] [--token-file <path>] [--api-base <url>]
 
 Global Interactive HTML Dashboard Generator
 
@@ -754,6 +798,10 @@ options:
   --db PATH         SQLite database path (default: $LOT_TRADER_DB / $TRADE_DB_PATH / ~/.trade/trade.db)
   --token TOKEN     Session token to embed (default: read the credential file below)
   --token-file PATH Credential file (default: $LOT_TRADER_TOKEN_FILE / ~/.lot-trader/session.token)
+  --api-base URL    Probe base the page heartbeats against (default: ${DASHBOARD_DEFAULT_API_BASE}).
+                    Pass the address \`trade serve\` is actually listening on, e.g.
+                    \`trade serve --port 18080\` + \`--api-base http://127.0.0.1:18080\`,
+                    so the page can leave standalone mode without binding the default port.
   --json            Emit structured JSON result instead of human readable text
   -h, --help        show this help message and exit
 
@@ -1097,6 +1145,7 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
       token: { type: "string" },
       "token-file": { type: "string" },
       "scripts-dir": { type: "string" },
+      "api-base": { type: "string" },
       json: { type: "boolean", default: false },
     },
     strict: false,
@@ -1105,6 +1154,9 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
   const isJson = Boolean(values.json);
   const outPath = resolve((values.out as string | undefined) || DASHBOARD_DEFAULT_OUT);
   const dbPath = resolveDashboardDb(explicitDb ?? (values.db as string | undefined));
+  // D-08: pass the caller's probe base straight through to the generator. Absent => the flag is
+  // not forwarded at all, so the generator's own default (127.0.0.1:8080) is what lands in the page.
+  const apiBase = ((values["api-base"] as string | undefined) ?? "").trim();
 
   try {
     const { scriptPath, templatePath } = resolveDashboardScripts(values["scripts-dir"] as string | undefined);
@@ -1131,6 +1183,9 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
     // Credential hand-off: `trade dashboard` embeds the same token `trade serve` publishes,
     // so the generated page can authenticate against the local engine without user input.
     const generatorArgs = [scriptPath, "--out", outPath, "--template", template, "--db", dbPath];
+    if (apiBase) {
+      generatorArgs.push("--api-base", apiBase);
+    }
     const explicitToken = ((values.token as string | undefined) ?? "").trim();
     const tokenFileArg = ((values["token-file"] as string | undefined) ?? "").trim();
     const tokenFile = resolveSessionTokenFile(tokenFileArg || undefined);
@@ -1162,7 +1217,14 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
     ]);
 
     if (exitCode !== 0) {
-      throw new Error(`Dashboard generator failed (exit ${exitCode}):\n${(stderr || stdout).trim()}`);
+      // The generator reports expected failures as one clean Chinese line on stderr; surface it
+      // verbatim instead of burying it behind a second English wrapper.
+      const detail = (stderr || stdout).trim();
+      throw new Error(
+        detail
+          ? `看板生成器执行失败 (exit ${exitCode}): ${detail}`
+          : `看板生成器执行失败 (exit ${exitCode})（详见上方生成器错误输出）`,
+      );
     }
 
     if (!existsSync(outPath)) {
@@ -1185,6 +1247,7 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
             script: scriptPath,
             template,
             db: dbPath,
+            api_base: apiBase || DASHBOARD_DEFAULT_API_BASE,
             bytes: size,
             opened: Boolean(values.open),
             token_file: tokenFile,
@@ -1197,6 +1260,7 @@ async function handleDashboard(args: string[], explicitDb?: string): Promise<voi
       console.log(`   脚本: ${scriptPath}`);
       console.log(`   模板: ${template}`);
       console.log(`   数据: ${dbPath}`);
+      console.log(`   探活基址: ${apiBase || DASHBOARD_DEFAULT_API_BASE}`);
       console.log(
         `   凭证: ${
           tokenSource === "explicit"

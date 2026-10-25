@@ -931,7 +931,10 @@
     (function (root) {
       'use strict';
 
-      var LOCAL_API_BASE = 'http://127.0.0.1:8080';
+      // Probe base for the local engine. `trade dashboard` substitutes the address the caller
+      // actually passed (--api-base), defaulting to `trade serve`'s default 127.0.0.1:8080.
+      // Kept as a quoted placeholder so the raw template stays valid, evaluable JavaScript.
+      var LOCAL_API_BASE = '{{LOCAL_API_BASE}}';
       var QUOTE_REFRESH_MS = 5000;      // 交易时段批量轮询周期
       var HEARTBEAT_MS = 3000;          // 本地引擎心跳探针周期
       var IDLE_REFRESH_MS = 60000;      // 非交易时段休眠降频
@@ -2063,7 +2066,7 @@
       lastQuoteAt: 0,
       lastError: '',
       appliedQuotes: 0,
-      localBase: LCR ? LCR.LOCAL_API_BASE : 'http://127.0.0.1:8080',
+      localBase: LCR ? LCR.LOCAL_API_BASE : '{{LOCAL_API_BASE}}',
       previousPrices: {},
       quoteTimer: null,
       heartbeatTimer: null,
