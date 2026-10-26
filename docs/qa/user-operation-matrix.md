@@ -396,8 +396,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 | `SERVE-ENTROPY-2` | `trade serve` | `--db --host --json --port --token-file` | **0**（各表前后相等） | 是 | 规则文档 | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-ENTROPY-2.stdout` | **PASS** | exit `0` · Δ **0**（各表前后相等） | 随机凭据样本之二。 |
 | `SERVE-ENTROPY-3` | `trade serve` | `--db --host --json --port --token-file` | **0**（各表前后相等） | 是 | 规则文档 | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-ENTROPY-3.stdout` | **PASS** | exit `0` · Δ **0**（各表前后相等） | 随机凭据样本之三。 |
 | `SERVE-DEFAULT-TOKENFILE` | `trade serve` | `--db --host --json --port` | **0**（各表前后相等） | 是 | 规则文档 | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DEFAULT-TOKENFILE.stdout` | **PASS** | exit `0` · Δ **0**（各表前后相等） | 把 HOME 重定向到沙箱后不传凭据文件参数：产品按默认路径写凭据，证明默认路径的派生方式，且真实凭据目录全程未被触碰。 |
-| `SERVE-8080-LINKED` | `trade serve` | `--db --host --port --token-file` | — | 是 | §0 分类规则 | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-8080-LINKED.stdout` | **BLOCKED** | exit `BLOCKED` · Δ — | **BLOCKED — 缺失能力**：看板探活地址固定为某个被本话题端口边界禁止的端口；缺失能力：允许绑定该端口的授权，或看板生成器的基址覆盖参数（当前不存在）。 期望来源：§0 分类规则 |
-| `SERVE-DUAL-MODE-GREENLIGHT` | `trade serve` | `—` | — | 是 | §0 分类规则 | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DUAL-MODE-GREENLIGHT.stdout` | **BLOCKED** | exit `BLOCKED` · Δ — | **BLOCKED — 缺失能力**：需要无头浏览器读取 DOM 指示灯状态，本线未获浏览器驱动授权；且叠加了固定端口的阻塞。 期望来源：§0 分类规则 |
+| `SERVE-8080-LINKED` | `trade serve` | `--db --host --port --token-file` | — | 是 | L5 `E2E-N-96`（`dashboard --help` 声明 `--api-base`；产物探活基址 = 传入值） | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-8080-LINKED.stdout`（原 BLOCKED 判定）；解除依据：`docs/qa/evidence/tp-5a3bfad8-L2-20261026-103214-commit-c895274f/E2E-N-96.json` | **PASS** | exit `0` · Δ **0**（各表前后相等） | **已解除（D-08 修复，`c895274`）**：看板探活基址改由 `--api-base <url>` 提供，可用 18000–18999 内的实际端口覆盖，不再需要 8080 授权。L5 实测 `LOCAL_API_BASE = 'http://127.0.0.1:18436'`（= 传入值）、六表 Δ 0。 |
+| `SERVE-DUAL-MODE-GREENLIGHT` | `trade serve` | `—` | — | 是 | L5 `E2E-N-97`（双模冒烟：顶栏转绿 + 停机平滑降级） | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DUAL-MODE-GREENLIGHT.stdout`（原 BLOCKED 判定）；解除依据：`docs/qa/evidence/tp-5a3bfad8-L2-20261026-103214-commit-c895274f/E2E-N-97.json` | **PASS** | exit `0` · Δ **0**（各表前后相等） | **已解除（`c895274`）**：无头浏览器在本线可用（`E2E-P-17` 已在用），叠加的固定端口阻塞随 D-08 一并消失。L5 实测 serve(18186) + `--api-base` → 顶栏 `class=local` +「本地引擎已联动」，停机后同页降级 `standalone`，两态 DOM >1000 字符且 NaN=0。 |
 | `SERVE-DEG-SEED` | `trade account add` | `--db --name` | 建库 + 初始化 schema | 是 | help | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DEG-SEED.stdout` | **PASS** | exit `0` · Δ 建库 + 初始化 schema |  |
 | `SERVE-DEG-BUY` | `trade lot buy` | `--account --db --price --qty --symbol` | `lots`+1、`trades`+1 | 是 | help | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DEG-BUY.stdout` | **PASS** | exit `0` · Δ `lots`+1、`trades`+1 |  |
 | `SERVE-DEG-CLOSE` | `trade lot close` | `--db --lot-id --price` | `trades`+1 | 是 | help | `docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/SERVE-DEG-CLOSE.stdout` | **PASS** | exit `0` · Δ `trades`+1 |  |
@@ -423,7 +423,7 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 ## 11. 守卫清单（G-xx）
 
-`G-01`~`G-44` 的类型与触发条件与第 1 轮一致（逐条对照见 §16；`G-45` 为本轮新增的价格守卫）。违规侧与合法侧结论都由推导得出，不留占位符。
+`G-01`~`G-44` 的类型与触发条件与第 1 轮一致（逐条对照见 §16）；`G-45`（价格有限正数）与 `G-46`（数值旗标字面量层）为后续 L1/L5 新增守卫。**本清单合计 46 条（`G-01`~`G-46`）**，严格成对类型（拦截 / 状态转换 / 错误码映射）全部成对（checker `unpaired=0`）。违规侧与合法侧结论都由推导得出，不留占位符。
 
 | G-ID | 类型 | 所属操作行 | 触发条件 | 预期输出 | 实测摘要（证据原文摘录） | 违规侧结论 | 合法侧结论 | 两侧归类理由 | 证据 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -447,8 +447,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 | **G-18** | 拦截（边界） | `RISK-BLOCK-OVER` `RKO-OVER-30PCT` `RISKSAME-HUGE` `RISKSAME-READBACK` | 在同一标的里持续累加到很大的金额，而组合中没有其他标的 | 该硬顶是跨标的组合窗口口径，不是单标的绝对金额上限，因此同标的累加不应触发它 | `RISK-BLOCK-OVER`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 建仓失败: 单标的持仓硬顶风控拦截：买入后标的 159937.SZ 估算持仓占比为 33.33%，超过 30.00% 组合级硬顶红线 (标的总额 1400.00 / 组合总值 4200.00)！ <br>`RKO-OVER-30PCT`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 建仓失败: 单标的持仓硬顶风控拦截：买入后标的 159915.SZ 估算持仓占比为 30.00%，超过 30.00% 组合级硬顶红线 (标的总额 3000.50 / 组合总值 10000.50)！ <br>`RISKSAME-HUGE`: exit `0` · Δ `lots`+1、`trades`+1 <br>`RISKSAME-READBACK`: exit `0` · Δ **0**（各表前后相等） | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝跨标的越线（应拒绝）；合法侧＝同标的累加（应放行并完成落库，这正是本守卫的命题）。 | `RISK-BLOCK-OVER.stderr`、`RKO-OVER-30PCT.stderr`、`RISKSAME-HUGE.stdout`、`RISKSAME-READBACK.stdout` |
 | **G-19** | 拦截 | `ADD-COOLDOWN-BLOCK` | 同一血缘链在冷却窗口内再次加仓 | 拒绝加仓、文案给出冷却窗口与剩余时长、血缘链批次数不变 | `ADD-COOLDOWN-BLOCK`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 加仓失败: 加仓防抖冷却窗口守卫拦截：同源血缘链批次 LOT-20261022-001 (L1) 于 2026-10-22T14:21:28.028Z 已执行加仓，尚在 48 小时 (2 个交易日) 防抖冷却窗口内 (剩余 48.0 小 <br>`ADD-AFTER-48H`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-COOLDOWN-BLOCK` ⇒ 「于 2026-10-22T14:21:28.028Z 已执行加仓」 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝冷却窗口内加仓（应拒绝）；合法侧＝窗口外加仓（应放行并生成子批次）。 | `ADD-COOLDOWN-BLOCK.stderr` |
 | **G-20** | 状态转换 | `ADD-AFTER-48H` `ADD-P2-L1` | 血缘链最近一次加仓已在冷却窗口之外 | 放行并生成子批次，层级在父批次基础上递增 | `ADD-COOLDOWN-BLOCK`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 加仓失败: 加仓防抖冷却窗口守卫拦截：同源血缘链批次 LOT-20261022-001 (L1) 于 2026-10-22T14:21:28.028Z 已执行加仓，尚在 48 小时 (2 个交易日) 防抖冷却窗口内 (剩余 48.0 小 <br>`ADD-AFTER-48H`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-P2-L1`: exit `0` · Δ `lots`+1、`trades`+1 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝冷却窗口内加仓（应拒绝）；合法侧＝窗口外加仓（应放行并生成子批次、层级递增）。 | `ADD-COOLDOWN-BLOCK.stderr`、`ADD-AFTER-48H.stdout`、`ADD-AFTER-48H-POS.stdout` |
-| **G-21** | 拦截（可绕过） | `ADD-TIME-FORGERY` `ADD-FORGED-INVISIBLE` | 把本次加仓的成交时间写成未来值，从而让冷却判断以为已过窗口 | 未来成交时间应被拒绝：冷却判断应以真实时钟为准，`--time` 不得晚于现在 | `ADD-TIME-FORGERY`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-FORGED-INVISIBLE`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-AFTER-48H`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-TIME-FORGERY` ⇒ 「批次ID: LOT-20261024-001」 | 违规侧：**存在未达标项**（ADD-TIME-FORGERY、ADD-FORGED-INVISIBLE） | 合法侧：全部放行，未被误杀 | 违规侧＝用未来成交时间绕过冷却的加仓（应拒绝）；合法侧＝真实时间上已过窗口的加仓（应放行并生成子批次）。 | `ADD-TIME-FORGERY.stdout`、`ADD-FORGED-INVISIBLE.stdout` |
-| **G-22** | 拦截 | `BUY-NON-ROUND` `BUY-NEG-QTY` `BUY-ZERO-QTY` `ADD-NON-ROUND-QTY` | 股数不是最小交易单位的整数倍，或不是正数 | 拒绝建仓/加仓且不落库 | `BUY-NON-ROUND`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 建仓失败: 买入数量必须为 100 的整数倍 (一手单位)，当前输入: 150 <br>`BUY-NEG-QTY`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 建仓失败: 买入数量必须大于 0 <br>`BUY-ZERO-QTY`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 建仓失败: 买入数量必须大于 0 <br>`ADD-NON-ROUND-QTY`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 加仓失败: 买入数量必须为 100 的整数倍 (一手单位)，当前输入: 150 <br>`BUY-OK-FLAGS`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-QTY-EXPLICIT`: exit `0` · Δ `lots`+1、`trades`+1 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝非整百/非正数量（应拒绝）；合法侧＝合法数量的建仓与加仓（应放行并完成落库）。 | `BUY-NON-ROUND.stderr`、`ADD-NON-ROUND-QTY.stderr` |
+| **G-21** | 拦截（可绕过） | `ADD-TIME-FORGERY` `ADD-FORGED-INVISIBLE` | 把本次加仓的成交时间写成未来值，从而让冷却判断以为已过窗口 | 未来成交时间应被拒绝：冷却判断应以真实时钟为准，`--time` 不得晚于现在 | `ADD-TIME-FORGERY`: exit `1` · Δ **0**（各表前后相等） · stdout: 「成交时间不得晚于当前时间：加仓成交时间 传入 … 晚于当前 …，已拒绝写入账本」 <br>`ADD-FORGED-INVISIBLE`: exit `1` · Δ **0**（同上一条守卫） <br>`ADD-AFTER-48H`: exit `0` · Δ `lots`+1、`trades`+1（窗口外真实时间回填仍放行） <br>L5 复核（`E2E-N-41`）: exit `1` · `lots` 2→2、`trades` 2→2；对照 `E2E-N-06`/`E2E-N-37`（48h 冷却期内真实时间加仓）仍 exit `1` · Δ 0，冷却守卫未被 D-01 修复削弱 | 违规侧：全部拦截/拒绝成功（两条伪造未来时间的加仓均 exit 1 且零写入，D-01 已修复） | 合法侧：全部放行，未被误杀 | 违规侧＝用未来成交时间绕过冷却的加仓（应拒绝）；合法侧＝真实时间上已过窗口的加仓（应放行并生成子批次）。 | `ADD-TIME-FORGERY.stdout`、`ADD-FORGED-INVISIBLE.stdout` |
+| **G-22** | 拦截 | `BUY-NON-ROUND` `BUY-NEG-QTY` `BUY-ZERO-QTY` `ADD-NON-ROUND-QTY` | 股数不是最小交易单位的整数倍，或不是正数 | 拒绝建仓/加仓且不落库 | `BUY-NON-ROUND`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--qty 必须是 100 股整数倍（一手 = 100 股），收到: 150 股」 <br>`BUY-NEG-QTY`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--qty 必须为正整数股数（单位: 股），收到: -100」 <br>`BUY-ZERO-QTY`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--qty 必须为正整数股数（单位: 股），收到: 0」 <br>`ADD-NON-ROUND-QTY`: exit `1` · Δ **0**（各表前后相等） · 同一文案（`--qty 必须是 100 股整数倍…`） <br>`BUY-OK-FLAGS`: exit `0` · Δ `lots`+1、`trades`+1 <br>`ADD-QTY-EXPLICIT`: exit `0` · Δ `lots`+1、`trades`+1 <br>L5 复核（`E2E-N-43`）: qty=150 / 0 / -100 三次均 exit `1` · 六表 Δ 0 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝非整百/非正数量（应拒绝）；合法侧＝合法数量的建仓与加仓（应放行并完成落库）。 | `BUY-NON-ROUND.stderr`、`ADD-NON-ROUND-QTY.stderr` |
 | **G-23** | 拦截 | `CLOSE-QTY-OVER` | 平仓数量超过剩余可用数量 | 拒绝平仓 | `CLOSE-QTY-OVER`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 平仓失败: 平仓数量 99999 超过剩余可用数量 4600 <br>`CLOSE-PARTIAL`: exit `0` · Δ `trades`+1 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝超量平仓（应拒绝）；合法侧＝部分平仓（应放行并写入成交流水）。 | `CLOSE-QTY-OVER.stderr` |
 | **G-24** | 拦截 | `CLOSE-ACCT-MISM` | 指定的账户与批次归属不符 | 拒绝平仓 | `CLOSE-ACCT-MISM`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 平仓失败: 批次账户不匹配：批次 LOT-20261022-001 属于账户 ACCA，而非指定的 ACCB <br>`CLOSE-ACCT-OK`: exit `0` · Δ `trades`+1 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝账户不符的平仓（应拒绝）；合法侧＝账户相符的平仓（应放行并写入成交流水）。 | `CLOSE-ACCT-MISM.stderr`、`CLOSE-ACCT-OK.stdout` |
 | **G-25** | 拦截 | `CLOSE-T1-LOCKED` `XACC-SUBCORE-NOFLAG` | 法定 T+1 标的当日买入、账户内没有历史底仓 | 拒绝平仓并提示可使用代冲参数 | `CLOSE-T1-LOCKED`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 平仓失败: 标的 510300.SH 为法定 T+1，当日买入份额无法直接平仓。若有可用底仓请指定 --substitute-core <br>`XACC-SUBCORE-NOFLAG`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 平仓失败: 标的 510300.SH 为法定 T+1，当日买入份额无法直接平仓。若有可用底仓请指定 --substitute-core <br>`CLOSE-SUBCORE-T1`: exit `0` · Δ `trades`+1 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝法定 T+1 当日无底仓的平仓（应拒绝）；合法侧＝底仓充足时的代冲平仓（应放行并完成平仓转换）。 | `CLOSE-T1-LOCKED.stderr` |
@@ -459,7 +459,7 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 | **G-30** | 拦截 / 状态转换 | `SCAN-TRAIL-RUN` `SCAN-TRAIL-BELOW` `SCAN-TP-RUN` | 浮盈越过激活线且自峰值回撤越过阈值 | 命中移动止盈告警并给出建议股数 | `SCAN-TRAIL-RUN`: exit `0` · Δ `signals`+1 <br>`SCAN-TRAIL-BELOW`: exit `0` · Δ **0**（各表前后相等） <br>`SCAN-TP-RUN`: exit `0` · Δ `signals`+1 | 违规侧：全部按预期处理（含标记/告警类） | 合法侧：全部放行，未被误杀 | 违规侧＝回撤越线的批次（应触发移动止盈告警）；合法侧＝回撤未越线与只有止盈信号的批次（应放行且不得误报移动止盈）。 | `SCAN-TRAIL-BELOW-ASSERT.txt`、`SCAN-TRAIL-RUN.stdout`、`SCAN-TRAIL-INJECT.after.txt`、`SCAN-TP-RUN.stdout` |
 | **G-31** | 拦截（负向防误杀） | `SCAN-TRAIL-BELOW` `SCAN-THR-DEFAULT` | 回撤低于阈值；或浮盈低于止盈线 | 不得误报告警 | `SCAN-TRAIL-RUN`: exit `0` · Δ `signals`+1 <br>`SCAN-THR-OVERRIDE`: exit `0` · Δ `signals`+1 <br>`SCAN-TRAIL-BELOW`: exit `0` · Δ **0**（各表前后相等） <br>`SCAN-THR-DEFAULT`: exit `0` · Δ **0**（各表前后相等） | 违规侧：全部按预期处理（含标记/告警类） | 合法侧：全部放行，未被误杀 | 违规侧＝越过阈值的输入（应触发告警）；合法侧＝未达阈值的输入（应放行且不告警）。 | `SCAN-TRAIL-BELOW-ASSERT.txt`、`SCAN-THR-DEFAULT.stdout` |
 | **G-32** | 状态转换 | `SCAN-TP-RUN` `SCAN-T1LOCK-RUN` `SCAN-DT-RUN` `SCAN-ADD-RUN` | 按结算机制与账户内底仓可用量分流 | 天然 T+0 命中止盈；法定 T+1 当日无底仓命中锁定；补足底仓后命中日内代冲止盈；回调命中加仓 | `SCAN-TP-RUN`: exit `0` · Δ `signals`+1 <br>`SCAN-T1LOCK-RUN`: exit `0` · Δ `signals`+1 <br>`SCAN-DT-RUN`: exit `0` · Δ `signals`+1 <br>`SCAN-ADD-RUN`: exit `0` · Δ `signals`+1 <br>**pair_na**：分流没有参数入口：四类信号各由标的的结算机制与账户内底仓决定，产品没有能让分流走错的输入；四个分支（止盈 / T+1 锁定 / 日内代冲 / 回调加仓）互为对照。 | 违规侧：pair_na（无法构造违规输入，理由见实测摘要） | 合法侧：全部放行，未被误杀 | 本守卫的命题是「四类输入各自分流到正确分支」，没有应被拒绝的输入：违规侧 pair_na。 | `SCAN-DT-RUN.stdout`、`SCAN-ADD-RUN.stdout` |
-| **G-33** | 状态转换 | `SCAN-THR-OVERRIDE` `SCAN-MENU-KEYS` | 用阈值覆盖参数调整止盈线 | 覆盖应生效，且 help 里给出的示例键必须可用 | `SCAN-MENU-KEYS`: exit `0` · Δ **0**（各表前后相等） <br>`SCAN-THR-OVERRIDE`: exit `0` · Δ `signals`+1 <br>`SCAN-THR-DEFAULT`: exit `0` · Δ **0**（各表前后相等） | 违规侧：**存在未达标项**（SCAN-MENU-KEYS） | 合法侧：全部放行，未被误杀 | 违规侧＝阈值覆盖应生效的输入（含照抄 help 示例的那次）；合法侧＝默认阈值下的输入（应放行且不告警）。 | `SCAN-THR-OVERRIDE.stdout`、`SCAN-THR-DEFAULT.stdout`、`SCAN-MENU-KEYS.stdout` |
+| **G-33** | 状态转换 | `SCAN-THR-OVERRIDE` `SCAN-MENU-KEYS` | 用阈值覆盖参数调整止盈线 | 覆盖应生效，且 help 里给出的示例键必须可用 | `SCAN-MENU-KEYS`（照抄 `scan --help` **当前**示例 `{"take_profit_min":0.05,"dip_1":-0.08}`）: exit `0` · Δ `signals`+1（命中 `TAKE_PROFIT_ALERT`） <br>`SCAN-MENU-KEYS-OLD`（D-02 修复前 help 的旧键 `{"add":-0.1,"take":0.1}`）: exit `1` · Δ **0**（键名不在读取集内，D-07 校验生效） <br>`SCAN-THR-OVERRIDE`: exit `0` · Δ `signals`+1 <br>`SCAN-THR-DEFAULT`: exit `0` · Δ **0**（各表前后相等） <br>L5 复核（`E2E-N-65`）: 现场从 help 提取示例 → exit `0` 且 +10% 批次命中止盈；旧键 → exit `1` | 违规侧：全部按预期处理（照抄 help 示例即生效；D-02 修复前的旧键被 D-07 拒） | 合法侧：全部放行，未被误杀 | 违规侧＝阈值覆盖应生效的输入（含照抄 help 示例的那次）；合法侧＝默认阈值下的输入（应放行且不告警）。 | `SCAN-THR-OVERRIDE.stdout`、`SCAN-THR-DEFAULT.stdout`、`SCAN-MENU-KEYS.stdout` |
 | **G-34** | 状态转换 | `DIV-BEFORE-POS` `DIV-ADD-FULL` `DIV-AFTER-POS` | 登记现金分红后读取持仓视图 | （本线实测：持仓成本字段不变）分红以累计现金形态出现，不冲减摊薄成本 | `DIV-BEFORE-POS`: exit `0` · Δ **0**（各表前后相等） <br>`DIV-ADD-FULL`: exit `0` · Δ `dividends`+1 <br>`DIV-AFTER-POS`: exit `0` · Δ **0**（各表前后相等） <br>**pair_na**：分红登记的参数是 help 列出的 `--symbol` / `--amount` / `--date` / `--account` / `--shares` / `--per-share` / `--notes`，没有任何一项指向成本字段；本守卫观测到的正是「成本字段不变」，所以构造不出能让它变的输入。 | 违规侧：pair_na（无法构造违规输入，理由见实测摘要） | 合法侧：全部放行，未被误杀 | 本守卫的命题是「分红不冲减成本」，分红入参没有指向成本字段的项：违规侧 pair_na。 | `DIV-COST-EFFECT-ASSERT.txt`、`DIV-COST-EFFECT.before.txt`、`DIV-COST-EFFECT.after.txt` |
 | **G-35** | 安全门 | `DASH-OUT-*` | 生成单文件看板 | 产物仅当前用户可读写，且不依赖外部静态资源 | `DASH-OUT-NONE`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-JSON`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-TOKEN`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-TOKENFILE`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-TEMPLATE`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-DOT`: exit `0` · Δ **0**（各表前后相等） | 违规侧：无对应请求 | 合法侧：全部放行，未被误杀 | 违规侧＝产物权限或外部依赖不合规（应被判不合规）；合法侧＝正常生成的单文件产物（应完成 0600 落盘且无外部依赖）。 | `DASH-ARTIFACT-FORENSICS.txt` |
 | **G-36** | 安全门 | `DASH-OUT-TOKEN` `DASH-OUT-TOKENFILE` `DASH-OUT-NONE` | 有 / 无会话凭据 | 有凭据则注入页面，无凭据则留空并回落独立模式 | `DASH-OUT-TOKEN`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-TOKENFILE`: exit `0` · Δ **0**（各表前后相等） <br>`DASH-OUT-NONE`: exit `0` · Δ **0**（各表前后相等） | 违规侧：无对应请求 | 合法侧：全部放行，未被误杀 | 违规侧＝有凭据却不注入或反之（应被判不合规）；合法侧＝按凭据有无正确注入或留空并回落独立模式。 | `DASH-ARTIFACT-FORENSICS.txt` |
@@ -470,8 +470,9 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 | **G-41** | 错误码映射 | `SERVE-PORT-CONFLICT-SECOND` | 目标端口已被占用 | 给出可读排查文案，禁止未捕获崩溃 | `SERVE-PORT-CONFLICT-SECOND`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 端口 18974 已被占用，本地引擎无法在 127.0.0.1:18974 启动。 <br>`SERVE-PORT-CONFLICT-HOLDER`: exit `0` · Δ **0**（各表前后相等） <br>`SERVE-PORT-CONFLICT-SECOND` ⇒ 「端口 18974 已被占用」 | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝端口已被占用的启动（应报错退出）；合法侧＝占用端口的占位会话（应放行并完成绑定与监听）。 | `SERVE-PORT-CONFLICT-AUDIT.txt`、`SERVE-PORT-CONFLICT-SECOND.stderr` |
 | **G-42** | 安全门 | `SERVE-ENTROPY-1` `SERVE-ENTROPY-2` `SERVE-ENTROPY-3` | 连续多次自动生成会话凭据 | 每次都是高熵随机值、互不相同、仅当前用户可读写，且停机后被删除 | `SERVE-ENTROPY-1`: exit `0` · Δ **0**（各表前后相等） <br>`SERVE-ENTROPY-2`: exit `0` · Δ **0**（各表前后相等） <br>`SERVE-ENTROPY-3`: exit `0` · Δ **0**（各表前后相等） | 违规侧：无对应请求 | 合法侧：全部放行，未被误杀 | 违规侧＝低熵或重复凭据（应被判不合规）；合法侧＝每次自动生成的高熵凭据（应完成 0600 落盘并在停机时删除）。 | `SERVE-ENTROPY-1-AUDIT.txt`、`SERVE-ENTROPY-2-AUDIT.txt`、`SERVE-ENTROPY-3-AUDIT.txt`、`SERVE-TOKEN-ENTROPY-COUNT.txt` |
 | **G-43** | 错误码映射 | `SERVE-JSON-READY` `SERVE-QUIET` `SERVE-START` | `--json` 与 `--quiet` 的输出契约 | `--quiet` 无启动横幅；`--json` 启动时一行 ready、停机追加一行 stopped | `SERVE-QUIET`: exit `0` · Δ **0**（各表前后相等） <br>`SERVE-JSON-READY`: exit `0` · Δ **0**（各表前后相等） <br>`SERVE-START`: exit `0` · Δ **0**（各表前后相等） | 违规侧：全部按预期处理（含标记/告警类） | 合法侧：全部放行，未被误杀 | 违规侧＝启用 `--quiet`/`--json` 的会话（应完成抑制与机器可读输出）；合法侧＝未使用 `--quiet` 的会话（应放行并照常打印横幅）。 | `SERVE-JSON-AND-QUIET-AUDIT.txt`、`SERVE-START.stdout` |
-| **G-44** | 错误码映射 | `SCAN-BAD-JSON` `SCAN-BAD-THRESHOLD` | 阈值参数不是合法 JSON；或阈值取值类型非法 | 非法 JSON 拒绝；非法取值类型也必须拒绝而不能静默失效 | `SCAN-BAD-THRESHOLD`: exit `0` · Δ **0**（各表前后相等） <br>`SCAN-BAD-JSON`: exit `1` · Δ **0**（各表前后相等） · stderr: ❌ 扫描信号失败: JSON Parse error: Unexpected identifier "not" <br>`SCAN-THR-OVERRIDE`: exit `0` · Δ `signals`+1 <br>`SCAN-THR-DEFAULT`: exit `0` · Δ **0**（各表前后相等） <br>`SCAN-BAD-JSON` ⇒ 「JSON Parse error: Unexpected identifier "not"」 <br>`SCAN-THR-OVERRIDE` ⇒ 「"trigger_return_rate": 0.0696」 | 违规侧：**存在未达标项**（SCAN-BAD-THRESHOLD） | 合法侧：全部放行，未被误杀 | 违规侧＝非法 JSON 与非法取值类型（应拒绝）；合法侧＝合法阈值与默认阈值（应放行且不误报）。 | `SCAN-BAD-THRESHOLD.stdout`、`SCAN-BAD-JSON.stderr`、`SCAN-THR-OVERRIDE.stdout` |
-| **G-45** | 拦截 | `PRICE-GUARD-ILLEGAL` `PRICE-GUARD-LEGAL` `BUY-PRICE-NAN` | 价格不是有限正数（非数值、零、负数） | 拒绝建仓且不落库；合法价格正常放行 | `PRICE-GUARD-ILLEGAL`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-PRICE-NAN`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-PRICE-ZERO`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-PRICE-NEG`: exit `0` · Δ `lots`+1、`trades`+1 <br>`PRICE-GUARD-LEGAL`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-OK-FLAGS`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-PRICE-NAN` ⇒ 「LOT-20261022-001」 <br>`BUY-PRICE-NAN` ⇒ 「成交单价: NaN 元」 <br>`BUY-PRICE-NAN` ⇒ 「全成本单价: NaN 元」 <br>`BUY-PRICE-ZERO` ⇒ 「成交单价: 0.0000 元」 <br>`BUY-PRICE-NEG` ⇒ 「成交单价: -2.5000 元」 <br>`BUY-PRICE-NEG` ⇒ 「规费: -0.05 元」 <br>`NAN-POLLUTION-POS` ⇒ 「"total_cost": null」 | 违规侧：**存在未达标项**（PRICE-GUARD-ILLEGAL、BUY-PRICE-NAN、BUY-PRICE-ZERO、BUY-PRICE-NEG） | 合法侧：全部放行，未被误杀 | 违规侧＝非有限正数价格（应拒绝且不落库）；合法侧＝合法价格（应放行并完成落库）。 | `PRICE-GUARD-AUDIT-CORRECTION.txt`、`NAN-RAW-ROWS.txt`、`NAN-CONTAMINATION-AUDIT.txt` |
+| **G-44** | 错误码映射 | `SCAN-BAD-JSON` `SCAN-BAD-THRESHOLD` | 阈值参数不是合法 JSON；或阈值取值类型非法 | 非法 JSON 拒绝；非法取值类型也必须拒绝而不能静默失效 | `SCAN-BAD-THRESHOLD`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--thresholds['take_profit_min'] 必须是有限数值，收到: "high"」 <br>`SCAN-BAD-JSON`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--thresholds 不是合法 JSON: not-json」 <br>`SCAN-THR-OVERRIDE`: exit `0` · Δ `signals`+1 <br>`SCAN-THR-DEFAULT`: exit `0` · Δ **0**（各表前后相等） <br>L5 复核（`E2E-N-88`）: 非法 JSON 与非法取值类型两次均 exit `1` · Δ 0 | 违规侧：全部拦截/拒绝成功（非法 JSON 与非法取值类型均 exit 1 · Δ 0，D-07 已修复） | 合法侧：全部放行，未被误杀 | 违规侧＝非法 JSON 与非法取值类型（应拒绝）；合法侧＝合法阈值与默认阈值（应放行且不误报）。 | `SCAN-BAD-THRESHOLD.stdout`、`SCAN-BAD-JSON.stderr`、`SCAN-THR-OVERRIDE.stdout` |
+| **G-45** | 拦截 | `PRICE-GUARD-ILLEGAL` `PRICE-GUARD-LEGAL` `BUY-PRICE-NAN` | 价格不是有限正数（非数值、零、负数） | 拒绝建仓且不落库；合法价格正常放行 | `PRICE-GUARD-ILLEGAL`: exit `1` · Δ **0**（各表前后相等） · stdout: 「非法成交价：--price 必须是合法数值字面量…，收到: abc」 <br>`BUY-PRICE-NAN`: exit `1` · Δ **0**（各表前后相等） · 同上（非数值字面量） <br>`BUY-PRICE-ZERO`: exit `1` · Δ **0**（各表前后相等） · stdout: 「非法成交价：--price 必须为有限正数（> 0），收到: 0」 <br>`BUY-PRICE-NEG`: exit `1` · Δ **0**（各表前后相等） · stdout: 「非法成交价：--price 必须为有限正数（> 0），收到: -2.5」 <br>`PRICE-GUARD-LEGAL`: exit `0` · Δ `lots`+1、`trades`+1 <br>`BUY-OK-FLAGS`: exit `0` · Δ `lots`+1、`trades`+1 <br>L5 复核（`E2E-N-90`）: `--price abc / 0 / -2.5` 三次均 exit `1` · 六表 Δ 0 · `库内非法价格行数 bad_rows=0`（NaN 污染路径已随 D-09 修复消失） | 违规侧：全部拦截/拒绝成功（非有限正数价格一律 exit 1 · Δ 0，D-09 已修复） | 合法侧：全部放行，未被误杀 | 违规侧＝非有限正数价格（应拒绝且不落库）；合法侧＝合法价格（应放行并完成落库）。 | `PRICE-GUARD-AUDIT-CORRECTION.txt`、`NAN-RAW-ROWS.txt`、`NAN-CONTAMINATION-AUDIT.txt` |
+| **G-46** | 拦截 | `FEE-GUARD-ILLEGAL` `QTY-GUARD-ILLEGAL` `STATS-DAYS-BAD` | **非价格类**数值旗标（`--fee` / `--qty` / `--days` 等）取非法字面量（非数值、千分位逗号、单位后缀、下划线、十六进制） | 字面量层统一拒绝：exit≠0 · 零写入 · 文案指明该旗标；等价合法写法（`0` / `5.5` / `1e3` / `7.0` / `100`）一律放行 | `FEE-GUARD-ILLEGAL`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--fee 必须是合法数值字面量（禁止千分位逗号 / 单位后缀 / 下划线 / 十六进制），收到: abc」 <br>`QTY-GUARD-ILLEGAL`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--qty 必须是合法数值字面量…，收到: abc」 <br>`STATS-DAYS-BAD`: exit `1` · Δ **0**（各表前后相等） · stdout: 「--days 必须是合法数值字面量…，收到: abc」 <br>`FEE-GUARD-LEGAL`（`--fee 0` / `--fee 5.5`）: exit `0` · Δ `lots`+1 · `cost_basis_unit` 有限正数（`--fee 5.5` 时 = price + fee/qty = 8.254） <br>`QTY-GUARD-LEGAL`（`--qty 100`）: exit `0` · Δ `lots`+1 <br>L5 复核：`E2E-N-100`（violation，exit 1 · Δ 0）/ `E2E-P-19`（legal，exit 0 · lots+1） | 违规侧：全部拦截/拒绝成功 | 合法侧：全部放行，未被误杀 | 违规侧＝非法字面量（应拒绝）；合法侧＝等价合法写法（应放行且数值正确换算） |  L5 证据 `E2E-N-100.json` / `E2E-P-19.json` |
 
 ---
 
@@ -609,6 +610,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 证据：`SCAN-MENU-KEYS.stdout`、`SCAN-THR-OVERRIDE.stdout`、`HELP-scan.stdout`
 
+**修复状态（`c895274`，L5 复核）：已修复。** `trade scan --help` 改为按实现真正读取的键逐条列出（`take_profit_min` / `trailing_activate` / `trailing_pullback` / `dip_1` / `deep_value`），示例改为 `{"take_profit_min":0.05,"dip_1":-0.08}`。配合 D-07 的键名/类型校验：照抄该示例 exit `0` 且把 +10% 批次从零信号变为 `TAKE_PROFIT_ALERT`；D-02 修复前的旧键 `{"add":-0.1,"take":0.1}` 现在 exit `1`（「--thresholds 含未知键 'add'；支持: take_profit_min, trailing_activate, trailing_pullback, dip_1, deep_value」）。L5 `E2E-N-65` PASS。
+
 #### D-03（P2）未知参数被静默忽略：分红除息日被悄悄写成默认值
 
 复现命令（取自 `DIV-ADD-DRAFTFLAG.cmd`）：
@@ -631,6 +634,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 证据：`DIV-ADD-DRAFTFLAG.stdout`、`DIV-LIST-NEG.stdout`
 
+**修复状态（`c895274`，L5 复核）：已修复。** 未声明参数一律 exit≠0 且零写入，文案为「未声明的参数 <flag>（命令: trade <cmd>）。运行 'trade <cmd> --help' 查看支持的参数。」（`E2E-N-92`：`dividend add --ex-date` exit `1`、`dividends` 保持 0 行）。**连带效应需登记**：`lot buy` 的建仓理由旗标是 `--reason`，`--buy-reason` 只属于 `lot edit`；D-03 生效后把 `--buy-reason` 传给 `lot buy` 会被判未声明参数并拒（exit `1` · Δ 0）。旧 E2E 用例 `E2E-N-55/56` 正是靠「静默忽略」才通过的（当时断言 `before=` 为空串、行快照里 `buy_reason` 为空），判据已按 help 更正为 `--reason`，两条用例现 PASS。
+
 #### D-04（P3）`dashboard --out` 指向不存在的目录时喷出解释器 traceback
 
 复现命令（取自 `DASH-OUT-BADDIR.cmd`）：
@@ -646,6 +651,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 退出码与最终错误文案都正确，但 stderr 里先输出未捕获异常的完整堆栈，再补一句友好错误，与「零未捕获异常」的口径冲突。
 
 证据：`DASH-OUT-BADDIR.stderr`
+
+**修复状态（`c895274`，L5 复核）：已修复。** `dashboard --out <不存在的目录>/x.html` 现在 exit `1` 且 stderr 无解释器堆栈（`E2E-N-93`：`不得抛出未捕获堆栈 matched=false`、六表 Δ 0），错误文案为可读的「输出目录不存在」类提示。
 
 #### D-05（P2）`stats --days` 取非数值时静默把报表清空
 
@@ -664,6 +671,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 非法天数不报错、不改文案，只把结果清空成零笔。操盘者看到零笔会误判为没有成交，而不是参数写错。
 
 证据：`STATS-DAYS-BAD.stdout`、`STATS-DEFAULT.stdout`
+
+**修复状态（`c895274`，L5 复核）：已修复。** `stats --days abc` 现在 exit `1`（「--days 必须是合法数值字面量（禁止千分位逗号 / 单位后缀 / 下划线 / 十六进制），收到: abc」）且报表保持原样（默认窗口 `total_trades=1` → 非法调用后仍 1 笔，不再静默清空）；等价的合法写法仍放行：`--days 7.0` exit `0`、`--days 1e3` exit `0`。L5 `E2E-N-94` PASS。
 
 #### D-06（P3）仓位硬顶拦截文案把比例四舍五入后与阈值并列，读起来自相矛盾
 
@@ -701,6 +710,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 证据：`SCAN-BAD-THRESHOLD.stdout`、`SCAN-THR-OVERRIDE.stdout`
 
+**修复状态（`c895274`，L5 复核）：已修复。** 阈值键名与取值类型统一校验：`{"take_profit_min":"high"}` → exit `1`「--thresholds['take_profit_min'] 必须是有限数值，收到: "high"」；未知键 → exit `1`「--thresholds 含未知键 'add'；支持: take_profit_min, trailing_activate, trailing_pullback, dip_1, deep_value」；非法 JSON → exit `1`「--thresholds 不是合法 JSON: not-json」。三次均零写入（`E2E-N-88`）；合法覆盖照常生效（`E2E-N-89`）。
+
 #### D-08（P2）看板把本地引擎探活地址写死，生成器没有端口或基址覆盖参数
 
 | 观测点 | 证据原文摘录 |
@@ -711,6 +722,8 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 生成的页面把引擎探活地址固定为一个特定端口，生成器也没有任何覆盖参数，因此引擎起在其他端口时页面永远停在独立模式且不报错；本话题的端口边界又禁止使用该固定端口，联动模式因此无法在本线验证。
 
 证据：`DASH-ARTIFACT-FORENSICS.txt`、`SERVE-8080-LINKED.stdout`
+
+**修复状态（`c895274`，L5 复核）：已修复。** 新增 `trade dashboard --api-base <url>`（help：「Probe base the page heartbeats against (default: http://127.0.0.1:8080). Pass the address `trade serve` is actually listening on …」），产物的探活基址绑定改为 `LOCAL_API_BASE = '<传入值>'`，不再写死 8080。L5 双模验证（全程在 18000–18999 端口内，未碰 8080）：`trade serve`（18186）+ `--api-base http://127.0.0.1:18186` 生成看板 → headless Chrome 读 DOM 得 `class="mode-indicator local"` + 文案「模式：本地引擎已联动」+ `live-status`「本地引擎行情 …」，DOM 139,705 字符、NaN 命中 0；`SIGTERM` 停机（exit `0`、端口释放）后重载同一页面 → `class="mode-indicator standalone"` +「轻量独立（纯前端自驱）」，DOM 139,673 字符、NaN 命中 0。对应用例 `E2E-N-96` / `E2E-N-97` 由 BLOCKED 转 **PASS**，§14.3 的 `SERVE-8080-LINKED` / `SERVE-DUAL-MODE-GREENLIGHT` 两条 BLOCKED 随之解除。
 
 #### D-09（P1）价格缺少「有限正数」校验：非数值、零、负数都被接受并写入账本
 
@@ -743,11 +756,35 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 
 **修复状态（`line/tp-458199de-L1`）：已修复。** `src/engine.ts` 新增 `assertLegalFillPrice()`，`lot buy` / `lot add` / `lot close` 三个写库入口在**任何落库动作之前**（早于账户自愈与 INSERT）断言价格为有限正数：NaN / ±Infinity / 0 / 负数一律 exit≠0 且零写入，文案含「非法成交价」。非数值批次的 `total_cost: null` / `buy_price: null` 污染路径随之消失；`lot add` 的价格断言还提前到 `amount / price` 换算之前，避免先算出 Infinity/NaN 股数。合法价格未被误杀（`2.0001`、`8.199`、`6.120` 均 exit 0 且 `--fee 0` 时 `cost_basis_unit` 等于成交价）。
 
+#### D-10（P2）非价格类数值旗标（`--fee` / `--qty` / `--days`）的字面量守卫原本**无用例覆盖**（守卫已随 round-4 字面量层落地，L5 补齐成对用例）
+
+复现（L5 核验命令，沙箱库）：
+
+```
+./trade lot buy 518880.SH --price 8.199 --qty 100 --account ACC --fee abc --skip-risk --json --db /tmp/…/db/p.db
+./trade lot buy 518880.SH --price 8.199 --qty abc --account ACC --fee 0 --skip-risk --json --db /tmp/…/db/p.db
+./trade stats --days abc --json --db /tmp/…/db/p.db
+```
+
+| 观测点 | L5 实测原文摘录 |
+|---|---|
+| `--fee abc` | exit `1` · Δ **0**（各表前后相等） · stdout: 「--fee 必须是合法数值字面量（禁止千分位逗号 / 单位后缀 / 下划线 / 十六进制），收到: abc」 |
+| `--qty abc` | exit `1` · Δ **0**（各表前后相等） · stdout: 「--qty 必须是合法数值字面量…，收到: abc」 |
+| `--days abc` | exit `1` · Δ **0**（各表前后相等） · stdout: 「--days 必须是合法数值字面量…，收到: abc」 |
+| `--fee 0` / `--fee 5.5` / `--qty 100` | exit `0` · Δ `lots`+1 · `cost_basis_unit` 有限正数（`--fee 5.5` → `8.254` = price + fee/qty） |
+| `--days 7.0` / `--days 1e3` | exit `0`（等价合法写法不被误杀） |
+
+缺陷定性（避免与「已观测到错误写入」混同）：本条**不来自线上错误观测**，而是 L5 门禁核验时对「字面量层数值契约是否覆盖**全部**数值旗标」做的用例覆盖审计——当时 `--price` 有 `G-45` 成对用例，`--fee` / `--qty` / `--days` **没有任何用例**，属「守卫无回归保护」的覆盖缺口；补测时确认守卫本身已随 round-4 字面量层落地（故**修复前无错误写入可引**，引用不了就不引）。
+
+**修复状态（`c895274`，L5 复核）：已修复（守卫已在；用例已补齐）。** 对应新增成对用例 `E2E-N-100`（violation）+ `E2E-P-19`（legal）均 PASS；守卫登记为 §11 `G-46`。
+
+证据：`E2E-N-100.json`、`E2E-P-19.json`（L5 证据目录 `docs/qa/evidence/tp-5a3bfad8-L2-20261026-103214-commit-c895274f/`）
+
 ### 14.2 非阻塞观测（输入校验一致性缺口，未升级为缺陷）
 
 | # | 观测 | 期望来源 | 证据 |
 |---|---|---|---|
-| V-01 | 未知参数与未知子动作被静默忽略：裸位置参数被忽略；未知子动作回落父级 help 且退出码为成功，而根级未知参数为失败退出 | §0 分类规则 | `ACC-LIST-FILTER.stdout`、`HELP-lot-bogus.exit` |
+| V-01 | 未知参数与未知子动作的处置已部分收敛（D-03）：已知子命令上的**未声明参数**一律 exit≠0 且零写入；**未知子动作**回落父级 help 但退出码已改为非 0（实测 `trade lot bogus` → exit `1`）；裸位置参数（`trade lot list extra` / `trade account add … extra`）仍被静默忽略、exit `0`；根级未知参数 exit `1` | §0 分类规则 | `ACC-LIST-FILTER.stdout`、`HELP-lot-bogus.exit` |
 | V-02 | 批次列表的状态枚举不做校验：非法值与大小写错误都静默返回空列表 | §0 分类规则 | `LIST-STATUS-BAD.stdout`、`LIST-STATUS-LOWER.stdout` |
 | V-03 | 标的名归一化会静默截断笔误代码，并写入 symbols 表 | §0 分类规则 | `DIV-ADD-UNKNOWN-SYM.stdout`、`DIV-ADD-UNKNOWN-SYM.rows-after.txt` |
 | V-04 | 负数金额不校验，静默回落默认金额基准 | §0 分类规则 | `ADD-AMOUNT-NEG.stdout` |
@@ -771,12 +808,17 @@ $ python3 docs/qa/evidence/tp-5a3bfad8-L1r2-20261022-222110-commit-2081243/harne
 | `CRON-NONE` | 声明性条目：本二进制不存在定时或常驻调度子命令。 |
 | `SERVE-PORT0` | `--port 0` 让操作系统分配临时端口，实测会落到 18000–18999 之外；R2 返工书要求端口限定在该区间且不得使用 `--port 0`，因此本行不再执行。 |
 | `SERVE-PORT0-HEALTH` | 依赖上一行的会话，本行随之 BLOCKED。 |
-| `SERVE-8080-LINKED` | 看板探活地址固定为某个被本话题端口边界禁止的端口；缺失能力：允许绑定该端口的授权，或看板生成器的基址覆盖参数（当前不存在）。 |
-| `SERVE-DUAL-MODE-GREENLIGHT` | 需要无头浏览器读取 DOM 指示灯状态，本线未获浏览器驱动授权；且叠加了固定端口的阻塞。 |
 | `DASH-OPEN` | `--open` 会拉起系统默认浏览器，属沙箱外 GUI 副作用，无法产出机器可读证据。 |
 | `DASH-DEFAULT-OUT` | 省略输出路径会把产物写进仓库根，污染被测工作区与被保护文件的哈希。 |
 
-10 条 BLOCKED 行同样在各自的操作行备注栏里写明了缺失能力，两处一致。
+**已于 L5（`c895274`）解除的 2 条（D-08 修复后不再缺能力）**：
+
+| OP-ID | 解除依据（可复跑） |
+|---|---|
+| `SERVE-8080-LINKED` | `trade dashboard --api-base <url>` 落地，探活基址可用 18000–18999 内的实际端口覆盖，不再需要 8080 授权。L5 `E2E-N-96` PASS：产物 `LOCAL_API_BASE = 'http://127.0.0.1:18436'`（= 传入值）、exit `0`、六表 Δ 0 |
+| `SERVE-DUAL-MODE-GREENLIGHT` | 无头浏览器在本线可用（`E2E-P-17` 已在用），叠加的固定端口阻塞随 D-08 一并消失。L5 `E2E-N-97` PASS：serve(18186) + `--api-base` → 顶栏 `class=local` + 「本地引擎已联动」，停机后同页降级 `standalone`，两态 DOM >1000 字符且 NaN=0 |
+
+8 条 BLOCKED 行同样在各自的操作行备注栏里写明了缺失能力，两处一致（原为 10 条，扣除上述 2 条已解除项）。
 
 ---
 
@@ -920,7 +962,7 @@ L1r2 前缀的目录共 4 个，其中 1 个为权威目录，其余 3 个作废
 ### 15.8 第 1 轮事故更正
 见 `isolation-incident-CORRECTION.txt`：指出第 1 轮说明里「每次 serve 都传了 `--token-file` 与 `LOT_TRADER_TOKEN_FILE`」不成立，并说明本轮改为机械强制。原文件未删未改。
 
-## 16. G-01~G-44 首轮对照
+## 16. 守卫首轮对照（首轮 `G-01`~`G-44`；`G-45` / `G-46` 为后续新增）
 
 对照源：`r1-guard-table-source.md`（第 1 轮守卫表原文，首轮表前两列是「所属操作行 | 类型」）。判定规则：类型逐字比对（忽略首轮 `→ 缺陷` 这类编辑标注）；触发条件引用的操作行按家族通配展开后与本轮覆盖集合比对。本轮丢弃的首轮操作行 **0** 处、类型变化 **0** 处、含义变化 **1** 处（三个数字都由本段之前的对照计算得出，不是人工断言）。
 
@@ -970,7 +1012,8 @@ L1r2 前缀的目录共 4 个，其中 1 个为权威目录，其余 3 个作废
 | **G-42** | 安全门 | 安全门 | 连续多次自动生成会话凭据 | 措辞调整 | 类型相同；触发条件重写，并补充了实测操作行 SERVE-ENTROPY-1, SERVE-ENTROPY-2, SERVE-ENTROPY-3 |
 | **G-43** | 错误码映射 | 错误码映射 | `--json` 与 `--quiet` 的输出契约 | 措辞调整 | 类型相同；触发条件重写，并补充了实测操作行 SERVE-START |
 | **G-44** | 错误码映射 | 错误码映射 → **缺陷** | 阈值参数不是合法 JSON；或阈值取值类型非法 | 措辞调整 | 类型相同；触发条件重写，并补充了实测操作行 SCAN-THR-DEFAULT, SCAN-THR-OVERRIDE |
-| **G-45** | 拦截 | (首轮表无此条) | 价格不是有限正数（非数值、零、负数） | 新增 | 本轮新增守卫（首轮表只到 G-44） |
+| **G-45** | 拦截 | (首轮表无此条) | 价格不是有限正数（非数值、零、负数） | 新增 | 后续新增守卫（首轮表只到 G-44）；L5 复核：违规侧全部 exit 1 · Δ 0 |
+| **G-46** | 拦截 | (首轮表无此条) | 非价格类数值旗标（`--fee` / `--qty` / `--days` 等）取非法字面量 | 新增 | L5 核验新增守卫（缺陷 D-10）；对应成对用例 `E2E-N-100` / `E2E-P-19` |
 
 含义变化/类型变化条数：**1**（G-39）。其余条目都是措辞调整：触发条件被重写得更具体、或补充了本轮实测的操作行，类型与所覆盖的操作行集合均未改变。
 

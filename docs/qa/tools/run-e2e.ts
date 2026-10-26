@@ -2,8 +2,14 @@
 /**
  * run-e2e.ts — tp-5a3bfad8 L2 `line-qa-e2e-flow` 的 E2E 用例执行器 + 证据采集器。
  *
- *   bun docs/qa/tools/run-e2e.ts              # 全量实跑（自建 /tmp 沙箱，收工删除）
- *   bun docs/qa/tools/run-e2e.ts --list       # 只列用例清单，不执行
+ *   bun docs/qa/tools/run-e2e.ts              # 全量实跑（自建 /tmp 沙箱，收工删除）；**默认只跑不改文档**
+ *   bun docs/qa/tools/run-e2e.ts --write     # 全量实跑 + 回写 docs/qa/e2e-test-flow.md 的结果 / 证据路径列
+ *   bun docs/qa/tools/run-e2e.ts --list      # 只列用例清单，不执行
+ *
+ * 文档回写契约（重要）：
+ *   - 不带 `--write`：只产出 results.json 与证据，**绝不碰** e2e-test-flow.md（防止顺手的未评审文档变更被提交）；
+ *   - 带 `--write`：跑完才回写；且仅限全量运行（筛选运行会跳过，以免把未跑用例写成 PENDING）；
+ *   - `--no-writeback`：保留为向后兼容的无操作别名（新版默认即不写）。
  *
  * 隔离铁律（每次 trade 调用都必须同时满足，否则执行器拒绝执行）：
  *   1. 带 `--db /tmp/...`（沙箱路径）；
@@ -19,7 +25,7 @@
  *     <CASE_ID>__<n>.rows-before.txt / rows-after.txt
  *     <CASE_ID>.json                             （用例级断言与证据清单）
  *     results.json                               （用例 ID → 结果 + 证据路径）
- * 并回写 docs/qa/e2e-test-flow.md 的「结果 / 证据路径」两列（不得手填）。
+ * 并仅在显式传 `--write`（且为全量运行）时回写 docs/qa/e2e-test-flow.md 的「结果 / 证据路径」两列（不得手填）。
  */
 import { spawnSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -39,18 +45,21 @@ const PROD_TOKEN_DIR = "/Users/ivywu/.lot-trader";
 const REPO_DASHBOARD = join(REPO, "lot-trader-global-dashboard.html");
 const EXPECTED_PROD_LEDGER_SHA = "1ec361a6474809794841591a5f83bbf042c0159de1536fbed379ce568a2aef59";
 const EXPECTED_DASHBOARD_SHA = "697b2a27eac0cdfb41b07a968d8534513a3383daee4b3c909d95b92c4f88e31a";
-const EXPECTED_TRADE_SHA = "3d275c9428a737243cb454dc60d33320a51318220e57c382066b1f50e13462bd";
+const EXPECTED_TRADE_SHA = "0447ac7da8f769fe89181eebe7f199e9cd57ba6b577c94cba47017b97cdd64b4";
 const PORT_MIN = 18000;
 const PORT_MAX = 18999;
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TABLES = ["accounts", "symbols", "lots", "trades", "signals", "dividends"] as const;
 type Table = typeof TABLES[number];
 const LIST_ONLY = process.argv.includes("--list");
-/** 供 L4 / 核验员使用：--out <dir> 把证据写到指定目录（沙箱仍固定在 /tmp 下，以维持 --db /tmp/… 隔离铁律）；
- *  --no-writeback 不回写 docs/qa/e2e-test-flow.md。两者都不带时行为与原先完全一致。 */
+/** 供 L4 / 核验员使用：--out <dir> 把证据写到指定目录（沙箱仍固定在 /tmp 下，以维持 --db /tmp/… 隔离铁律）。
+ *  文档回写：默认**不写**，只有显式 `--write` 才回写 docs/qa/e2e-test-flow.md。 */
 const argOf = (name: string): string | undefined => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 const OUT_DIR = argOf("--out");
-const NO_WRITEBACK = process.argv.includes("--no-writeback");
+/** 文档回写开关：默认 false（只跑不改），必须显式 `--write` 才写。 */
+const WRITE_BACK = process.argv.includes("--write");
+/** 旧旗标：新版默认即不写，保留以免既有脚本报未知参数。 */
+const LEGACY_NO_WRITEBACK = process.argv.includes("--no-writeback");
 /** 调试用：QA_E2E_ONLY=<正则> 只跑匹配的用例（正式两次实跑不带该变量，必须全量）。 */
 const ONLY = (process.env.QA_E2E_ONLY ?? "").trim();
 const selected = () => (ONLY ? CASES.filter((d) => new RegExp(ONLY).test(d.id)) : CASES);
@@ -1729,7 +1738,7 @@ C({
   id: "E2E-N-41", stage: 2, kind: "violation", guards: ["G-21"], dbSuite: "n41-future-time-bypass",
   title: "未来成交时间不得绕过 48h 冷却（缺陷 D-01 回归）",
   source: "safety-checklist.md §6.1（冷却判断应以真实时钟为准，未来成交时间不得成为绕过口）；MANUAL.md 铁律 3",
-  expect: "链上已有近期加仓时，把本次加仓 --time 写成未来值必须仍被拦截（exit≠0 · lots 不变）；现状被放行即 FAIL（缺陷 D-01）",
+  expect: "链上已有近期加仓时，把本次加仓 --time 写成未来值必须仍被拦截（exit≠0 · lots/trades 零变化）；文案指出拦截原因（冷却窗口或成交时间晚于当前）；现状被放行即 FAIL（缺陷 D-01）",
   run: async (c) => {
     await seedAcct(c);
     const cur = await currentPrice(c, "518880.SH");
@@ -1742,7 +1751,9 @@ C({
     const r = await c.trade("lot add", ["--parent-lot-id", parent, "--price", String(r4(cur * 0.98)), "--qty", "100", "--account", "ACC", "--time", future, "--fee", "0", "--skip-risk", "--json"]);
     c.expectExit(r, "nonzero", "未来成交时间的加仓必须被拦截（D-01）");
     c.expectDeltaAll(r, 0, "拦截后零写入（D-01）");
-    c.expectText(r, /防抖|48/, "文案指出 48 小时冷却（D-01）");
+    // D-01 修法为「冷却改用真实时钟 + 新增『成交时间不得晚于当前』守卫」，因此未来时间的
+    // 拦截文案改为后者；两条路径都属于合规拦截原因，断言放宽为「二者之一」。
+    c.expectText(r, /晚于当前时间|防抖|48/, "文案指出拦截原因（成交时间晚于当前 / 冷却窗口）（D-01）");
   },
 });
 
@@ -1770,14 +1781,14 @@ C({
   id: "E2E-N-43", stage: 2, kind: "violation", guards: ["G-22"], dbSuite: "n43-qty-illegal",
   title: "非法股数（非整百 / 零 / 负数）逐条拦截",
   source: "safety-checklist.md §4.1 上下文；acceptance-cases.md TC-N01（整百股数）；矩阵 G-22 预期",
-  expect: "qty=150 / 0 / -100 三次均 exit≠0 · 每次 lots/trades 零变化 · 文案含「100 的整数倍」或「必须大于 0」",
+  expect: "qty=150 / 0 / -100 三次均 exit≠0 · 每次 lots/trades 零变化 · 文案说明股数约束（「100 股整数倍」或「必须为正整数股数」）",
   run: async (c) => {
     await seedAcct(c);
     for (const q of ["150", "0", "-100"]) {
       const r = await c.trade("lot buy", ["518880.SH", "--price", "2.0000", "--qty", q, "--account", "ACC", "--fee", "0", "--skip-risk", "--json"]);
       c.expectExit(r, "nonzero", `qty=${q} 必须拦截`);
       c.expectDeltaAll(r, 0, `qty=${q} 零写入`);
-      c.expectText(r, /整数倍|大于 0/, `qty=${q} 文案说明股数约束`);
+      c.expectText(r, /整数倍|必须为正整数|大于 0/, `qty=${q} 文案说明股数约束`);
     }
   },
 });
@@ -2000,13 +2011,20 @@ C({
 
 C({
   id: "E2E-N-55", stage: 2, kind: "violation", guards: ["G-28"], dbSuite: "n55-edit-append",
-  title: "理由追加生效且会计/状态字段零漂移",
-  source: "./trade lot edit --help（--append Append to the existing thesis）；MANUAL.md 铁律 6；矩阵 G-28 预期",
-  expect: "exit 0 · 各表行数 0 变化 · buy_reason = 原值+追加值 · cost_basis_unit/status/remaining_quantity/realized_pnl 零漂移",
+  title: "理由追加生效且会计/状态字段零漂移（含 --buy-reason 的声明契约）",
+  source: "./trade lot edit --help（--append Append to the existing thesis）；./trade lot buy --help（建仓侧的理由旗标是 --reason）；MANUAL.md 铁律 6；矩阵 G-28 预期",
+  expect: "`lot buy --buy-reason` 属未声明参数必须 exit≠0 且零写入（--buy-reason 只属于 `lot edit`）· 建仓用 --reason exit 0 · edit --append exit 0 · 各表行数 0 变化 · buy_reason = 原值+追加值 · cost_basis_unit/status/remaining_quantity/realized_pnl 零漂移",
   run: async (c) => {
     await seedAcct(c);
     const cur = await currentPrice(c, "518880.SH");
-    const b = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--buy-reason", "original-thesis", "--fee", "0", "--skip-risk", "--json"]);
+    // 声明契约：`lot buy --help` 只声明 --reason；--buy-reason 是 `lot edit` 的旗标。
+    // D-03 生效后把它传给 `lot buy` 会被判为未声明参数并拒（本用例顺带把这条契约钉死，
+    // 原用例误用该旗标建仓，是靠 D-03 的静默忽略才「通过」的）。
+    const alias = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--buy-reason", "original-thesis", "--fee", "0", "--skip-risk", "--json"]);
+    c.expectExit(alias, "nonzero", "`lot buy --buy-reason` 属未声明参数，必须被拒（D-03 契约）");
+    c.expectDeltaAll(alias, 0, "未声明参数被拒后零写入");
+    c.expectText(alias, /未声明的参数|--buy-reason/, "文案指出未声明参数 --buy-reason");
+    const b = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--reason", "original-thesis", "--fee", "0", "--skip-risk", "--json"]);
     c.expectExit(b, 0);
     const lot = dataOf(c, b, "lot buy")?.lot_id;
     const q = "coalesce(buy_reason,'')||'|'||cost_basis_unit||'|'||status||'|'||remaining_quantity||'|'||realized_pnl";
@@ -2030,8 +2048,8 @@ C({
   run: async (c) => {
     await seedAcct(c);
     const cur = await currentPrice(c, "518880.SH");
-    const b = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--buy-reason", "keep-me", "--fee", "0", "--skip-risk", "--json"]);
-    c.expectExit(b, 0);
+    const b = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--reason", "keep-me", "--fee", "0", "--skip-risk", "--json"]);
+    c.expectExit(b, 0, "建仓侧理由旗标是 --reason（lot buy --help）");
     const lot = dataOf(c, b, "lot buy")?.lot_id;
     const snap = sqlOne(c.db, `select * from lots where lot_id='${lot}';`);
     const r = await c.trade("lot edit", ["--lot-id", lot, "--json"]);
@@ -2242,9 +2260,19 @@ C({
     const d = await c.trade("scan", ["--json"]);
     c.expectExit(d, 0);
     c.expectTrue("默认阈值下 +10% 无信号（前提）", !((c.json(d)?.data?.signals ?? []).some((s: any) => s.lot_id === lot)), "default scan");
-    const ex = await c.trade("scan", ["--json", "--thresholds", '{"add":-0.1,"take":0.1}']);
-    c.expectExit(ex, 0);
-    c.expectTrue("help 示例键覆盖后 +10% 应命中止盈（D-02）", (c.json(ex)?.data?.signals ?? []).some((s: any) => s.lot_id === lot && /TAKE_PROFIT/.test(String(s.signal_type))), `signals=${JSON.stringify((c.json(ex)?.data?.signals ?? []).map((s: any) => s.signal_type))}`);
+    // D-02 的判据是「help 里给出的示例可用」，所以示例必须现场从 help 取，不能再写死一份
+    // 可能过期的键集合（旧用例正是写死了 D-02 修复前的 add/take，D-07 生效后被拒 → 假 FAIL）。
+    const help = await c.trade("scan", ["--help"]);
+    c.expectExit(help, 0);
+    const m = /Example:\s*'(\{[^']+\})'/.exec(help.stdout + help.stderr);
+    c.expectTrue("scan --help 给出示例 JSON（D-02 前提）", !!m, `help=${(help.stdout + help.stderr).split("\n").slice(0, 12).join(" / ").slice(0, 240)}`);
+    const example = m ? m[1] : "";
+    const ex = await c.trade("scan", ["--json", "--thresholds", example]);
+    c.expectExit(ex, 0, `照抄 help 示例必须被接受（example=${example}）`);
+    c.expectTrue("help 示例键覆盖后 +10% 应命中止盈（D-02）", (c.json(ex)?.data?.signals ?? []).some((s: any) => s.lot_id === lot && /TAKE_PROFIT/.test(String(s.signal_type))), `example=${example} signals=${JSON.stringify((c.json(ex)?.data?.signals ?? []).map((s: any) => s.signal_type))}`);
+    const stale = await c.trade("scan", ["--json", "--thresholds", '{"add":-0.1,"take":0.1}']);
+    c.expectExit(stale, "nonzero", "D-02 修复前 help 里的旧示例键（add/take）现不在读取集内，必须被拒（D-07）");
+    c.expectTrue("旧示例键被拒后零信号", ((c.json(stale)?.data?.signals ?? []) as any[]).length === 0, `stdout=${stale.stdout.slice(0, 160)}`);
     const wk = await c.trade("scan", ["--json", "--thresholds", '{"take_profit_min":0.05}']);
     c.expectExit(wk, 0);
     c.expectTrue("按实现读取的键覆盖后命中（对照）", (c.json(wk)?.data?.signals ?? []).some((s: any) => s.lot_id === lot && /TAKE_PROFIT/.test(String(s.signal_type))), `signals=${JSON.stringify((c.json(wk)?.data?.signals ?? []).map((s: any) => s.signal_type))}`);
@@ -2766,7 +2794,9 @@ C({
     const a = dataOf(c, ok, "stats(默认)");
     c.expectTrue("前置：默认窗口有平仓战绩", Number(a?.total_trades) > 0, `total_trades=${a?.total_trades}`);
     const bad = await c.trade("stats", ["--days", "abc", "--json"]);
-    const d = dataOf(c, bad, "stats(--days abc)");
+    // 这一调用按本用例判据必须失败，因此不能用 dataOf（它断言「可解析且 code=0」）；
+    // 原写法与用例自身「非数值 --days 必须报错」的判据互相矛盾（harness bug，不是产品问题）。
+    const d = c.json(bad);
     c.expectExit(bad, "nonzero", "非数值 --days 必须报错（K-04/D-05）");
     c.expectDeltaAll(bad, 0, "零写入（K-04/D-05）");
     c.expectTrue("不得静默把报表清空成零笔（K-04/D-05）", !(bad.exit === 0 && Number(d?.total_trades) === 0 && Number(a?.total_trades) > 0), `default=${a?.total_trades} bad_exit=${bad.exit} bad=${d?.total_trades}`);
@@ -2792,22 +2822,34 @@ C({
 });
 
 C({
-  id: "E2E-N-96", stage: 3, kind: "violation", guards: [], dbSuite: "n96-dash-fixed-probe-addr",
-  title: "缺陷 D-08 回归：看板探活地址写死且生成器无基址覆盖参数",
-  source: "regression-baseline.md §3（本地引擎联动模式心跳探活 http://127.0.0.1:8080/api/health）；./trade dashboard --help（无 port/base-url 参数）",
-  expect: "BLOCKED · 话题边界禁止使用 8080，联动转绿无法在本线验证；缺失能力：允许绑定 8080 的授权，或修复 D-08（生成器提供基址/端口覆盖参数）。仅记录产物内写死探活地址与参数缺失的事实",
+  id: "E2E-N-96", stage: 3, kind: "violation", guards: [], dbSuite: "n96-dash-probe-base-override",
+  title: "缺陷 D-08 回归：看板探活基址必须可由 --api-base 覆盖（不再写死 8080）",
+  source: "regression-baseline.md §3（本地引擎联动模式心跳探活）；./trade dashboard --help（--api-base URL）；矩阵 §14.1 D-08 / §14.3 SERVE-8080-LINKED",
+  expect: "dashboard --help 声明 --api-base · 产物内绑定探活基址的本地常量等于传入值（不再写死 8080）· exit 0 · 各表行数 0 变化",
   run: async (c) => {
-    c.block("看板探活地址写死为一个本话题禁止使用的端口（8080），且生成器没有基址/端口覆盖参数（D-08）；缺失能力：8080 授权或 D-08 修复");
     await seedAcct(c);
-    const out = join(SANDBOX_ART, "n96-dash.html");
-    const r = await c.trade("dashboard", ["--out", out, "--token", "n96-token-" + "e".repeat(54), "--json"]);
-    c.expectExit(r, 0);
-    const html = readFileSync(out, "utf-8");
-    const hits = (html.match(/127\.0\.0\.1:8080/g) ?? []).length;
     const help = await c.trade("dashboard", ["--help"]);
-    c.expectTrue("产物内确实写死 127.0.0.1:8080（记录事实）", hits > 0, `hits=${hits}`);
-    c.expectTrue("生成器 help 无基址/端口覆盖参数（记录事实）", !/--port|--base-url|--base-url|--host/.test(help.stdout), `help_flags=${(help.stdout.match(/--[a-z-]+/g) ?? []).join("。")}`);
-    c.note(`产物写死探活地址命中 ${hits} 处；本话题端口边界为 18000-18999 且禁用 8080（也不用 --port 0）。`);
+    c.expectExit(help, 0);
+    c.expectText(help, /--api-base/, "help 声明 --api-base（D-08 修复的可观测面）");
+    const port = await freePort();
+    const base = `http://127.0.0.1:${port}`;
+    const out = join(SANDBOX_ART, "n96-dash.html");
+    const r = await c.trade("dashboard", ["--out", out, "--token", "n96-token-" + "e".repeat(54), "--api-base", base, "--json"]);
+    c.expectExit(r, 0);
+    c.expectDeltaAll(r, 0, "生成看板不改任何表");
+    const html = readFileSync(out, "utf-8");
+    const bind = /LOCAL_API_BASE\s*=\s*'([^']*)'/.exec(html);
+    c.expectTrue("产物内探活基址绑定到 --api-base 传入值（D-08）", !!bind && bind[1] === base, `bound=${bind ? bind[1] : "(none)"} want=${base}`);
+    c.expectTrue("探活基址不再是写死的 8080", !!bind && !/:8080\b/.test(bind[1]), `bound=${bind ? bind[1] : "(none)"}`);
+    const hits = (html.match(/127\.0\.0\.1:8080/g) ?? []).length;
+    await c.fs(`归档覆盖了探活基址的看板产物：${out}`, () => {
+      const dst = join(EVID, `${c.id}__dashboard.html`);
+      copyFileSync(out, dst);
+      const notes = join(EVID, `${c.id}__probe-base-forensics.txt`);
+      writeFileSync(notes, `out=${out}\nbytes=${statSync(out).size}\napi_base_arg=${base}\nlocal_api_base_binding=${bind ? bind[1] : "(none)"}\nliteral_8080_occurrences=${hits}（说明文本/注释允许保留，探活绑定本身已覆盖）\n`);
+      return [dst, notes];
+    });
+    c.note(`--api-base 生效：产物探活基址 = ${base}；页面内仍保留 127.0.0.1:8080 字样 ${hits} 处（说明文本与注释，非探活目标）。`);
   },
 });
 
@@ -2838,13 +2880,112 @@ C({
 
 C({
   id: "E2E-N-97", stage: 3, kind: "violation", guards: [], dbSuite: "n97-dual-mode-greenlight",
-  title: "看板与本地引擎联动转绿（双模冒烟）",
-  source: "release-gate.md Gate 4（双模冒烟）；regression-baseline.md §3（联通即转绿）；本线任务书（该类保持 BLOCKED）",
-  expect: "BLOCKED · 缺失能力：需要绑定看板写死的探活端口（话题边界禁止）或先修复缺陷 D-08；本线不得自找变通（如伪造页面探活地址）",
+  title: "看板与本地引擎联动转绿 / 停机平滑降级（双模冒烟，D-08 解阻后）",
+  source: "release-gate.md Gate 4（双模冒烟）；regression-baseline.md §3（联通即转绿，端口关闭平滑降级）；矩阵 §14.3 SERVE-8080-LINKED / SERVE-DUAL-MODE-GREENLIGHT（缺失能力由 --api-base 补齐）",
+  expect: "serve 在 18000-18999 端口就绪后，页面顶栏指示灯 class=local 且文案「本地引擎已联动」· 停机后重载同一页面平滑降级为 standalone（非白屏、无 NaN）· 停机 exit 0 且端口释放",
   run: async (c) => {
-    c.block("看板与 serve 联动转绿需要 8080（话题边界禁止）或先修复 D-08；本线保持 BLOCKED，不做变通验证");
-    c.note("独立模式（无 serve）的白屏/NaN 检查已由 E2E-P-17 用 headless 浏览器覆盖。");
-    c.expectTrue("本用例不产出可判定断言（BLOCKED）", true, "blocked");
+    await seedAcct(c);
+    const cur = await currentPrice(c, "518880.SH");
+    const b = await c.trade("lot buy", ["518880.SH", "--price", String(r4(cur)), "--qty", "100", "--account", "ACC", "--fee", "0", "--skip-risk", "--json"]);
+    c.expectExit(b, 0);
+    const s = await c.serve({});
+    c.expectTrue("引擎健康探活 200", s.healthOk === true, `healthOk=${s.healthOk} port=${s.port}`);
+    c.expectTrue("引擎端口落在 18000-18999", s.port >= PORT_MIN && s.port <= PORT_MAX, `port=${s.port}`);
+    const base = `http://127.0.0.1:${s.port}`;
+    const out = join(SANDBOX_ART, "n97-dual-mode.html");
+    const g = await c.trade("dashboard", ["--out", out, "--token-file", s.tokenFile, "--api-base", base, "--json"]);
+    c.expectExit(g, 0, "按引擎实际端口生成看板");
+    const html = readFileSync(out, "utf-8");
+    const bind = /LOCAL_API_BASE\s*=\s*'([^']*)'/.exec(html);
+    c.expectTrue("产物探活基址 = 引擎实际地址", !!bind && bind[1] === base, `bound=${bind ? bind[1] : "(none)"} want=${base}`);
+    if (!existsSync(CHROME)) { c.block(`本机未安装可用的 headless 浏览器（${CHROME} 不存在），缺失能力：浏览器驱动`); await s.stop("SIGTERM"); return; }
+    const udd = join(SANDBOX_ART, "n97-chrome-profile");
+    mkdirSync(udd, { recursive: true });
+    const bodyTextOf = (dom: string) => dom.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    // ---- ① 引擎在线：探活成功，顶栏转绿
+    const domLinked = join(SANDBOX_ART, "n97-dom-linked.html");
+    const shotLinked = join(SANDBOX_ART, "n97-shot-linked.png");
+    await c.fs(`headless chrome 加载联动模式看板 file://${out}（serve 在线，port=${s.port}）`, () => {
+      const rr = sh(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--user-data-dir=" + udd, "--virtual-time-budget=9000", "--window-size=1600,1000", "--dump-dom", "file://" + out], { timeout: 120_000 });
+      writeFileSync(domLinked, rr.stdout);
+      sh(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--user-data-dir=" + udd + "-shot", "--virtual-time-budget=9000", "--window-size=1600,1000", `--screenshot=${shotLinked}`, "file://" + out], { timeout: 120_000 });
+      const dst = join(EVID, `${c.id}__browser-dom-linked.html`);
+      copyFileSync(domLinked, dst);
+      const shotDst = join(EVID, `${c.id}__browser-screenshot-linked.png`);
+      if (existsSync(shotLinked)) copyFileSync(shotLinked, shotDst);
+      return [dst, shotDst];
+    });
+    const linked = readFileSync(domLinked, "utf-8");
+    const linkedBody = bodyTextOf(linked);
+    const linkedCls = /<span id="mode-indicator"[^>]*class="([^"]*)"/.exec(linked);
+    c.expectTrue("DOM 非空白（长度>1000）", linked.length > 1000, `dom_len=${linked.length}`);
+    c.expectTrue("顶栏指示灯 class 含 local（联动转绿）", !!linkedCls && /\blocal\b/.test(linkedCls[1]), `class=${linkedCls ? linkedCls[1] : "(none)"}`);
+    c.expectTrue("顶栏文案为「本地引擎已联动」", /本地引擎已联动/.test(linkedBody), `mode_text=${(/模式：[^<]{0,40}/.exec(linkedBody) ?? ["(none)"])[0]}`);
+    c.expectTrue("联动模式渲染文本不出现 NaN", !/NaN/.test(linkedBody), `nan_hits=${(linkedBody.match(/NaN/g) ?? []).length}`);
+    // ---- ② 引擎停机：同一页面重载 → 平滑降级，不白屏不 NaN
+    const stop = await s.stop("SIGTERM");
+    c.expectExit(stop, 0, "SIGTERM 优雅停机 exit 0");
+    c.expectTrue("停机后端口释放", (await waitPortFree(s.port, 3000)) === true, `port=${s.port}`);
+    const domDown = join(SANDBOX_ART, "n97-dom-after-stop.html");
+    await c.fs(`headless chrome 重载同一看板 file://${out}（serve 已停机，port=${s.port}）`, () => {
+      const rr = sh(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--user-data-dir=" + udd + "-down", "--virtual-time-budget=9000", "--window-size=1600,1000", "--dump-dom", "file://" + out], { timeout: 120_000 });
+      writeFileSync(domDown, rr.stdout);
+      const dst = join(EVID, `${c.id}__browser-dom-after-stop.html`);
+      copyFileSync(domDown, dst);
+      return [dst];
+    });
+    const down = readFileSync(domDown, "utf-8");
+    const downBody = bodyTextOf(down);
+    const downCls = /<span id="mode-indicator"[^>]*class="([^"]*)"/.exec(down);
+    c.expectTrue("停机后 DOM 非空白（长度>1000）", down.length > 1000, `dom_len=${down.length}`);
+    c.expectTrue("停机后平滑降级为 standalone", !!downCls && /\bstandalone\b/.test(downCls[1]), `class=${downCls ? downCls[1] : "(none)"}`);
+    c.expectTrue("降级后文案回落「轻量独立」", /轻量独立|纯前端自驱/.test(downBody), `mode_text=${(/模式：[^<]{0,40}/.exec(downBody) ?? ["(none)"])[0]}`);
+    c.expectTrue("降级后渲染文本不出现 NaN（非白屏）", !/NaN/.test(downBody), `nan_hits=${(downBody.match(/NaN/g) ?? []).length}`);
+    c.note(`联动转绿实证：port=${s.port}，页面探活基址 ${base}，顶栏 class=local 且文案「本地引擎已联动」；停机后同一页面降级为 standalone，两态 DOM 均 >1000 且无 NaN。`);
+  },
+});
+// ------------------------------------------------ D-10：--fee / --qty 字面量层数值守卫（核验中新增缺陷）
+C({
+  id: "E2E-N-100", stage: 2, kind: "violation", guards: ["G-46"], dbSuite: "n100-fee-qty-literal-illegal",
+  title: "缺陷 D-10 回归：--fee / --qty 非数值字面量必须被拒且零写入",
+  source: "本线核验新增（D-10：字面量层数值契约覆盖每个数值旗标）；./trade lot buy --help（--fee NUM / --qty N）；矩阵 G-45 家族（非有限正数/非法字面量一律拒）",
+  expect: "--fee abc 与 --qty abc 均 exit≠0 · 每次 lots/trades 零变化 · 文案指出该旗标必须是合法数值字面量",
+  run: async (c) => {
+    await seedAcct(c);
+    for (const [flag, val] of [["--fee", "abc"], ["--qty", "abc"]] as [string, string][]) {
+      const argv = ["518880.SH", "--price", "8.199", "--qty", "100", "--account", "ACC", "--fee", "0", "--skip-risk", "--json"];
+      argv[argv.indexOf(flag) + 1] = val;
+      const r = await c.trade("lot buy", argv);
+      c.expectExit(r, "nonzero", `${flag}=${val} 必须拦截（D-10）`);
+      c.expectDeltaAll(r, 0, `${flag}=${val} 零写入（D-10）`);
+      c.expectText(r, /数值字面量/, `${flag}=${val} 文案说明数值字面量约束（D-10）`);
+    }
+  },
+});
+
+C({
+  id: "E2E-P-19", stage: 2, kind: "legal", guards: ["G-46"], dbSuite: "n100-fee-qty-literal-legal",
+  title: "合法 --fee / --qty 字面量放行且全成本单价有限（字面量守卫不误伤）",
+  source: "本线核验新增（D-10 合法侧）；矩阵 BUY-OK-FLAGS（规费计入全成本单价）；acceptance-cases.md TC-01",
+  expect: "--fee 0 / --fee 5.5 / --qty 100 三次均 exit 0 · 每次 lots+1 · cost_basis_unit 为有限正数 · --fee 5.5 时 cost_basis_unit = price + fee/qty",
+  run: async (c) => {
+    await seedAcct(c);
+    const price = 8.199, qty = 100;
+    for (const [flag, val] of [["--fee", "0"], ["--fee", "5.5"], ["--qty", "100"]] as [string, string][]) {
+      const argv = ["518880.SH", "--price", String(price), "--qty", String(qty), "--account", "ACC", "--fee", "0", "--skip-risk", "--json"];
+      argv[argv.indexOf(flag) + 1] = val;
+      const r = await c.trade("lot buy", argv);
+      c.expectExit(r, 0, `${flag}=${val} 必须放行`);
+      c.expectDelta(r, "lots", 1);
+      const lot = dataOf(c, r, `lot buy(${flag}=${val})`)?.lot_id;
+      const raw = sqlOne(c.db, `select cost_basis_unit from lots where lot_id='${lot}';`);
+      const cbu = Number(raw);
+      c.expectTrue(`${flag}=${val} 的 cost_basis_unit 为有限正数`, Number.isFinite(cbu) && cbu > 0, `cost_basis_unit=${raw}`);
+      if (flag === "--fee" && val === "5.5") {
+        const want = r4(price + 5.5 / qty);
+        c.expectTrue("--fee 5.5 计入全成本单价（price + fee/qty）", Math.abs(cbu - want) <= 0.00005, `actual=${raw} want=${want}`);
+      }
+    }
   },
 });
 /* CASE-TABLE-STAGE-3 */
@@ -2892,7 +3033,8 @@ async function main() {
   // 第一个动作：隔离快照
   writeFileSync(join(EVID, "isolation-start.txt"), isolationSnapshot());
   console.log(`run-e2e: sandbox=${SANDBOX}${OUT_DIR && !resolve(OUT_DIR).startsWith("/tmp/") ? "（--out 不在 /tmp 下，沙箱仍固定在 /tmp 以维持 --db /tmp/… 隔离铁律）" : ""}`);
-  console.log(`run-e2e: evidence=${EVID}${OUT_DIR ? "（--out 指定）" : ""}${NO_WRITEBACK ? " · 不回写 e2e-test-flow.md" : ""}`);
+  console.log(`run-e2e: evidence=${EVID}${OUT_DIR ? "（--out 指定）" : ""}${WRITE_BACK ? " · --write：跑完回写 e2e-test-flow.md" : " · 默认不回写 e2e-test-flow.md（需显式 --write）"}`);
+  if (LEGACY_NO_WRITEBACK) console.log("run-e2e: --no-writeback 已是默认行为（保留为向后兼容别名，本次无作用）");
   console.log(`run-e2e: cases=${selected().length}${ONLY ? ` (filtered by QA_E2E_ONLY=${ONLY}, full set ${CASES.length})` : ""}`);
 
   const started = Date.now();
@@ -2926,9 +3068,14 @@ async function main() {
     cases: Object.fromEntries([...caseResults.entries()].map(([id, r]) => [id, { kind: r.kind, guards: r.guards, result: r.result, blockedReason: r.blockedReason, evidence: r.evidence, asserts: r.asserts }])),
   };
   writeFileSync(join(EVID, "results.json"), JSON.stringify(results, null, 2));
-  if (NO_WRITEBACK) console.log("run-e2e: --no-writeback 生效，跳过 e2e-test-flow.md 回写");
-  else if (selected().length !== CASES.length) console.log(`run-e2e: 本次是过滤运行（${selected().length}/${CASES.length} 条），为避免把未跑用例写成 PENDING，自动跳过 e2e-test-flow.md 回写（等价 --no-writeback）`);
-  else renderCaseTables();
+  // 文档回写：默认不写；仅显式 --write（且全量运行）才写。
+  if (selected().length !== CASES.length) {
+    console.log(`run-e2e: 本次是筛选运行（${selected().length}/${CASES.length} 条），跳过 e2e-test-flow.md 回写${WRITE_BACK ? "（即使传了 --write，以免把未跑用例写成 PENDING）" : ""}`);
+  } else if (!WRITE_BACK) {
+    console.log("run-e2e: e2e-test-flow.md 未改动（默认只跑不改文档；需要回写请显式传 --write）");
+  } else {
+    renderCaseTables();
+  }
   // 最后一个动作：隔离快照
   writeFileSync(join(EVID, "isolation-end.txt"), isolationSnapshot());
 
