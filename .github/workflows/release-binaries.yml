@@ -1,0 +1,145 @@
+# 构建 trade 引擎二进制并挂到 GitHub Release。
+#
+# 触发：push 形如 v0.1.0 的 tag，或手动 workflow_dispatch。
+# 产出：每个目标平台一个 asset + 对应的 .sha256，命名与插件
+#       `platformTarget()` 的映射完全一致（trade-<os>-<arch>）。
+#
+# 插件的自动下载逻辑读的正是这里产出的 asset：
+#   https://github.com/Goodfun-Studio/lot-trader/releases/latest/download/<asset>
+
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要创建/更新的 release tag（如 v0.1.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: trade-linux-x64
+            target: bun-linux-x64
+          - asset: trade-linux-arm64
+            target: bun-linux-arm64
+          - asset: trade-darwin-x64
+            target: bun-darwin-x64
+          - asset: trade-darwin-arm64
+            target: bun-darwin-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run test suite
+        run: bun test
+
+      - name: Build ${{ matrix.asset }}
+        run: |
+          mkdir -p out
+          bun build --compile --target=${{ matrix.target }} \
+            src/cli.ts --outfile "out/${{ matrix.asset }}"
+
+      - name: Verify the binary reports its usage
+        run: |
+          # --help 是零写库守卫：不碰账本、不需要账本存在，正好用来验证产物可执行
+          chmod +x "out/${{ matrix.asset }}"
+          "./out/${{ matrix.asset }}" --help | head -3
+
+      - name: Generate checksum
+        working-directory: out
+        run: |
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
+          cat "${{ matrix.asset }}.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            out/${{ matrix.asset }}
+            out/${{ matrix.asset }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: lot-trader ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
+          body: |
+            ## 安装
+
+            ```bash
+            dsh plugin add @goodfun-studio/dsh-lot-trader
+            ```
+
+            DSH 插件（`@goodfun-studio/dsh-lot-trader`）会自动从本 Release
+            下载对应平台的 `trade` 引擎二进制，无需手工准备。
+
+            ## 本 Release 的引擎产物
+
+            | 平台 | asset |
+            | --- | --- |
+            | macOS Intel / Apple Silicon | `trade-darwin-x64` / `trade-darwin-arm64` |
+            | Linux x64 / arm64 | `trade-linux-x64` / `trade-linux-arm64` |
+
+            每个 asset 都附带同名 `.sha256`，插件下载时会自动校验。
+
+            ## 只想要 CLI
+
+            ```bash
+            curl -L -o trade \
+              https://github.com/Goodfun-Studio/lot-trader/releases/latest/download/trade-darwin-arm64
+            chmod +x trade && ./trade --help
+            ```

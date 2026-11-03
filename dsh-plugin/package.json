@@ -1,0 +1,65 @@
+{
+  "name": "@goodfun-studio/dsh-lot-trader",
+  "version": "0.1.0",
+  "description": "lot-trader 的 DSH 原生壳：读命令成为原生工具、写命令走审批门禁，并在 Web GUI 侧边栏提供原生持仓看板。首次使用自动下载对应平台的 trade 引擎二进制。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./tools": "./tools.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "tools.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "trading",
+    "portfolio",
+    "lot-trader",
+    "quant",
+    "stocks",
+    "etf"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Goodfun-Studio/lot-trader.git",
+    "directory": "dsh-plugin"
+  },
+  "homepage": "https://github.com/Goodfun-Studio/lot-trader/tree/main/dsh-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/Goodfun-Studio/lot-trader/issues"
+  },
+  "license": "MIT",
+  "author": "Goodfun Studio",
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="lot-trader">
+  <rect width="24" height="24" rx="5" fill="#10161d"/>
+  <rect x="3.6" y="14.2" width="3.9" height="6.2" rx="1.1" fill="#3fb27f"/>
+  <rect x="9.1" y="11" width="3.9" height="9.4" rx="1.1" fill="#d8a13a"/>
+  <rect x="14.6" y="7.6" width="3.9" height="12.8" rx="1.1" fill="#c8563f"/>
+  <path d="M5.4 11.4 L10.9 8.2 L14.3 9.9 L19.2 4.6" fill="none" stroke="#e8eef3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"/>
+  <circle cx="19.2" cy="4.6" r="1.5" fill="#e8eef3"/>
+</svg>

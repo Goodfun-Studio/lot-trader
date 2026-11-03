@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Lot Trader Board",
+    "description": "Brings the lot-trader ledger into Harness: read commands as native tools, ledger writes behind an approval gate, and a native position board in the sidebar."
+  }
+}

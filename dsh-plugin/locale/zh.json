@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "持仓操盘看板",
+    "description": "把 lot-trader 账本接进 Harness：读命令成为原生工具、写命令经审批门禁，并在侧边栏提供原生持仓看板。"
+  }
+}

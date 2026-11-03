@@ -1,0 +1,43 @@
+# lot-trader bundle patch —— 往 cordis 树里插入一行 Host 插件。
+#
+# 这一层声明的是**默认值**。要改就在你自己的 profile patch
+# （~/.dsh/profiles/desktop/cordis.patch.yml）里按 id 覆盖，那一层是你的，升级不丢：
+#
+#   - id: lot-trader
+#     config:
+#       pollSeconds: 30
+#
+# 可调项：
+#   binaryPath  —— trade 可执行文件路径。留空 = 按
+#                  「bundle 同级仓库二进制 → ~/.local/bin/trade
+#                    → ~/.lot-trader/bin/trade（自动下载缓存）→ PATH 上的 trade」
+#                  顺序探测。整条链都没命中且 autoDownload 为真时，插件自己从
+#                  GitHub Releases 拉对应平台的产物；拉不到再明确报错，绝不静默失败。
+#   autoDownload —— 探测不到 trade 时是否自动从 GitHub Releases 下载。
+#                  默认 true。关掉后必须自己用 binaryPath 指过去，或先把
+#                  lot-trader CLI 装进 PATH。
+#   dbPath      —— SQLite 账本路径。留空 = $LOT_TRADER_DB → $TRADE_DB_PATH → ~/.trade/trade.db。
+#                  无论从哪来，都会以 `--db <path>` 显式透传给每一次 CLI 调用，
+#                  绝不出现「传了 --db 却被静默忽略、实际读写默认库」的假隔离。
+#   cap         —— 单标满仓额度（元），透传给 `trade position --cap`。
+#                  默认 0 = **不传**，沿用引擎自己的解析链
+#                  （$LOT_TRADER_FULL_POSITION_CAP → 50000）。
+#                  ⚠ 若你的组合远大于 5 万，用默认值会让「市值仓位」条全部顶格，
+#                  30% 硬顶告警也会失去意义——请显式设成你真正的单标预算。
+#   pollSeconds —— 看板后台刷新间隔（秒），下限 15。前台读的是缓存快照，
+#                  刷新在后台异步进行，绝不并发叠加。只在「最近有人读过快照」时才真刷新。
+#   requireApprovalForWrites —— 改账本的工具（买入/加仓/平仓/记分红/建账户）
+#                  是否强制走 DSH 审批。默认 true：模型想下单，得先过你这一关。
+#   disciplineOrder —— 操盘纪律切片在 systemPrompt 里的顺序。
+#                  约定 -100 harness 身份、0 部署人格、100-199 工具指引。
+- insert:
+    - id: lot-trader
+      name: '@goodfun-studio/dsh-lot-trader'
+      config:
+        binaryPath: ''
+        autoDownload: true
+        dbPath: ''
+        cap: 0
+        pollSeconds: 45
+        requireApprovalForWrites: true
+        disciplineOrder: 170
