@@ -1,0 +1,23 @@
+# Code Owners
+# 代码所有者配置文件
+# 详见: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# 全局所有者：ivywu 审核所有变更
+* @ivywu
+
+# 核心代码
+/src/** @ivywu
+
+# 文档
+/docs/** @ivywu
+/README.md @ivywu
+/MANUAL.md @ivywu
+/SKILL.md @ivywu
+
+# 构建配置
+/package.json @ivywu
+/tsconfig.json @ivywu
+/.github/** @ivywu
+
+# 脚本
+/scripts/** @ivywu
