@@ -159,13 +159,28 @@ dsh plugin add @goodfun-studio/dsh-lot-trader
 5. `PATH` 上的 `trade`
 
 整条链都没命中且 `autoDownload: true`（默认）时，插件从
-`https://github.com/Goodfun-Studio/lot-trader/releases` 拉当前平台的产物
-（`trade-darwin-x64` / `trade-linux-x64`），落到 `~/.lot-trader/bin/trade`
-并 `chmod 755`，然后立刻重算一次快照——用户不需要任何手工步骤。
+[Releases](https://github.com/Goodfun-Studio/lot-trader/releases) 拉当前平台的产物
+（`trade-darwin-arm64` / `trade-darwin-x64` / `trade-linux-arm64` / `trade-linux-x64`），
+落到 `~/.lot-trader/bin/trade` 并 `chmod 755`，然后立刻重算一次快照——
+用户不需要任何手工步骤。
 
-下载失败**不静默**：`binaryStatus` 转 `failed`，面板顶栏如实显示原因。
+**两条下载路径并行竞速**：
 
-所以这个插件对别人可用：npm 包只有约 200KB 的源码，引擎二进制按需拉取。
+1. `github.com/.../releases/latest/download/<asset>` —— 标准直链
+2. `api.github.com` 的 asset API —— 会 302 到 `release-assets.githubusercontent.com`
+
+两条同时发起，谁先拿到响应头用谁，另一条立刻中止。这不是过度设计：
+实测在部分网络环境下 `github.com` 主站连不上、而 `api.github.com` 与
+release CDN 都通；只有一条路径会让这类用户直接失败。同理，
+`fetch()` 收到响应头就该撤掉「等响应头」的超时——否则 89MB 的 body
+会在读了一半时被掐断（这个坑真踩过）。
+
+拿到 sha256 就校验，拿不到只降级为不校验、**不阻断**。
+
+下载失败**不静默**：`binaryStatus` 转 `failed`，面板顶栏红字显示原因，
+并提示三条自救路径（手动放到缓存路径 / 配 `binaryPath` / 关 `autoDownload`）。
+
+所以这个插件对别人可用：npm 包只有约 38 kB 的源码，引擎二进制按需拉取。
 
 ### ⚠ 关于 `cap`
 

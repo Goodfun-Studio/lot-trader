@@ -160,13 +160,33 @@ export function bunBuildTarget(platform = process.platform, arch = process.arch)
   return `bun-${os}-${arch}`
 }
 
+/** 把网络异常翻成一句人话，避免把 `UND_ERR_CONNECT_TIMEOUT` 直接甩给用户。 */
+export function describeNetError(error) {
+  const name = error?.name
+  if (name === 'TimeoutError' || name === 'AbortError') return '请求超时'
+  const code = String(error?.cause?.code ?? error?.code ?? '')
+  if (code.includes('CONNECT_TIMEOUT')) return '连接超时'
+  if (code.includes('ENOTFOUND')) return '域名解析失败'
+  if (code.includes('ECONNREFUSED')) return '连接被拒绝'
+  if (code.includes('ECONNRESET')) return '连接被重置'
+  return code || String(error?.message ?? error)
+}
+
 /**
  * 从 GitHub Releases 拉对应平台的 trade 二进制，落盘到 ~/.lot-trader/bin/。
  * 下载完成后 chmod 755。失败抛错——让调用方决定是否降级。
  *
+ * 走两条路径：
+ *   1. `github.com/.../releases/latest/download/<asset>` —— 标准直链。
+ *   2. `api.github.com` 的 asset API —— 当 `github.com` 本身不可达时（部分网络环境
+ *      只放行 API 域、不放行主站），API 端会 302 到 release-assets CDN。
+ * 实测本机就是这种情况：`github.com` 连接超时，而 `api.github.com` 与
+ * `release-assets.githubusercontent.com` 都通。只有一条路径会让这类用户直接失败。
+ *
  * @param {object} [options]
  * @param {string} [options.version] 指定版本号，默认 'latest' 取最新 release
  * @param {AbortSignal} [options.signal] 可取消
+ * @param {string} [options.repository] 覆盖仓库（默认 Goodfun-Studio/lot-trader）
  * @returns {Promise<string>} 二进制绝对路径
  */
 export async function downloadBinary(options = {}) {
@@ -174,51 +194,182 @@ export async function downloadBinary(options = {}) {
   if (!target) throw new Error(`没有为 ${process.platform}-${process.arch} 预编译的 trade 二进制`)
 
   const version = options.version || 'latest'
-  const url = version === 'latest'
+  const repository = options.repository || 'Goodfun-Studio/lot-trader'
+  const callerSignal = options.signal
+
+  /** 标准直链。 */
+  const directUrl = version === 'latest'
     ? `${RELEASE_BASE}/latest/download/${target}`
     : `${RELEASE_BASE}/download/${version}/${target}`
 
-  // 1. 拉 sha256 校验和文件（如果 release 提供了的话）
-  let expectedSha256 = null
+  const releaseApiUrl = version === 'latest'
+    ? `https://api.github.com/repos/${repository}/releases/latest`
+    : `https://api.github.com/repos/${repository}/releases/tags/${version}`
+
+  /**
+   * 造一个「单次尝试」的 controller。
+   *
+   * 三个中止来源：调用方 signal、本次超时、显式 abort()。每次尝试各自持有 controller，
+   * 所以掐掉输家不会连带掐掉赢家。
+   *
+   * ⚠️ `fetch()` 在**收到响应头**时就 resolve，此时 body 还没读完。如果不把超时计时器
+   * 清掉，它会在读 body 的中途把连接掐断——大批量下载必踩。所以拿到响应头后必须
+   * 调 {@link clearDeadline}，只保留调用方中止链路。
+   */
+  function attempt(ms) {
+    const controller = new AbortController()
+    let timer = setTimeout(() => controller.abort(new Error('attempt timeout')), ms)
+    const onCallerAbort = () => controller.abort(callerSignal?.reason)
+    callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
+    return {
+      signal: controller.signal,
+      /** 拿到响应头后调用：撤掉本次超时，但保留调用方中止能力。 */
+      clearDeadline() {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+      },
+      /** 主动中止本次尝试（竞速输掉时用）。 */
+      abort(reason) {
+        if (!controller.signal.aborted) controller.abort(reason)
+      },
+      done() {
+        this.clearDeadline()
+        callerSignal?.removeEventListener('abort', onCallerAbort)
+      },
+    }
+  }
+
+  /** 走 API 解析出 <target> 与 <target>.sha256 两个 asset 的下载入口。 */
+  async function resolveApiAssets(ms) {
+    const a = attempt(ms)
+    try {
+      const response = await fetch(releaseApiUrl, {
+        signal: a.signal,
+        headers: { accept: 'application/vnd.github+json' },
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const release = await response.json()
+      const pick = (name) => {
+        const asset = Array.isArray(release?.assets) ? release.assets.find((x) => x && x.name === name) : undefined
+        return asset
+          ? {
+              url: `https://api.github.com/repos/${repository}/releases/assets/${asset.id}`,
+              headers: { accept: 'application/octet-stream' },
+            }
+          : null
+      }
+      return { binary: pick(target), checksum: pick(`${target}.sha256`), tag: release?.tag_name }
+    } finally {
+      a.done()
+    }
+  }
+
+  /**
+   * 二进制下载：两条路**并行竞速**，谁先拿到 200 的响应头就用谁，另一个立刻中止。
+   *
+   * 串行会踩坑：`github.com` 若不可达，连接超时能吃掉几十秒，而 API 那条路本可以
+   * 立刻成功。并行竞速的耗时只取决于较快的那条。
+   */
+  async function fetchBinary() {
+    const failures = []
+    /** 每个尝试自己的 controller，赢家留下、输家掐掉——共享一个会把赢家的 body 一起掐死。 */
+    const directSlot = attempt(20_000)
+    let apiSlot = null
+
+    const direct = (async () => {
+      const response = await fetch(directUrl, { signal: directSlot.signal, redirect: 'follow' })
+      if (!response.ok) throw new Error(`直链 HTTP ${response.status}`)
+      return { via: 'direct', slot: directSlot, response }
+    })()
+
+    const viaApi = (async () => {
+      const assets = await resolveApiAssets(15_000)
+      if (!assets.binary) throw new Error(`Release ${assets.tag ?? version} 里没有 ${target}`)
+      apiSlot = attempt(20_000)
+      const response = await fetch(assets.binary.url, {
+        signal: apiSlot.signal,
+        redirect: 'follow',
+        headers: assets.binary.headers,
+      })
+      if (!response.ok) throw new Error(`API HTTP ${response.status}`)
+      return { via: 'api', slot: apiSlot, response }
+    })()
+
+    try {
+      // Promise.any：先拿到响应头者胜；全败才抛 AggregateError
+      const winner = await Promise.any([direct, viaApi])
+      // 只掐输的那条。赢家的 signal 必须保持有效，否则它的 body 会一起断流。
+      if (winner.via === 'direct') apiSlot?.abort()
+      else directSlot.abort()
+      // 响应头已到手，撤掉「拿响应头」的超时，否则它会在读 body 时把连接掐断。
+      winner.slot.clearDeadline()
+      return { response: winner.response, slot: winner.slot }
+    } catch (aggregate) {
+      directSlot.abort()
+      apiSlot?.abort()
+      const errors = Array.isArray(aggregate?.errors) ? aggregate.errors : [aggregate]
+      for (const error of errors) failures.push(describeNetError(error))
+      throw new Error(
+        `两条下载路径都失败（${failures.join(' / ')}）。可能原因：本机到 GitHub 不通，` +
+          `或该 Release 尚未发布 ${target}。可以手动下载后放到 ${CACHE_BIN}，` +
+          `或在 config 里用 binaryPath 指过去，或设置 autoDownload: false`,
+      )
+    }
+  }
+
+  /** 校验和：拿不到就跳过校验（降级而不是阻断）。 */
+  async function fetchChecksum(binarySlot) {
+    const candidates = [`${directUrl}.sha256`]
+    try {
+      const assets = await resolveApiAssets(10_000)
+      if (assets.checksum) candidates.push(assets.checksum.url)
+    } catch {
+      // API 拿不到就只用直链
+    }
+    for (const url of candidates) {
+      const a = attempt(10_000)
+      try {
+        const response = await fetch(url, { signal: a.signal, redirect: 'follow' })
+        if (!response.ok) continue
+        const hash = (await response.text()).trim().split(/\s+/)[0]
+        if (/^[a-f0-9]{64}$/i.test(hash)) return hash
+      } catch {
+        // 下一条
+      } finally {
+        a.done()
+      }
+    }
+    return null
+  }
+
+  const { response, slot } = await fetchBinary()
+  // 读 body 不设短超时：~90MB 在慢链路（实测 95KB/s ≈ 15 分钟）要慢慢传，
+  // 只保留调用方中止能力。真正的看门狗是上层工具的 timeoutMs。
   try {
-    const checksumResponse = await fetch(`${url}.sha256`, { signal: options.signal, redirect: 'follow' })
-    if (checksumResponse.ok) expectedSha256 = (await checksumResponse.text()).trim().split(/\s+/)[0]
-  } catch { /* 没提供校验和不做硬拦截 */ }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length < 1024) {
+      throw new Error('下载到的文件明显小于 trade 二进制（疑似重定向到了 HTML 错误页）')
+    }
 
-  // 2. 下载二进制
-  let response
-  try {
-    response = await fetch(url, { signal: options.signal, redirect: 'follow' })
-  } catch (error) {
-    // 超时 / 网络不通 / 被墙，都归成一句用户能看懂并照做的话
-    const reason = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-      ? '请求超时'
-      : String(error?.cause?.code ?? error?.message ?? error)
-    throw new Error(
-      `连不上 GitHub Releases（${reason}）。可以手动下载 ${target} 放到 ${CACHE_BIN}，或在 config 里用 binaryPath 指过去，或设置 autoDownload: false`,
-    )
-  }
-  if (!response.ok) {
-    throw new Error(
-      response.status === 404
-        ? `Release 里还没有 ${target} 这个产物（HTTP 404）。请先在该仓库发布带该 asset 的 Release，或手动放置二进制`
-        : `下载失败：HTTP ${response.status} ${response.statusText}`,
-    )
-  }
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.length < 1024) throw new Error('下载到的文件明显小于 trade 二进制（疑似重定向到 HTML 页面）')
+    const expectedSha256 = await fetchChecksum()
+    if (expectedSha256) {
+      const actual = createHash('sha256').update(buffer).digest('hex')
+      if (actual !== expectedSha256) {
+        throw new Error(
+          `sha256 不匹配：期望 ${expectedSha256.slice(0, 16)}… 实际 ${actual.slice(0, 16)}…（疑似下载被篡改或截断）`,
+        )
+      }
+    }
 
-  // 3. 校验
-  if (expectedSha256) {
-    const actual = createHash('sha256').update(buffer).digest('hex')
-    if (actual !== expectedSha256) throw new Error(`sha256 不匹配：期望 ${expectedSha256.slice(0, 16)}… 实际 ${actual.slice(0, 16)}…`)
+    mkdirSync(CACHE_BIN_DIR, { recursive: true })
+    writeFileSync(CACHE_BIN, buffer)
+    chmodSync(CACHE_BIN, 0o755)
+    return CACHE_BIN
+  } finally {
+    slot.done()
   }
-
-  // 4. 落盘
-  mkdirSync(CACHE_BIN_DIR, { recursive: true })
-  writeFileSync(CACHE_BIN, buffer)
-  chmodSync(CACHE_BIN, 0o755)
-  return CACHE_BIN
 }
 
 /** 把 config 补齐成完整形状；缺项一律给安全默认值。 */
