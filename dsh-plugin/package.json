@@ -1,6 +1,6 @@
 {
   "name": "@goodfun-studio/dsh-lot-trader",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "lot-trader 的 DSH 原生壳：读命令成为原生工具、写命令走审批门禁，并在 Web GUI 侧边栏提供原生持仓看板。首次使用自动下载对应平台的 trade 引擎二进制。",
   "type": "module",
   "main": "./index.js",

@@ -58,8 +58,9 @@ jobs:
       # 3 个失败全部来自这类网络用例）。把它们算进发布门禁，等于让「行情接口今天通不通」
       # 决定「二进制能不能发」——那不是我们要门禁的东西。
       #
-      # 这里门禁的是：插件侧 26 条契约测试（纯逻辑 + 真打进程，零网络）。
-      # 产物本身是否可执行，由下面的 smoke 步骤证明。
+      # 这里门禁的是：插件侧的契约测试（纯逻辑 + 真打进程，零网络）。
+      # 本文件里的端到端用例此时会自动跳过（还没有二进制可执行），
+      # 由构建之后的那一步真正跑起来。
       - name: Run offline contract tests
         run: bun test dsh-plugin/test
 
@@ -74,6 +75,29 @@ jobs:
           # --help 是零写库守卫：不碰账本、不需要账本存在，正好用来验证产物可执行
           chmod +x "out/${{ matrix.asset }}"
           "./out/${{ matrix.asset }}" --help | head -3
+
+      # 用**刚构建出来的二进制**跑端到端。
+      #
+      # 上面那步契约测试锁的是 argv 形状；只有端到端能发现「argv 看着对、
+      # 引擎语义错」这类问题 —— issue #1（status="ALL" 静默返回 ACTIVE）就是
+      # 这么漏过去的：契约测试当时还把它写成了正确的断言。
+      #
+      # 只在本 runner 能**原生执行**该产物的目标上跑：ubuntu-latest 是 x64，
+      # 所以只有 linux-x64。linux-arm64 与两个 darwin 产物在 x64 runner 上跑不起来，
+      # 它们仍只有 --help 冒烟 —— 这是已知的门禁缺口，不是遗忘（要补得引 qemu）。
+      #
+      # LOT_TRADER_REQUIRE_E2E=1 让「探测不到二进制」从 skip 变成 fail，
+      # 否则这一步可能空跑还显示绿灯。
+      - name: Run end-to-end tests with the freshly built binary
+        if: matrix.target == 'bun-linux-x64'
+        env:
+          LOT_TRADER_REQUIRE_E2E: '1'
+        run: |
+          mkdir -p "$HOME/.lot-trader/bin"
+          cp "out/${{ matrix.asset }}" "$HOME/.lot-trader/bin/trade"
+          chmod +x "$HOME/.lot-trader/bin/trade"
+          "$HOME/.lot-trader/bin/trade" --help | head -1
+          bun test dsh-plugin/test/e2e.test.js
 
       - name: Generate checksum
         working-directory: out

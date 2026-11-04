@@ -23,6 +23,21 @@ import { createCliRunner, createTradeTools, resolveBinary, TOOL_NAMES } from '..
 
 const binary = resolveBinary('')
 const hasBinary = binary.source !== 'PATH' && existsSync(binary.path)
+
+/**
+ * `LOT_TRADER_REQUIRE_E2E=1` 时，没有二进制就**直接失败**而不是跳过。
+ *
+ * 必须有这个开关：CI 里那条「用刚构建的二进制跑 e2e」的门禁，
+ * 如果因为探测不到二进制而静默 skip，整步照样绿灯 —— 门禁就成了摆设。
+ * 默认不设，这样开发机（或构建产物之前）跑全量测试时它会安静跳过。
+ */
+if (!hasBinary && process.env.LOT_TRADER_REQUIRE_E2E === '1') {
+  throw new Error(
+    `LOT_TRADER_REQUIRE_E2E=1 但探测不到可用的 trade 二进制（来源：${binary.source}）。` +
+      '这条端到端门禁会变成空跑，故直接失败。',
+  )
+}
+
 const skip = hasBinary ? false : `本机没有可用的 trade 二进制（探测链落到 ${binary.source}），跳过端到端`
 
 /** 造一个临时账本，返回 { dir, dbPath, run }。 */

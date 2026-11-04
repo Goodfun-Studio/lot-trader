@@ -209,6 +209,18 @@ window.__ModuleLoader__.load({
      * 正是这个插件反对的粉饰。空串同理。
      */
     const isUnknown = (v) => v === null || v === undefined || v === ''
+    /**
+     * 展示用的收益率：**未知就保持未知**。
+     *
+     * 调用点必须用它，而不是 `num()` —— `num(null)` 与 `num('')` 都会得到 0，
+     * 于是 `pct` 里的 isUnknown 守卫收不到 null，未知值照样被渲染成 `0.00%`、
+     * 看起来像「不赚不亏」。这正是 issue #6 的第二层。
+     */
+    const rateOf = (v) => {
+      if (isUnknown(v)) return null
+      const n = Number(v)
+      return Number.isFinite(n) ? n : null
+    }
     function money(v, digits = 2) {
       if (isUnknown(v)) return '—'
       const n = Number(v)
@@ -516,7 +528,7 @@ window.__ModuleLoader__.load({
     function SummarySection({ board, t }) {
       const p = board?.portfolio
       if (!p) return null
-      const rate = num(p.overall_return_rate)
+      const rate = rateOf(p.overall_return_rate)
       const cells = [
         { label: t('totalCost'), value: `${money(p.total_cost)} 元` },
         { label: t('marketValue'), value: `${money(p.total_market_value)} 元` },
@@ -539,7 +551,7 @@ window.__ModuleLoader__.load({
 
     // ── 标的全景（可穿透展开该标的全部批次） ──────────────────
     function SymbolCard({ target, t, expanded, onToggle, symbolLotsTime, symbolLotsReturn }) {
-      const rate = num(target.overall_return_rate)
+      const rate = rateOf(target.overall_return_rate)
       const physics = target.physics
       const hot = num(target.portfolio_weight) >= 0.3
       const lotCount = symbolLotsTime?.length ?? 0
@@ -721,7 +733,7 @@ window.__ModuleLoader__.load({
             'tbody',
             null,
             rows.map((lot) => {
-              const rate = num(lot.return_rate)
+              const rate = rateOf(lot.return_rate)
               const common = [
                 Td({ children: lot.symbol_name ?? lot.symbol, title: `${lot.symbol_name ?? ''} ${lot.symbol}` }),
                 Td({ children: lot.lot_id, tone: LABEL2, mono: true }),
@@ -1230,6 +1242,14 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      /**
+       * 纯函数出口，仅供单测。
+       *
+       * 数值格式化是「数据诚实」的最后一道闸：deriveBoard 把未知保持成 null 之后，
+       * 只要渲染层再把它压回 0，前面全白做。这些函数没有副作用、不依赖 React，
+       * 放在这里让 node 侧能直接验，而不是只能靠读源码正则「守」。
+       */
+      __test: { isUnknown, rateOf, money, pct, signedMoney, pnlColor },
       apply(ctx) {
         // 文案走 Client locale 服务；缺席时用内置词典兜底。
         const locale = typeof ctx.get === 'function' ? ctx.get('locale') : ctx.locale

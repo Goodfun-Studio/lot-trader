@@ -203,6 +203,22 @@ release CDN 都通；只有一条路径会让这类用户直接失败。同理�
 
 所以这个插件对别人可用：npm 包只有约 38 kB 的源码，引擎二进制按需拉取。
 
+### 关于 `binaryVersion`
+
+默认 `''` = 自动下载时跟随 `latest`，好处是能自动拿到引擎修复，
+代价是**上游发新版会在你这台机器上静默换掉引擎** —— 而引擎管着账本读写语义。
+
+在意可复现性就钉死：
+
+```yaml
+- id: lot-trader
+  config:
+    binaryVersion: v0.1.0
+```
+
+钉住后升级要手动改这一行。当前是否钉住、解析到的又是哪个版本，
+看板快照的 `engine` 里分别有 `binary_version_pinned` 与 `engine_version`。
+
 ### ⚠ 关于 `cap`
 
 引擎默认 50000 元。若你的组合远大于 5 万（实测 45 标的 / 约 135 万成本），
@@ -223,6 +239,10 @@ node --test test/helpers.test.js
 
 # 只跑端到端：起真账本、跑真引擎、断言最终结果集
 node --test test/e2e.test.js
+
+# 要求「必须有二进制」：探测不到就直接失败，而不是跳过。
+# CI 里那条「用刚构建的二进制跑 e2e」的门禁靠它，否则会空跑还显示绿灯。
+LOT_TRADER_REQUIRE_E2E=1 node --test test/e2e.test.js
 ```
 
 ### 两类测试的分工
@@ -261,10 +281,15 @@ BUSY_RECOVERY 重试**不得删除**账本 `-wal`、body 停滞必须判死。
   会立刻报「没有预编译的 trade 二进制」，而不是走完整条下载流程再收到网络类错误
   —— 因为发布矩阵里确实没有 Windows 产物。要加 Windows 得先在
   `.github/workflows/release-binaries.yml` 的矩阵里补上并验证交叉编译。
-- **无法回显引擎版本**。引擎没有 `--version`（执行会打印 usage），
-  所以 `engine` 信息里只能给二进制路径与来源（`config.binaryPath` / 仓库同级 /
-  `~/.local/bin` / 自动下载缓存 / PATH），给不出「插件 X + 引擎 Y」的版本对照。
-  排版本不匹配时请以路径 + 文件时间/大小为据。
+- **引擎版本的可得性分两种**。引擎自身没有 `--version`（执行会打印 usage），
+  所以：
+  - **自动下载**的：快照里 `engine_version` 是下载时 Release 元数据里的 `tag_name`，
+    可信；
+  - **手动放置**的（`config.binaryPath` / 仓库同级 / `~/.local/bin` / PATH）：
+    `engine_version` 为 `null` —— 无从得知，**不编**。排版本不匹配时以路径 +
+    文件时间/大小为据。
+  想锁住引擎版本就设 `binaryVersion`（见配置说明），
+  `binary_version_pinned` 会显示当前是否钉住。
 - **收益率拿不到时不会当成 0**。现价取不到的批次会落在「收益率不可用」桶，
   表格显示 `—`，排序时排在最后。这是刻意的：把「不知道」显示成「不赚不亏」
   比留空更有害。若你看到 `—`，说明那一笔的现价没取到。

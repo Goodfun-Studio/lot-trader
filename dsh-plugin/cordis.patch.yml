@@ -16,6 +16,12 @@
 #   autoDownload —— 探测不到 trade 时是否自动从 GitHub Releases 下载。
 #                  默认 true。关掉后必须自己用 binaryPath 指过去，或先把
 #                  lot-trader CLI 装进 PATH。
+#   binaryVersion —— 自动下载时钉住的引擎版本，如 'v0.1.0'。
+#                  默认 '' = 跟随 latest（能自动拿到修复）。
+#                  ⚠ 引擎管着账本读写语义，上游发新版会在你这台机器上**静默换引擎**。
+#                  在意可复现性就把它钉死；钉住后想升级要手动改这里。
+#                  解析到的版本会以 engine_version 出现在看板快照的 engine 信息里
+#                  （引擎自身没有 --version，这是唯一可得的版本标识）。
 #   dbPath      —— SQLite 账本路径。留空 = $LOT_TRADER_DB → $TRADE_DB_PATH → ~/.trade/trade.db。
 #                  无论从哪来，都会以 `--db <path>` 显式透传给每一次 CLI 调用，
 #                  绝不出现「传了 --db 却被静默忽略、实际读写默认库」的假隔离。
@@ -35,6 +41,7 @@
       name: '@goodfun-studio/dsh-lot-trader'
       config:
         binaryPath: ''
+        binaryVersion: ''
         autoDownload: true
         dbPath: ''
         cap: 0

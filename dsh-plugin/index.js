@@ -264,6 +264,12 @@ export function apply(ctx, config) {
   /** ready | downloading | failed */
   let binaryStatus = binarySource === 'PATH' && settings.autoDownload ? 'downloading' : 'ready'
   let binaryError = null
+  /**
+   * 引擎版本。引擎没有 `--version`，所以只能记住「下载时解析到的 release tag」；
+   * 手动放置的二进制（config.binaryPath / ~/.local/bin / 仓库同级 / PATH）无从得知，
+   * 保持 null 而不是编一个。
+   */
+  let engineVersion = null
 
   log(`引擎 ${binaryPath}（${binarySource}）| 账本 ${db.path}（${db.source}）`)
 
@@ -277,6 +283,11 @@ export function apply(ctx, config) {
       binary_status: binaryStatus,
       binary_error: binaryError,
       binary_tried: initialBinary.tried,
+      // 引擎版本：只有「自动下载」时才知道（来自 Release 的 tag_name）。
+      // 手动放置的二进制无从得知，保持 null —— 不编。
+      // 引擎本身没有 --version，所以这是目前唯一可得的版本标识。
+      engine_version: engineVersion,
+      binary_version_pinned: settings.binaryVersion || null,
       db: db.path,
       db_source: db.source,
       cap: settings.cap,
@@ -388,8 +399,13 @@ export function apply(ctx, config) {
           //   - 内层是 downloadBinary 的「停滞」检测（每收到数据块就重置），
           //     慢链路（实测 95KB/s）能传完，一个字节都不来才判死；
           //   - 这里是外层总时长上限，兜住「一直有零星数据但永远传不完」这种病态情形。
-          const downloaded = await downloadBinary({ signal: AbortSignal.timeout(DOWNLOAD_TOTAL_TIMEOUT_MS) })
-          binaryPath = downloaded
+          const downloaded = await downloadBinary({
+            // 空串表示跟随 latest；设了具体 tag 就把引擎钉死（config.binaryVersion）
+            version: settings.binaryVersion || undefined,
+            signal: AbortSignal.timeout(DOWNLOAD_TOTAL_TIMEOUT_MS),
+          })
+          binaryPath = downloaded.path
+          engineVersion = downloaded.version
           binarySource = '自动下载'
           binaryStatus = 'ready'
           binaryError = null

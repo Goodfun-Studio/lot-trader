@@ -225,6 +225,14 @@ export async function downloadBinary(options = {}) {
   /** 缓存落盘位置。可注入，好让测试不碰用户真实的 ~/.lot-trader/bin。 */
   const cacheBin = options.cachePath ?? CACHE_BIN
   const cacheBinDir = dirname(cacheBin)
+  /**
+   * 实际解析到的 release tag。
+   *
+   * 引擎没有 `--version`，所以「我现在跑的是哪个引擎」本来无从得知 ——
+   * 这里把下载时 Release 元数据里的 `tag_name` 留下来并透出到快照，
+   * 至少让「插件版本 × 引擎版本」可对照。
+   */
+  let resolvedTag = null
   /** body 传输的停滞看门狗：这么久没有收到任何数据块就判定卡死。 */
   const stallMs = Number.isFinite(options.stallMs) ? options.stallMs : 120_000
 
@@ -308,6 +316,19 @@ export async function downloadBinary(options = {}) {
     /** 每个尝试自己的 controller，赢家留下、输家掐掉——共享一个会把赢家的 body 一起掐死。 */
     const directSlot = attempt(20_000)
     let apiSlot = null
+    /**
+     * API 分支是否已被判定作废。
+     *
+     * 直链常常赶在 `resolveApiAssets` 返回之前就赢了，那时 `apiSlot` 还没创建，
+     * 只写 `apiSlot?.abort()` 是空操作 —— API 分支会继续把元数据请求走完，
+     * 然后**再完整下载一遍 89MB**，纯属浪费带宽。
+     * 所以用一个标志位，让 API 分支在每个 await 边界自己检查并退出。
+     */
+    let apiBranchObsolete = false
+    const retireApiBranch = () => {
+      apiBranchObsolete = true
+      apiSlot?.abort()
+    }
 
     const direct = (async () => {
       const response = await fetchImpl(directUrl, { signal: directSlot.signal, redirect: 'follow' })
@@ -317,8 +338,14 @@ export async function downloadBinary(options = {}) {
 
     const viaApi = (async () => {
       const assets = await resolveApiAssets(15_000)
+      if (apiBranchObsolete) throw new Error('直链已胜出，放弃 API 分支')
       if (!assets.binary) throw new Error(`Release ${assets.tag ?? version} 里没有 ${target}`)
+      resolvedTag = assets.tag ?? resolvedTag
       apiSlot = attempt(20_000)
+      if (apiBranchObsolete) {
+        apiSlot.abort()
+        throw new Error('直链已胜出，放弃 API 分支')
+      }
       const response = await fetchImpl(assets.binary.url, {
         signal: apiSlot.signal,
         redirect: 'follow',
@@ -332,14 +359,14 @@ export async function downloadBinary(options = {}) {
       // Promise.any：先拿到响应头者胜；全败才抛 AggregateError
       const winner = await Promise.any([direct, viaApi])
       // 只掐输的那条。赢家的 signal 必须保持有效，否则它的 body 会一起断流。
-      if (winner.via === 'direct') apiSlot?.abort()
+      if (winner.via === 'direct') retireApiBranch()
       else directSlot.abort()
       // 响应头已到手，撤掉「拿响应头」的超时，否则它会在读 body 时把连接掐断。
       winner.slot.clearDeadline()
       return { response: winner.response, slot: winner.slot }
     } catch (aggregate) {
       directSlot.abort()
-      apiSlot?.abort()
+      retireApiBranch()
       const errors = Array.isArray(aggregate?.errors) ? aggregate.errors : [aggregate]
       for (const error of errors) failures.push(describeNetError(error))
       throw new Error(
@@ -426,7 +453,7 @@ export async function downloadBinary(options = {}) {
       }
       throw error
     }
-    return cacheBin
+    return { path: cacheBin, version: resolvedTag ?? version }
   } finally {
     slot.done()
   }
@@ -456,17 +483,18 @@ export async function readBodyWithStallWatchdog(response, { stallMs = 120_000, c
   // `{done:true}`，循环于是「正常」结束并返回一个空 buffer —— 中止信号被吞掉，
   // 上游会以为下载成功。所以这里额外造一个 reject 的 promise 参与竞速。
   let abortReject = null
+  let onAbort = null
   const aborted = new Promise((_, reject) => {
     abortReject = reject
-    const fire = () => {
+    onAbort = () => {
       // **先 reject 再 cancel**，顺序不能反。
       // cancel 会让挂起的 read() 立刻以 `{done:true}` 正常结算；若先 cancel，
       // 那个「正常结束」会赢下竞速，中止信号就被吞掉，上游拿到一个长度为 0 的「成功」。
       reject(callerSignal?.reason ?? new Error('下载已被中止'))
       reader.cancel(callerSignal?.reason).catch(() => {})
     }
-    if (callerSignal?.aborted) fire()
-    else callerSignal?.addEventListener('abort', fire, { once: true })
+    if (callerSignal?.aborted) onAbort()
+    else callerSignal?.addEventListener('abort', onAbort, { once: true })
   })
   // 没人竞速时它可能一直挂着，别让未处理的拒绝冒泡
   aborted.catch(() => {})
@@ -500,6 +528,10 @@ export async function readBodyWithStallWatchdog(response, { stallMs = 120_000, c
     return Buffer.concat(chunks)
   } finally {
     abortReject = null
+    // 成败都要摘监听。`{ once: true }` 只在**真的触发**时自动摘除；
+    // 下载正常完成时它不会触发，于是会一直挂在 signal 上（外层是 45 分钟的
+    // timeout signal，期间一直持有这个闭包引用）。
+    if (onAbort) callerSignal?.removeEventListener?.('abort', onAbort)
   }
 }
 
@@ -564,6 +596,10 @@ export function normalizeConfig(config = {}) {
   return {
     binaryPath: typeof raw.binaryPath === 'string' ? raw.binaryPath : '',
     dbPath: typeof raw.dbPath === 'string' ? raw.dbPath : '',
+    // 引擎二进制版本。空串 = 跟随 latest（默认，便于拿修复）；
+    // 设成具体 tag（如 'v0.1.0'）即可把引擎钉死，避免上游发新版本时
+    // 在你这台机器上静默换掉账本读写的语义。
+    binaryVersion: typeof raw.binaryVersion === 'string' ? raw.binaryVersion.trim() : '',
     cap,
     pollMs: Math.max(15, pollSeconds) * 1000,
     requireApprovalForWrites: raw.requireApprovalForWrites !== false,
@@ -810,9 +846,11 @@ export function deriveBoard(position, stats) {
       // 曾经用 numeric(lot.return_rate) 把它归零，于是「现价取不到、收益率算不出」
       // 的批次会被塞进「成本线附近 (0 ~ +10%)」这一桶 —— 看板上看起来是「不赚不亏」，
       // 而事实是「不知道」。这与插件自己声明的「数据诚实」原则直接冲突。
-      const rawRate = Number(lot.return_rate)
-      const rateKnown = Number.isFinite(rawRate)
-      const rate = rateKnown ? rawRate : null
+      // 必须走 finiteOrNull：`Number(null)` 与 `Number('')` 都会得到 0，
+      // 于是「引擎没给收益率」会被当成「不赚不亏」落进成本线附近桶。
+      // 同文件的 market_value / floating_pnl 早就用了它，唯独这里漏了。
+      const rate = finiteOrNull(lot.return_rate)
+      const rateKnown = rate !== null
 
       // 市值优先取引擎给的口径；引擎没给才算，且算不出来就保持 null，不假装是 0。
       const engineMarketValue = finiteOrNull(lot.market_value)

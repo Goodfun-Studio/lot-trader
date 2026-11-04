@@ -12,7 +12,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import vm from 'node:vm'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -236,6 +238,51 @@ test('工具表：名字唯一、数量正确，且写工具集合是子集', ()
  * 宽容的 provider 能忍，严格的（如 flash 链路）直接报错，表现为「模型一直报错」
  * 而工具本身的 execute 完全正常，极难定位。
  */
+/** 插件根目录，供源码守卫类断言读取。 */
+const pluginDir = fileURLToPath(new URL('..', import.meta.url))
+
+/**
+ * 在 node 里把 client.js 加载出来，取它暴露的纯函数出口。
+ *
+ * client.js 的宿主契约是 `window.__ModuleLoader__.load({ id, factory })`，
+ * 所以这里给一个假 loader + 假 react，把 factory 的返回值截下来。
+ * 这样「未知收益率渲染成 —」这件事就是**真的跑过一遍**，
+ * 而不是靠读源码正则猜。
+ */
+function loadClientHelpers() {
+  const src = readFileSync(join(pluginDir, 'client.js'), 'utf8')
+  const reactStub = {
+    createElement: () => null,
+    useCallback: (fn) => fn,
+    useEffect: () => undefined,
+    useLayoutEffect: () => undefined,
+    useMemo: (fn) => (typeof fn === 'function' ? fn() : undefined),
+    useRef: (value) => ({ current: value }),
+    useState: (value) => [value, () => undefined],
+  }
+
+  let captured = null
+  const sandbox = {
+    window: {
+      __ModuleLoader__: {
+        load: (definition) => {
+          assert.equal(definition.id, '@goodfun-studio/lot-trader'.replace('lot-trader', 'dsh-lot-trader'))
+          captured = definition.factory((name) => {
+            if (name === 'react') return reactStub
+            throw new Error(`client.js 请求了未预期的模块：${name}`)
+          })
+        },
+      },
+    },
+    console,
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(src, sandbox)
+  assert.ok(captured, 'client.js 必须调用 window.__ModuleLoader__.load')
+  assert.ok(captured.__test, 'client.js 必须暴露 __test 纯函数出口供单测使用')
+  return captured
+}
+
 test('每个工具的 parameters 都是合法 JSON Schema', () => {
   const run = async () => ({ ok: true, data: {} })
   const tools = createTradeTools({ run, getCap: () => 50_000 })
@@ -907,7 +954,8 @@ test('downloadBinary：校验通过时原子落盘并置可执行位', async () 
   ])
 
   const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
-  assert.equal(out, cachePath)
+  assert.equal(out.path, cachePath)
+  assert.equal(out.version, 'v9.9.9', '必须回传解析到的 release tag（引擎自身没有 --version）')
   assert.equal(existsSync(cachePath), true)
   assert.equal(isExecutableFile(cachePath), true, '必须置上可执行位')
   assert.equal(readFileSync(cachePath).length, 4096)
@@ -993,4 +1041,184 @@ test('createCliRunner：同一账本上的调用被串行化（不自己制造�
   // 若并发执行，第二个进程会看到 2 个标记
   assert.equal(a.data.concurrent, 1, '两次调用必须串行，不能同时持有账本')
   assert.equal(b.data.concurrent, 1)
+})
+
+// ─────────────────────────────────────────────── issue #6：未知收益率两层都要诚实
+
+test('deriveBoard：null / 空串等真实形状的缺失收益率都不得变成 0', () => {
+  // issue #6 指出的第一层：`Number(lot.return_rate)` 让 null 与 '' 都变成 0，
+  // 于是「现价取不到」被归进「成本线附近」。同文件的 market_value / floating_pnl
+  // 早已改用 finiteOrNull()，只有 rate 这行漏了 —— 这条把四种真实形状都钉住。
+  const mk = (rate) =>
+    deriveBoard(
+      {
+        portfolio_summary: {},
+        targets: [{ symbol: 'S', lots: [{ lot_id: 'A', return_rate: rate, floating_pnl: 5, current_price: 6, remaining_quantity: 100 }] }],
+      },
+      null,
+    )
+
+  for (const missing of [null, '', undefined, NaN, 'n/a', '不是数字']) {
+    const board = mk(missing)
+    const lot = board.lotsByReturn[0]
+    assert.equal(lot.return_rate, null, `return_rate=${JSON.stringify(missing)} 必须保持 null`)
+    assert.equal(lot.rate_known, false)
+    assert.equal(lot.bucket, UNKNOWN_BUCKET_ID, `return_rate=${JSON.stringify(missing)} 必须落到「收益率不可用」桶`)
+    assert.equal(board.rate_unknown_count, 1)
+    assert.equal(board.bucketCounts.find((b) => b.id === 'flat').count, 0, '不得混进成本线附近')
+  }
+
+  // 真实的 0 仍然要如实显示为 0（负向防误杀：别把真 0 也当成未知）
+  for (const real of [0, 0.05, -0.25]) {
+    const board = mk(real)
+    const lot = board.lotsByReturn[0]
+    assert.equal(lot.return_rate, real)
+    assert.equal(lot.rate_known, true)
+    assert.notEqual(lot.bucket, UNKNOWN_BUCKET_ID)
+    assert.equal(board.rate_unknown_count, 0)
+  }
+  assert.equal(mk(0).lotsByReturn[0].bucket, 'flat', '真 0 才归成本线附近')
+  assert.equal(mk(-0.25).lotsByReturn[0].bucket, 'deep-value')
+})
+
+test('client 的数值格式化：未知值渲染成 —，真 0 仍渲染成 0', () => {
+  // issue #6 第二层：deriveBoard 把未知保持成 null 之后，只要渲染层再压回 0
+  // 就前功尽弃。这里直接把 client.js 的纯函数出口拉进 node 验证，
+  // 而不是靠读源码正则「守」。
+  const helpers = loadClientHelpers()
+  const { rateOf, pct, money, signedMoney, pnlColor, isUnknown } = helpers.__test
+
+  assert.equal(typeof rateOf, 'function', '__test 端口必须存在')
+
+  // 「没有值」与「值不合法」是两件事：isUnknown 只管前者，
+  // NaN / 非数字字符串由后续的 Number.isFinite 兜住。两条路都必须落到 —。
+  for (const noValue of [null, undefined, '']) {
+    assert.equal(isUnknown(noValue), true, `isUnknown(${JSON.stringify(noValue)}) 应为 true`)
+  }
+  assert.equal(isUnknown(NaN), false, 'NaN 是「值不合法」，不是「没给值」——由 isFinite 兜')
+
+  for (const missing of [null, undefined, '', NaN, 'n/a']) {
+    assert.equal(rateOf(missing), null, `rateOf(${JSON.stringify(missing)}) 必须是 null`)
+    // 这是 bug 的端到端形态：以前会渲染成 "0.00%"
+    assert.equal(pct(rateOf(missing)), '—', `未知收益率必须显示 —，实际 ${pct(rateOf(missing))}`)
+    assert.equal(money(missing), '—')
+    assert.equal(signedMoney(missing), '—')
+  }
+
+  // 负向防误杀：真 0 不能被当成「未知」
+  assert.equal(rateOf(0), 0)
+  assert.equal(pct(rateOf(0)), '0.00%', '真实 0 必须显示 0.00%，不能也显示 —')
+  assert.equal(money(0), '0.00')
+  assert.equal(pct(rateOf(0.05)), '5.00%')
+  assert.equal(pnlColor(0), pnlColor(null), '0 与未知都用中性色')
+})
+
+test('client 渲染路径不得再用 num() 吞掉收益率的 null（负向源码守卫）', () => {
+  // 上面那条测的是 rateOf 本身；这条防的是「调用点又改回 num()」。
+  // 源码守卫只能证明写法没退回，但配合上一条（rateOf 行为已单测）
+  // 就覆盖了 issue #6 第二层的完整链路。
+  const src = readFileSync(join(pluginDir, 'client.js'), 'utf8')
+  assert.doesNotMatch(
+    src,
+    /num\([^)]*return_rate/,
+    '收益率展示不得经过 num()：Number(null) 是 0，会把未知渲染成 0.00%',
+  )
+  assert.match(src, /rateOf\(/, '必须走 rateOf 这一层')
+  // 三个已知调用点都要在
+  // 注意：定义处写的是 `const rateOf = (v) =>`，所以 `rateOf(` 只匹配调用点
+  const sites = src.match(/rateOf\(/g) ?? []
+  assert.ok(sites.length >= 3, `rateOf 应出现在全部 3 个展示调用点，实际 ${sites.length}`)
+})
+
+// ─────────────────────────────────────────────── 下载：竞速赢家
+
+test('downloadBinary：两条路径竞速时用先到的那条，并中止落败的一条', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-race-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payloadDirect = Buffer.alloc(4096, 1)
+  const payloadApi = Buffer.alloc(4096, 2)
+  const directHash = createHash('sha256').update(payloadDirect).digest('hex')
+  /** API 分支是否在直链胜出后**仍然去下载了二进制** —— 这是要防的浪费。 */
+  let apiAssetFetched = false
+
+  const fetchImpl = async (url) => {
+    const u = String(url)
+    // 直链：立刻返回合法二进制 → 应当赢下竞速
+    if (u.startsWith('https://github.com/')) {
+      if (u.endsWith('.sha256')) return new Response(`${directHash}  ${target}\n`, { status: 200 })
+      return new Response(payloadDirect, { status: 200 })
+    }
+    // API 元数据：故意慢一拍，让直链先赢
+    if (u.includes('/releases/latest')) {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      return new Response(JSON.stringify(releaseJson(target)), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    // 走到这里说明 API 分支在败局已定后还想拉资产 —— 正是要拦的
+    if (u.includes('/releases/assets/')) {
+      apiAssetFetched = true
+      return new Response(payloadApi, { status: 200 })
+    }
+    return new Response('nope', { status: 404 })
+  }
+
+  const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
+  assert.equal(out.path, cachePath)
+  // 校验和只匹配直链那份；能成功就说明采用的确实是直链拿到的内容
+  assert.equal(readFileSync(cachePath).equals(payloadDirect), true, '必须采用先到的那份内容')
+
+  // 负向：直链常赶在元数据返回前就赢，那时输家的下载槽还没建出来，
+  // 光写 slot?.abort() 是空操作。必须保证输家不会再去拉一遍 89MB。
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(apiAssetFetched, false, '直链胜出后，API 分支不得再去下载一遍二进制（纯浪费带宽）')
+})
+
+// ─────────────────────────────────────────────── 引擎版本锁
+
+test('normalizeConfig：binaryVersion 默认跟随 latest，可钉死具体 tag', () => {
+  assert.equal(normalizeConfig({}).binaryVersion, '', '默认空串 = 跟随 latest')
+  assert.equal(normalizeConfig({ binaryVersion: 'v0.1.0' }).binaryVersion, 'v0.1.0')
+  assert.equal(normalizeConfig({ binaryVersion: '  v0.1.0  ' }).binaryVersion, 'v0.1.0', '两端空白要剪掉')
+  assert.equal(normalizeConfig({ binaryVersion: 123 }).binaryVersion, '', '非字符串按未设置处理')
+  assert.equal(normalizeConfig({ binaryVersion: null }).binaryVersion, '')
+})
+
+test('downloadBinary：钉住版本时请求的是那个 tag，而不是 latest', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-pin-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 3)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  const requested = []
+
+  const fetchImpl = async (url) => {
+    const u = String(url)
+    requested.push(u)
+    if (u.includes('/releases/tags/v0.1.0')) {
+      return new Response(JSON.stringify(releaseJson(target)), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.includes('/releases/assets/11')) return new Response(payload, { status: 200 })
+    if (u.endsWith('.sha256')) return new Response(`${hash}  ${target}\n`, { status: 200 })
+    return new Response('nope', { status: 404 })
+  }
+
+  const out = await downloadBinary({ fetchImpl, cachePath, version: 'v0.1.0', stallMs: 5_000 })
+  assert.equal(out.version, 'v9.9.9', 'version 回传的是 Release 元数据里的真实 tag')
+  assert.equal(existsSync(cachePath), true)
+  // 负向：钉住后就不该再去问 latest
+  assert.ok(
+    requested.some((u) => u.includes('/releases/tags/v0.1.0')),
+    '钉住版本时必须走 tags/<version> 端点',
+  )
+  assert.ok(
+    !requested.some((u) => u.includes('/releases/latest')),
+    '钉住版本后不得再请求 latest（否则锁等于没锁）',
+  )
 })
