@@ -216,6 +216,47 @@ test('工具表：名字唯一、数量正确，且写工具集合是子集', ()
   }
 })
 
+/**
+ * 回归防护：`parameters` 会原样作为 JSON Schema 发给模型 API。
+ *
+ * 曾经这里是一份**裸属性字典**（`{ symbol: { type, required: true } }`）——
+ * 缺 `type`/`properties`，且 `required` 塞在属性节点里属于非法位置。
+ * 宽容的 provider 能忍，严格的（如 flash 链路）直接报错，表现为「模型一直报错」
+ * 而工具本身的 execute 完全正常，极难定位。
+ */
+test('每个工具的 parameters 都是合法 JSON Schema', () => {
+  const run = async () => ({ ok: true, data: {} })
+  const tools = createTradeTools({ run, getCap: () => 50_000 })
+
+  for (const tool of tools) {
+    const p = tool.parameters
+    assert.equal(p?.type, 'object', `${tool.name}: parameters.type 必须是 "object"`)
+    assert.ok(
+      p && typeof p.properties === 'object' && !Array.isArray(p.properties),
+      `${tool.name}: parameters.properties 必须是对象`,
+    )
+
+    // required 只能出现在 schema 顶层，且必须是字符串数组
+    if (p.required !== undefined) {
+      assert.ok(Array.isArray(p.required), `${tool.name}: required 必须是数组`)
+      for (const key of p.required) {
+        assert.equal(typeof key, 'string', `${tool.name}: required 元素必须是字符串`)
+        assert.ok(key in p.properties, `${tool.name}: required 里的 ${key} 必须在 properties 里`)
+      }
+    }
+
+    // 负向：属性节点里不得残留 required 布尔值（对象层也不能留 undefined 脏键）
+    for (const [key, node] of Object.entries(p.properties ?? {})) {
+      assert.ok(!('required' in node), `${tool.name}.${key}: 属性节点里不该有 required 键`)
+      assert.equal(typeof node.type, 'string', `${tool.name}.${key}: 每个属性都要有 type`)
+    }
+
+    // JSON 往返后结构不变：保证发到 API 的就是我们看到的
+    const roundTripped = JSON.parse(JSON.stringify(p))
+    assert.deepEqual(roundTripped, p, `${tool.name}: parameters 必须能无损 JSON 序列化`)
+  }
+})
+
 test('trade_position 默认剥掉逐笔批次，include_lots 才内联', async () => {
   const view = {
     portfolio_summary: { total_active_lots: 1 },

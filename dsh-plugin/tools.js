@@ -622,6 +622,25 @@ const bool = (description, required = false) => ({
   ...(required ? { required: true } : {}),
 })
 
+/**
+ * 把裸属性对象包成**合法 JSON Schema**：`{type:"object", properties:{…}, required:[…]}`。
+ *
+ * 为什么必须有这个包装：工具定义里的 `parameters` 会原样作为 JSON Schema 发给模型 API。
+ * 裸属性字典（`{ symbol: { type:"string", required:true } }`）缺 `type`/`properties`，
+ * 且 `required` 塞在属性节点里是非法位置——严格的 provider 会直接报错。
+ *
+ * 属性节点里的 `required` 布尔值在这里被**解构剔除**（而不是置 undefined），
+ * 否则对象层会留下值为 undefined 的脏键，让 `'required' in prop` 这类判断误判。
+ */
+const params = (props, required = []) => ({
+  type: 'object',
+  properties: Object.fromEntries(
+    Object.entries(props).map(([key, { required: _ignored, ...node }]) => [key, node]),
+  ),
+  // 空数组不写进 schema，保持「没有必填项」的最小表达
+  ...(required.length > 0 ? { required } : {}),
+})
+
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
 
 const GENERIC_CALL_KIND = { read: 'read', write: 'execute' }
@@ -672,12 +691,12 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
         '持仓全景聚合视图（引擎口径：单笔批次独立核算，不摊薄成本）。返回组合总览、各标的双重仓位占比与建议加/减仓价位。' +
         '默认**不**返回逐笔批次明细（活跃批次多时体积巨大），只给 lots_count；需要逐笔明细时把 include_lots 置真，' +
         '或改用 trade_lot_list。',
-      parameters: {
+      parameters: params({
         symbol: text('只看向单个标的，支持简写（518880 / 600519 / 000001）'),
         account: text('只统计某个券商账户（如 CMB / PA / DEFAULT）'),
         cap: number('单标满仓额度（元），覆盖插件配置里的 cap'),
         include_lots: bool('是否内联每个标的下挂的逐笔活跃批次明细，默认 false'),
-      },
+      }, []),
       output: OUTPUT('组合总览 + 各标的聚合（逐笔批次可选内联）'),
       presentCall: (args) => ({
         card: 'generic',
@@ -722,14 +741,14 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '在场批次逐笔明细（每笔买入一个独立 Lot）。排序与截断在插件侧完成：sort_by 支持 buy_time（买入时间，默认倒序）' +
         '与 return_rate（浮动收益率倒序）。活跃批次可能上百笔，务必用 limit/offset 翻页，不要一次性拉全量。',
-      parameters: {
+      parameters: params({
         symbol: text('只看向单个标的，支持简写'),
         account: text('只看向某个券商账户'),
         status: text('批次状态，默认 ACTIVE；也可传 CLOSED 或 ALL 看已平仓', false),
         sort_by: text('排序维度：buy_time（默认）或 return_rate'),
         limit: integer('返回条数上限，默认 50，最大 500'),
         offset: integer('翻页偏移，默认 0'),
-      },
+      }, []),
       output: OUTPUT('排序并截断后的批次行 + 总数'),
       presentCall: (args) => ({
         card: 'generic',
@@ -778,7 +797,7 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '盘中实时扫描操盘信号。捕获 TAKE_PROFIT_ALERT（浮盈 +10%~+20%）、TRAILING_STOP_ALERT（浮盈过 +15% 激活跟踪后自高点回撤）、' +
         'ADD_POSITION_ALERT / DEEP_VALUE_ALERT（浮亏触及加仓区间或 -20% 深跌击球区）。信号按账户隔离标注。',
-      parameters: { account: text('只扫描某个券商账户') },
+      parameters: params({ account: text('只扫描某个券商账户') }, []),
       output: OUTPUT('命中的操盘信号列表'),
       presentCall: () => ({ card: 'generic', title: '扫描操盘信号', kind: GENERIC_CALL_KIND.read }),
       presentResult: (_args, result) => {
@@ -802,11 +821,11 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       name: TOOL_NAMES.stats,
       description:
         '复盘战绩统计：总平仓笔数、综合胜率、累计净利润、盈亏比，并按操盘类别（普通波段 / 天然 T+0 / 底仓代冲做 T）与标的归因。',
-      parameters: {
+      parameters: params({
         days: integer('只统计最近 N 天的平仓流水'),
         symbol: text('只归因单个标的'),
         account: text('只归因某个券商账户'),
-      },
+      }, []),
       output: OUTPUT('战绩统计与多维归因'),
       presentCall: (args) => ({ card: 'generic', title: '复盘战绩统计', kind: GENERIC_CALL_KIND.read, rawInput: args ?? {} }),
       presentResult: (_args, result) => {
@@ -837,7 +856,7 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '标的物理运动量化雷达（腾讯财经前复权历史 K 线驱动）：动量速度 v、加速度 a、惯性质量 m、多空净合力 F、' +
         '置信度加权有效合力 F_eff、流体阻尼 μ、60/250 日空间分位。置信等级 LOW 下的强 F 只算「待换手放大确认」的候选信号，不作重仓依据。',
-      parameters: { symbol: text('标的代码，支持简写', true) },
+      parameters: params({ symbol: text('标的代码，支持简写', true) }, ['symbol']),
       output: OUTPUT('该标的的物理动量雷达指标'),
       presentCall: (args) => ({ card: 'generic', title: `物理雷达 ${args?.symbol ?? ''}`, kind: GENERIC_CALL_KIND.read }),
       presentResult: (_args, result) => {
@@ -858,7 +877,7 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
     {
       name: TOOL_NAMES.dividendList,
       description: '现金分红流水查询，按标的或账户筛选，返回流水明细与合计分红金额。',
-      parameters: { symbol: text('按标的筛选'), account: text('按账户筛选') },
+      parameters: params({ symbol: text('按标的筛选'), account: text('按账户筛选') }, []),
       output: OUTPUT('分红流水与合计'),
       presentCall: () => ({ card: 'generic', title: '查询分红流水', kind: GENERIC_CALL_KIND.read }),
       async execute(args) {
@@ -875,14 +894,14 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '买入建仓，生成一个独立批次（Lot）。会真实写入账本，因此需要用户审批。数量必须是整百股；' +
         '成交价会叠加规费算出保本全成本单价。触发单标的 30% 组合仓位硬顶时引擎会直接拒绝。',
-      parameters: {
+      parameters: params({
         symbol: text('标的代码，支持简写（518880 / 600519 / 000001）', true),
         price: number('成交单价（元）', true),
         qty: integer('成交股数，必须为整百', true),
         account: text('券商账户代码，省略则记入 DEFAULT'),
         reason: text('建仓决策理由，会随批次长期留存'),
         fee: number('显式手续费（元），省略则按费率自动估算'),
-      },
+      }, ['symbol', 'price', 'qty']),
       output: OUTPUT('新批次的 lot_id、账户与含规费保本单价'),
       presentCall: (args) => ({
         card: 'generic',
@@ -908,14 +927,14 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '对已有批次梯级加仓，自动绑定父子血缘并递增加仓层级。会真实写入账本，因此需要用户审批。' +
         '受两道硬闸门约束：同一父亲缘链 48 小时内只允许加仓一次；单标的组合占比超 30% 直接拦截。',
-      parameters: {
+      parameters: params({
         parent_lot_id: text('父批次 ID', true),
         price: number('本次加仓成交单价（元）', true),
         amount: number('本次投入金额（元），默认 10000，按 100 股向下取整'),
         qty: integer('直接指定加仓股数（优先于 amount）'),
         account: text('券商账户，省略则自动继承父批次账户'),
         reason: text('加仓理由'),
-      },
+      }, ['parent_lot_id', 'price']),
       output: OUTPUT('新批次的 lot_id 与血缘层级'),
       presentCall: (args) => ({
         card: 'generic',
@@ -942,14 +961,14 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
         '平掉指定批次，支持全额与部分平仓（部分平仓后批次保持 ACTIVE 继续监控）。会真实写入账本，因此需要用户审批。' +
         '普通股票/行业 ETF 是法定 T+1：当日买入的批次若无交收底仓，必须显式 substitute_core 走底仓代冲，' +
         '且代冲严格限定在同一 (标的, 账户) 空间内，绝不跨券商冲抵。',
-      parameters: {
+      parameters: params({
         lot_id: text('要平仓的批次 ID', true),
         price: number('平仓成交单价（元）', true),
         qty: integer('平仓股数，省略则全额平掉剩余数量'),
         account: text('券商账户（底仓代冲时必填，用于锁定同账户底仓）'),
         substitute_core: bool('是否用交收底仓代冲完成日内等效 T+0 平仓'),
         reason: text('平仓复盘理由'),
-      },
+      }, ['lot_id', 'price']),
       output: OUTPUT('本次平仓的实现盈亏与批次剩余状态'),
       presentCall: (args) => ({
         card: 'generic',
@@ -973,13 +992,13 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
     {
       name: TOOL_NAMES.dividendAdd,
       description: '录入一笔现金分红流水。会真实写入账本，因此需要用户审批。',
-      parameters: {
+      parameters: params({
         symbol: text('标的代码', true),
         amount: number('到账金额（元）', true),
         date: text('除息/到账日期，形如 2026-07-15，省略则记当前时间'),
         account: text('券商账户'),
         notes: text('备注'),
-      },
+      }, ['symbol', 'amount']),
       output: OUTPUT('新录入的分红流水'),
       presentCall: (args) => ({
         card: 'generic',
@@ -1004,12 +1023,12 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       description:
         '登记一个券商账户，用于多账户独立核算与底仓代冲隔离。会真实写入账本，因此需要用户审批。' +
         '重复的 account_id 会被引擎拒绝。',
-      parameters: {
+      parameters: params({
         account_id: text('账户代码，如 CMB_MAIN', true),
         name: text('账户显示名'),
         broker: text('券商代码，如 CMB / IBKR / CUSTOM'),
         currency: text('币种，默认 CNY'),
-      },
+      }, ['account_id']),
       output: OUTPUT('新登记的账户记录'),
       presentCall: (args) => ({
         card: 'generic',
