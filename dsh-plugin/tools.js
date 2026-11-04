@@ -407,34 +407,48 @@ export async function downloadBinary(options = {}) {
    * 一旦落盘就会被当作引擎运行，跳过完整性校验等于把「下载是否可信」
    * 交给网络运气。宁可让用户手动放一份，也不静默装一个没校验过的可执行文件。
    */
+  /** 试一个校验和 URL；拿到合法哈希就返回，否则 null。 */
+  async function tryChecksumUrl(url, ms) {
+    const a = attempt(ms)
+    try {
+      const response = await fetchImpl(url, {
+        signal: a.signal,
+        redirect: 'follow',
+        // GitHub 的 asset API 不带这个头时返回的是 **JSON 元数据**而非文件内容，
+        // 于是 64 位十六进制正则匹配不上、该候选被静默丢弃，
+        // 最终以「拿不到 sha256，拒绝安装」收场 —— 而那时 85MB 已经白下完了。
+        // 二进制那条路本来就是这个头，校验和这条路漏了。
+        headers: { accept: 'application/octet-stream' },
+      })
+      if (!response.ok) return null
+      const hash = (await response.text()).trim().split(/\s+/)[0]
+      return /^[a-f0-9]{64}$/i.test(hash) ? hash : null
+    } catch {
+      return null
+    } finally {
+      a.done()
+    }
+  }
+
+  /**
+   * 取校验和。**先试直链，拿不到再问 API。**
+   *
+   * 原实现是「先 `await resolveApiAssets(10_000)` 再试直链」，两个问题：
+   *   1. 延迟：直链是静态文件、通常最快；而 API 那条要先取 release 元数据。
+   *      在「主站可用、`api.github.com` 挂住」的网络下，二进制 0 秒就到手，
+   *      却要在校验和这里白等整整 10 秒 —— 用户看到的是「下载完了但卡住」。
+   *   2. 门禁：任何让 API 分支挂住的测试都要等满这个 10 秒，
+   *      超过 bun 默认的 5 秒测试超时，发布门禁因此变红。
+   */
   async function fetchChecksum() {
-    const candidates = [`${directUrl}.sha256`]
+    const fromDirect = await tryChecksumUrl(`${directUrl}.sha256`, 8_000)
+    if (fromDirect) return fromDirect
+
     try {
       const assets = await resolveApiAssets(10_000)
-      if (assets.checksum) candidates.push(assets.checksum.url)
+      if (assets.checksum) return await tryChecksumUrl(assets.checksum.url, 10_000)
     } catch {
-      // API 拿不到就只用直链
-    }
-    for (const url of candidates) {
-      const a = attempt(10_000)
-      try {
-        const response = await fetchImpl(url, {
-          signal: a.signal,
-          redirect: 'follow',
-          // GitHub 的 asset API 不带这个头时返回的是 **JSON 元数据**而非文件内容，
-          // 于是 64 位十六进制正则匹配不上、该候选被静默丢弃，
-          // 最终以「拿不到 sha256，拒绝安装」收场 —— 而那时 85MB 已经白下完了。
-          // 二进制那条路本来就是这个头，校验和这条路漏了。
-          headers: { accept: 'application/octet-stream' },
-        })
-        if (!response.ok) continue
-        const hash = (await response.text()).trim().split(/\s+/)[0]
-        if (/^[a-f0-9]{64}$/i.test(hash)) return hash
-      } catch {
-        // 下一条
-      } finally {
-        a.done()
-      }
+      // API 也不可用 —— 下面统一按「拿不到校验和」处理（调用方会 fail closed）
     }
     return null
   }

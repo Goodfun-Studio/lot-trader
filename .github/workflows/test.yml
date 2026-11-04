@@ -1,0 +1,47 @@
+# 每次 push / PR 都跑的测试门禁。
+#
+# 为什么需要这个文件：发布工作流（release-binaries.yml）只在**打 tag** 时触发，
+# 于是 0.1.4 ~ 0.1.7 四个版本从来没被流水线验过 —— 直到有人本地跑
+# `bun test dsh-plugin/test` 才发现门禁是红的。
+# 门禁命令必须有人**每次改动都跑**，否则它只是一句口号。
+#
+# 关键：这里跑的是**和发布门禁完全相同的那条命令**，包括 bun 默认的 5 秒测试超时。
+# 加 `--timeout` 把它调宽等于把问题藏起来 —— 超时本身就是要暴露的信号。
+
+name: test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dsh-plugin:
+    name: dsh-plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # ⚠ 这条就是发布门禁本身，一字不改地在这里跑一遍。
+      # 端到端用例在本环境会自动跳过（还没有引擎二进制），
+      # 它们的真实验证在 release-binaries.yml 里「构建之后」那一步。
+      - name: Release gate (bun, default 5s timeout)
+        run: bun test dsh-plugin/test
+
+      # node 侧再验一次：bun 的 node:test 垫片与 node 原生行为并不完全等价，
+      # 而开发机上两种都有人跑。两边都绿才算绿。
+      - name: Node test runner parity
+        run: node --test dsh-plugin/test/*.test.js

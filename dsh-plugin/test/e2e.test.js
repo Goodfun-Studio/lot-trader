@@ -40,6 +40,16 @@ if (!hasBinary && process.env.LOT_TRADER_REQUIRE_E2E === '1') {
 
 const skip = hasBinary ? false : `本机没有可用的 trade 二进制（探测链落到 ${binary.source}），跳过端到端`
 
+/**
+ * 端到端用例的超时。
+ *
+ * 这些用例真的 spawn 引擎、其中几条还要拉全市场行情与历史 K 线，
+ * 实测单条可达 3 秒以上 —— 贴着 bun 默认的 5 秒测试超时。
+ * 不给显式超时的话，慢一点的 CI 机器上会以「超时」而非「断言失败」红掉，
+ * 徒增误判。给足余量，但仍有上界。
+ */
+const E2E_TIMEOUT_MS = 120_000
+
 /** 造一个临时账本，返回 { dir, dbPath, run }。 */
 function freshLedger() {
   const dir = mkdtempSync(join(tmpdir(), 'lot-trader-e2e-'))
@@ -71,7 +81,7 @@ async function seedPortfolio(dbPath, satellites = []) {
   }
 }
 
-test('端到端：status=ALL 与引擎直调结果集一致（issue #1 的防回归）', { skip }, async () => {
+test('端到端：status=ALL 与引擎直调结果集一致（issue #1 的防回归）', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   // 用**天然 T+0** 的黄金 ETF 做「当日买入当日平仓」，避开法定 T+1 的裸卖空拦截
   await seedPortfolio(dbPath, [['159934', 5.0, 100], ['510500', 5.5, 100]])
@@ -99,7 +109,7 @@ test('端到端：status=ALL 与引擎直调结果集一致（issue #1 的防回
   assert.notEqual(all.total, active.total, 'ALL 必须与默认视图不同 —— 相同即 ALL 被静默降级')
 })
 
-test('端到端：只读工具不得改动账本附属文件', { skip }, async () => {
+test('端到端：只读工具不得改动账本附属文件', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   await seedPortfolio(dbPath, [])
 
@@ -125,7 +135,7 @@ test('端到端：只读工具不得改动账本附属文件', { skip }, async (
   assert.deepEqual(after, before, '只读工具不得删除账本或其 -wal/-shm')
 })
 
-test('端到端：写工具的 execute 真的落库，且能被后续读工具看见', { skip }, async () => {
+test('端到端：写工具的 execute 真的落库，且能被后续读工具看见', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   await seedPortfolio(dbPath, [])
 
@@ -156,7 +166,7 @@ test('端到端：写工具的 execute 真的落库，且能被后续读工具�
   assert.equal(afterAll.total, 2, 'ALL 应同时看见锚仓与被平掉的那笔')
 })
 
-test('端到端：引擎拒绝的操作必须原样抛错，不伪装成成功', { skip }, async () => {
+test('端到端：引擎拒绝的操作必须原样抛错，不伪装成成功', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   await seedPortfolio(dbPath, [])
   const tools = createTradeTools({ run, getCap: () => 0 })
@@ -176,7 +186,7 @@ test('端到端：引擎拒绝的操作必须原样抛错，不伪装成成功',
   )
 })
 
-test('端到端：单标的 30% 硬顶会真的拦截（风控是真闸门）', { skip }, async () => {
+test('端到端：单标的 30% 硬顶会真的拦截（风控是真闸门）', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   await engineJson(dbPath, ['account', 'add', '--id', 'E2E', '--name', '端到端', '--broker', 'CUSTOM'])
   // 一个很小的锚仓（600 元），让下一个标的有机会超过 30%
@@ -193,7 +203,7 @@ test('端到端：单标的 30% 硬顶会真的拦截（风控是真闸门）', 
   )
 })
 
-test('端到端：位置视图与批次视图对得上', { skip }, async () => {
+test('端到端：位置视图与批次视图对得上', { skip, timeout: E2E_TIMEOUT_MS }, async () => {
   const { dbPath, run } = freshLedger()
   await seedPortfolio(dbPath, [['510300', 3.8, 100]])
 
