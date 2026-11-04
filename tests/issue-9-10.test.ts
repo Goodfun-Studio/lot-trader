@@ -72,20 +72,43 @@ describe("Issue #10: confidence_level 边界", () => {
 });
 
 describe("Issue #9: price_source 类型一致性", () => {
-  test("position.ts 和 serve.ts 都从 models.ts 导入 PriceSource", async () => {
-    // 行为断言：验证 position.ts 和 serve.ts 都能正确导入和使用 PriceSource
-    const { PriceSource: modelsPriceSource } = await import("../src/models.ts");
+  test("实际验证 position 返回正确的 price_source 值", async () => {
+    // 真实行为断言：使用 TraderEngine 创建批次，验证 PositionAggregator 返回的 price_source
+    const { AppDatabase } = await import("../src/db.ts");
+    const { TraderEngine } = await import("../src/engine.ts");
     
-    // TypeScript 编译时已验证了类型一致性
-    // 运行时验证类型定义存在且可导入
-    const validSources: Array<"live" | "cost_basis"> = ["live", "cost_basis"];
+    const db = new AppDatabase(":memory:");
+    const engine = new TraderEngine(db.getConnection());
     
-    // 验证两个合法值
-    expect(validSources).toContain("live");
-    expect(validSources).toContain("cost_basis");
-    expect(validSources.length).toBe(2);
+    // 使用引擎初始化数据库并创建账户
+    engine.addAccount("TEST", { name: "Test Account" });
     
-    // 验证类型导入成功（models.ts 导出了 PriceSource）
-    expect(modelsPriceSource).toBeUndefined(); // type-only export 运行时为 undefined
+    // 买入一个不存在的标的（999999.SH），应该 fallback 到 cost_basis
+    engine.buyLot(
+      "999999.SH",     // symbol
+      10.0,             // price
+      100,              // quantity
+      undefined,        // fee
+      new Date("2024-01-01T10:00:00Z"),  // buyTime
+      undefined,        // parentLotId
+      false,            // skipRiskCheck
+      "TEST"            // accountId
+    );
+    
+    // 获取持仓视图
+    const view = await engine.getHierarchicalPositionView();
+    
+    // 验证：不存在的标的（999999.SH）应该 fallback 到 cost_basis
+    expect(view.targets.length).toBeGreaterThan(0);
+    const target = view.targets[0];
+    
+    // 核心断言：price_source 必须是 "live" 或 "cost_basis" 之一
+    expect(["live", "cost_basis"]).toContain(target.price_source);
+    
+    // 对于不存在的标的，应该是 cost_basis
+    expect(target.price_source).toBe("cost_basis");
+    expect(target.lots[0].price_source).toBe("cost_basis");
+    
+    db.getConnection().close();
   });
 });
