@@ -418,7 +418,15 @@ export async function downloadBinary(options = {}) {
     for (const url of candidates) {
       const a = attempt(10_000)
       try {
-        const response = await fetchImpl(url, { signal: a.signal, redirect: 'follow' })
+        const response = await fetchImpl(url, {
+          signal: a.signal,
+          redirect: 'follow',
+          // GitHub 的 asset API 不带这个头时返回的是 **JSON 元数据**而非文件内容，
+          // 于是 64 位十六进制正则匹配不上、该候选被静默丢弃，
+          // 最终以「拿不到 sha256，拒绝安装」收场 —— 而那时 85MB 已经白下完了。
+          // 二进制那条路本来就是这个头，校验和这条路漏了。
+          headers: { accept: 'application/octet-stream' },
+        })
         if (!response.ok) continue
         const hash = (await response.text()).trim().split(/\s+/)[0]
         if (/^[a-f0-9]{64}$/i.test(hash)) return hash
@@ -878,7 +886,17 @@ export function deriveBoard(position, stats) {
   const targets = Array.isArray(position?.targets) ? position.targets : []
 
   const lots = []
+  /** 引擎的 symbols 表里没有人类可读名的标的（name 退化成代码本身）。 */
+  const unresolvedSymbols = []
   for (const target of targets) {
+    // 引擎不认识这个标的时，`SELECT name FROM symbols` 查不到，name 会退化成代码本身
+    // （见 src/position.ts：`const name = symRow ? symRow.name : sym`）。
+    // ⚠ 这只覆盖「引擎不认识的标的」。**已知标的行情临时失败时 name 照样是解析好的**，
+    // 那一类插件无法检测（引擎不暴露回落标记），不要在文案里把它说成已覆盖。
+    const bareSymbol = String(target?.symbol ?? '').replace(/\..*$/, '')
+    const nameUnresolved = !target?.name || String(target.name) === bareSymbol
+    if (nameUnresolved) unresolvedSymbols.push(target?.symbol ?? bareSymbol)
+
     for (const lot of Array.isArray(target?.lots) ? target.lots : []) {
       // 收益率**未知就保持未知**。
       //
@@ -888,7 +906,9 @@ export function deriveBoard(position, stats) {
       // 必须走 finiteOrNull：`Number(null)` 与 `Number('')` 都会得到 0，
       // 于是「引擎没给收益率」会被当成「不赚不亏」落进成本线附近桶。
       // 同文件的 market_value / floating_pnl 早就用了它，唯独这里漏了。
-      const rate = finiteOrNull(lot.return_rate)
+      // 引擎不认识的标的，行情基本拿不到，收益率是拿买入价算出来的假数字 ——
+      // 直接标成未知，别让它以「正常收益率」的样子出现在看板上。
+      const rate = nameUnresolved ? null : finiteOrNull(lot.return_rate)
       const rateKnown = rate !== null
 
       // 市值优先取引擎给的口径；引擎没给才算，且算不出来就保持 null，不假装是 0。
@@ -911,6 +931,9 @@ export function deriveBoard(position, stats) {
         asset_class: target?.asset_class ?? '',
         portfolio_weight: numeric(target?.portfolio_weight),
         bucket: rateKnown ? bucketFor(rate) : UNKNOWN_BUCKET_ID,
+        // 诚实标注这个收益率是怎么来的：我们**分不清**真行情与回落价，
+        // 所以只能声明「引擎不认识它」这一种确定情形。
+        rate_source: rateKnown ? 'engine' : nameUnresolved ? 'unresolved_symbol' : 'missing',
       })
     }
   }
@@ -959,6 +982,7 @@ export function deriveBoard(position, stats) {
     lotsByReturn,
     bucketCounts,
     rate_unknown_count: unknownCount,
+    unresolved_symbols: unresolvedSymbols,
     stats: stats ?? null,
   }
 }

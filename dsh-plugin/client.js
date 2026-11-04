@@ -1207,6 +1207,24 @@ window.__ModuleLoader__.load({
             )
           : null,
 
+        // 满仓额度失真提示。独立于 degraded：数据是全的，只是刻度不对。
+        snapshot?.cap_warning
+          ? h(
+              'div',
+              {
+                style: {
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${WARN}`,
+                  background: LAYER2,
+                  color: WARN,
+                  fontSize: 12,
+                },
+              },
+              `⚙ ${snapshot.cap_warning}`,
+            )
+          : null,
+
         !board
           ? h('div', { style: { color: LABEL2, fontSize: 12 } }, failed ? `${t('failed')}: ${failed}` : t('loading'))
           : h(

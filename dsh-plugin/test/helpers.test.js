@@ -47,6 +47,7 @@ import {
 import {
   authorizeRequest,
   decideApproval,
+  describeCapWarning,
   describeWrite,
   isLoopbackRequest,
   renderDiscipline,
@@ -492,6 +493,9 @@ test('deriveBoard：收益率未知时保持未知，绝不当成 0（数据诚�
       targets: [
         {
           symbol: 'X',
+          // 真引擎总会给出 name（解析到就用名字，解析不到就退化成代码本身）。
+          // 这里必须给一个已解析的名字，否则会走「引擎不认识的标的」那条分支。
+          name: '测试标的',
           lots: [
             { lot_id: 'UNKNOWN', buy_time: '2026-01-01T00:00:00Z', return_rate: 'n/a', current_price: null, remaining_quantity: 100 },
             { lot_id: 'KNOWN', buy_time: '2026-01-02T00:00:00Z', return_rate: 0.05, current_price: 10, remaining_quantity: 100 },
@@ -1054,7 +1058,9 @@ test('deriveBoard：null / 空串等真实形状的缺失收益率都不得变�
     deriveBoard(
       {
         portfolio_summary: {},
-        targets: [{ symbol: 'S', lots: [{ lot_id: 'A', return_rate: rate, floating_pnl: 5, current_price: 6, remaining_quantity: 100 }] }],
+        targets: [
+          { symbol: 'S', name: '测试标的', lots: [{ lot_id: 'A', return_rate: rate, floating_pnl: 5, current_price: 6, remaining_quantity: 100 }] },
+        ],
       },
       null,
     )
@@ -1357,4 +1363,120 @@ test('normalizeConfig：disciplineOrder 保住负号，非法值真的要告警�
   assert.deepEqual(normalizeConfig({}).warnings, [])
   assert.deepEqual(normalizeConfig({ disciplineOrder: '' }).warnings, [])
   assert.deepEqual(normalizeConfig({ disciplineOrder: null }).warnings, [])
+})
+
+// ────────────────────────────────── 引擎静默回落：插件能标与不能标的边界
+
+test('deriveBoard：引擎「不认识」的标的不得把回落价算出的收益率当成正常值', () => {
+  // 实测（临时账本 + 真引擎）：买入一个不存在的代码 999999 后，
+  //   引擎 current_price 回落到 buy_price=10，return_rate = -0.0009（纯粹是规费），
+  //   且输出里**没有任何回落标记**（src/position.ts 只做 `q.current_price > 0 ? … : fallbackPrice`）。
+  // 于是「收益率不可用」桶在真实场景里永远空着，用户看到的是编出来的数字。
+  //
+  // 插件唯一能确定的是「引擎不认识这个标的」：symbols 表里查不到人类可读名时，
+  // name 会退化成代码本身。这条覆盖它；**不覆盖**「已知标的行情临时失败」。
+  const mk = (name, symbol, rate) =>
+    deriveBoard(
+      {
+        portfolio_summary: {},
+        targets: [{ symbol, name, lots: [{ lot_id: 'A', return_rate: rate, floating_pnl: -0.9, current_price: 10, remaining_quantity: 100 }] }],
+      },
+      null,
+    )
+
+  const bad = mk('999999', '999999.SH', -0.0009)
+  const badLot = bad.lotsByReturn[0]
+  assert.equal(badLot.return_rate, null, '引擎不认识的标的，收益率必须标为未知')
+  assert.equal(badLot.rate_known, false)
+  assert.equal(badLot.bucket, UNKNOWN_BUCKET_ID, '必须落进「收益率不可用」桶，而不是浅度回撤梯队')
+  assert.equal(badLot.rate_source, 'unresolved_symbol')
+  assert.equal(bad.rate_unknown_count, 1)
+  assert.deepEqual(bad.unresolved_symbols, ['999999.SH'])
+  assert.equal(bad.bucketCounts.find((b) => b.id === 'pullback').count, 0, '不得混进浅度回撤梯队')
+
+  // 负向防误杀：正常标的必须照常显示真实收益率
+  const good = mk('黄金ETF华安', '518880.SH', 0.0307)
+  const goodLot = good.lotsByReturn[0]
+  assert.equal(goodLot.return_rate, 0.0307)
+  assert.equal(goodLot.bucket, 'flat')
+  assert.equal(goodLot.rate_source, 'engine')
+  assert.deepEqual(good.unresolved_symbols, [])
+
+  // name 缺失也算「不认识」
+  assert.equal(mk(undefined, 'X.SH', 0.01).lotsByReturn[0].rate_source, 'unresolved_symbol')
+  // 但 name 只是恰好等于**裸代码**才算；带后缀的 symbol 与 name 不同 => 已解析
+  assert.equal(mk('518880.SH', '518880.SH', 0.01).lotsByReturn[0].rate_source, 'engine')
+})
+
+test('纪律切片：不得再声称「看板会标 degraded」（那是假承诺）', () => {
+  // 原句是「现价取不到时引擎会回落到买入价，看板会标 degraded」。
+  // 实测：回落到买入价确实发生，但 degraded 只在**整条 position 调用失败**时置位，
+  // 行情回落根本不会触发它（引擎不暴露该事实）。留着这句会让模型对着一个
+  // 编出来的收益率告诉用户「已标降级」——比不说更危险。
+  const text = renderDiscipline({})
+  assert.doesNotMatch(text, /看板会标 degraded/, '这句是假承诺，必须删掉')
+  assert.match(text, /静默回落/, '要说清引擎是静默回落的')
+  assert.match(text, /trade_physics/, '要给出可复核的手段')
+  assert.match(text, /无法为已知标的检测|无法检测/, '要如实说明插件的检测边界')
+})
+
+test('describeCapWarning：默认 cap 导致仓位条全部顶格时必须提示', () => {
+  const board = (rates) => ({ symbols: rates.map((rate, i) => ({ symbol: `S${i}.SH`, current_position_rate: rate })) })
+
+  // cap=0（未配置）+ 有标的顶格 → 必须提示
+  const warn = describeCapWarning(board([1.24, 5.02, 0.3]), 0)
+  assert.ok(warn, '必须给出提示')
+  assert.match(warn, /2\/3/, '要给出顶格比例')
+  assert.match(warn, /50000/, '要点明引擎默认额度')
+  assert.match(warn, /cap/, '要指出去哪改')
+
+  // 负向防误杀：三种不该提示的情形
+  assert.equal(describeCapWarning(board([0.3, 0.5]), 0), null, '没人顶格不提示')
+  assert.equal(describeCapWarning(board([]), 0), null, '空组合不提示')
+  assert.equal(describeCapWarning(board([1.5, 2.0]), 300_000), null, '用户已显式设 cap 就不该再唠叨')
+  assert.equal(describeCapWarning(undefined, 0), null, '没有 board 不炸')
+})
+
+test('downloadBinary：API 校验和候选必须带 accept: application/octet-stream', async () => {
+  // 不带这个头时 GitHub 的 asset API 返回的是 **JSON 元数据**，64 位十六进制正则
+  // 匹配不上 → 候选被静默丢弃 → 最终「拿不到 sha256，拒绝安装」，
+  // 而此时 85MB 已经白下完了。二进制那条路本来就有这个头，校验和这条路漏了。
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-accept-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 4)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  const seen = []
+
+  const fetchImpl = async (url, init) => {
+    const u = String(url)
+    const accept = init?.headers?.accept ?? init?.headers?.Accept ?? null
+    seen.push({ url: u, accept })
+    // 直链整条路都不通（模拟 github.com 被墙）
+    if (u.startsWith('https://github.com/')) return new Response('nope', { status: 404 })
+    if (u.includes('/releases/assets/11')) return new Response(payload, { status: 200 })
+    if (u.includes('/releases/assets/12')) {
+      // 忠实模拟 GitHub：不带 accept 就返回 JSON 元数据而不是文件内容
+      if (accept !== 'application/octet-stream') {
+        return new Response(JSON.stringify({ name: `${target}.sha256`, size: 80 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(`${hash}  ${target}\n`, { status: 200 })
+    }
+    if (u.includes('api.github.com/repos')) {
+      return new Response(JSON.stringify(releaseJson(target)), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response('nope', { status: 404 })
+  }
+
+  const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
+  assert.equal(out.path, cachePath, '能装上说明校验和这条路通了')
+
+  const checksumCall = seen.find((c) => c.url.includes('/releases/assets/12'))
+  assert.ok(checksumCall, '应当尝试过 API 校验和 asset')
+  assert.equal(checksumCall.accept, 'application/octet-stream', '不带这个头拿回的是 JSON 元数据，校验必然失败')
 })

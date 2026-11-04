@@ -76,8 +76,43 @@ export function renderDiscipline({ binary, db, cap }) {
     '- **多账户强隔离**：底仓代冲做 T 绝不跨券商，可用底仓严格限定在同一 (标的, 账户) 空间内，严防挪用成裸卖空。',
     '- **交易制度**：黄金 ETF 天然 T+0；普通股票/行业 ETF 法定 T+1，首日无交收底仓时裸卖空会被强拦截。',
     '- **写操作需审批**：买入/加仓/平仓/录分红/建账户会先弹审批。审批被拒 = 没有成交，不得改口径宣称已执行。',
-    '- **数据诚实**：现价取不到时引擎会回落到买入价，看板会标 degraded。不要把「拿不到现价」讲成「持仓没变化」。',
+    '- **数据诚实（有一条真实边界，别讲过头）**：引擎在行情取不到时会**静默回落**到最后一笔买入价，' +
+      '并在输出里**不留任何标记**（`src/position.ts` 里 `q.current_price > 0 ? … : fallbackPrice`，' +
+      '回落事实没有暴露出来）。所以一个看起来正常的收益率**可能是编出来的**：' +
+      '典型特征是收益率恰好只剩规费（约 -0.1%）。' +
+      '**插件无法为已知标的检测这种情况**，因此：' +
+      '(1) 不要把「拿不到现价」讲成「持仓没变化」，也不要谎称看板已标降级；' +
+      '(2) 对单笔收益率存疑时，用 `trade_physics <标的>` 复核——`current_price: 0` 或 ' +
+      '`data_bars_count: 0` 就说明行情确实拿不到；' +
+      '(3) 插件能标出来的只有「引擎不认识这个标的」（symbols 表里没有人类可读名），' +
+      '这类批次会被归进「收益率不可用」桶并显示 —。',
   ].join('\n')
+}
+
+/**
+ * 检测「满仓额度失真」。
+ *
+ * `cap` 默认 0 = 不传 `--cap`，引擎于是按它自己的默认（50000 元）算市值仓位。
+ * 组合规模远大于 5 万时，几乎所有仓位条都会顶格，**30% 硬顶告警也就失去意义**
+ * —— 用户会看到一堆假告警，而不会去读 profile 里的 YAML 注释。
+ * 所以这里主动提示，而不是等他自己发现。
+ *
+ * @param {unknown} board deriveBoard 的产物
+ * @param {number} cap 当前配置的单标满仓额度；> 0 表示用户已显式设置
+ * @returns {string|null} 需要提示时返回文案，否则 null
+ */
+export function describeCapWarning(board, cap) {
+  if (cap > 0) return null
+  const targets = Array.isArray(board?.symbols) ? board.symbols : []
+  const pinned = targets.filter((t) => Number(t?.current_position_rate) >= 1)
+  if (pinned.length === 0) return null
+  const sample = pinned.slice(0, 3).map((t) => t?.symbol).filter(Boolean).join('、')
+  return (
+    `${pinned.length}/${targets.length} 个标的的市值仓位已达或超过 100%` +
+    `${sample ? `（如 ${sample}）` : ''}` +
+    '，说明引擎的默认满仓额度（50000 元）小于你的真实单标预算。' +
+    '这类仓位条会全部顶格、30% 硬顶告警也会失真 —— 请在 profile 配置里显式设置 cap。'
+  )
 }
 
 /**
@@ -297,13 +332,14 @@ export function apply(ctx, config) {
     }
   }
 
-  /** @type {{generatedAt: string|null, refreshing: boolean, error: string|null, degraded: boolean, degraded_reason: string|null, board: unknown, engine: object}} */
+  /** @type {{generatedAt: string|null, refreshing: boolean, error: string|null, degraded: boolean, degraded_reason: string|null, cap_warning: string|null, board: unknown, engine: object}} */
   let snapshot = {
     generatedAt: null,
     refreshing: true,
     error: null,
     degraded: false,
     degraded_reason: null,
+    cap_warning: null,
     board: null,
     engine: buildEngineInfo(),
   }
@@ -335,17 +371,24 @@ export function apply(ctx, config) {
     else errors.push(`stats: ${statsResult.message}`)
 
     const degraded = position === null
+    // 首次使用时引擎还没下载完，`spawn trade ENOENT` 是**预期噪声**而不是故障。
+    // 直接把它甩给用户（"spawn trade ENOENT"）会让人以为装坏了而卸载；
+    // 这里换成说人话的进度说明，技术细节仍保留在 binary_error 里可查。
+    const downloadingEngine = binaryStatus === 'downloading'
     return {
       generatedAt: new Date().toISOString(),
       refreshing: false,
-      error: errors.length ? errors.join('；') : null,
+      error: errors.length && !downloadingEngine ? errors.join('；') : null,
       degraded,
-      degraded_reason: degraded
-        ? '拿不到 position 视图（下面保留的是上一次成功结果，不是空仓）'
-        : errors.length
-          ? '战绩统计暂不可用，持仓数据仍然可信'
-          : null,
+      degraded_reason: downloadingEngine
+        ? '首次使用：正在下载引擎（约 85MB，慢链路可能要 15~20 分钟），完成后只读查询会自动可用'
+        : degraded
+          ? '拿不到 position 视图（下面保留的是上一次成功结果，不是空仓）'
+          : errors.length
+            ? '战绩统计暂不可用，持仓数据仍然可信'
+            : null,
       board: position ? capLots(deriveBoard(position, stats)) : snapshot.board,
+      cap_warning: position ? describeCapWarning(deriveBoard(position, stats), settings.cap) : null,
       engine: buildEngineInfo(),
     }
   }
