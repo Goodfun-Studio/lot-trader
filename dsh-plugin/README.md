@@ -98,8 +98,8 @@ dsh plugin add @goodfun-studio/dsh-lot-trader
 
 ```
 浏览器面板 ──GET /api/lot-trader/snapshot──▶ Host 插件 ──spawn──▶ trade position --json
-     ▲                                          │                trade stats    --json
-     └──────────── 只读快照（回环限定）──────────┘
+     ▲        （同源 + 凭据）                 │                trade stats    --json
+     └──────────── 只读快照（回环 + 认证）─────┘
 ```
 
 浏览器**不**直连 `~/.trade/trade.db`，也**不**直连腾讯行情：现价由 Host 侧的
@@ -111,7 +111,26 @@ dsh plugin add @goodfun-studio/dsh-lot-trader
 | `/api/lot-trader/snapshot` | GET | 读当前快照；冷启动时这一次请求顺便等首帧 |
 | `/api/lot-trader/refresh` | POST | 强制立即重算 |
 
-两个路由都只服务 `127.0.0.1` / `::1` / `localhost`，非回环一律 403。
+### 准入与跨域（两道闸，缺一不可）
+
+**1. 物理层**：只接受回环 socket（`127.0.0.1` / `::1` / `localhost`），非回环一律 403。
+
+**2. 身份层**：把请求交给 Host 的 `connection.requestRejection({ headers })`，由它执行
+**Host / Origin 检查 + 浏览器凭据认证**；返回 401 / 403 原样透出。
+
+只有第一道是**不够**的。浏览器里任意网页发起的 `fetch` 同样来自 `127.0.0.1`，
+回环判断对它完全无效——必须靠第二道的 Origin 与凭据校验才拦得住。
+
+因此本插件：
+
+- **不声明任何 CORS 头**。写 `access-control-allow-origin: *` 等于把持仓开放给
+  任意网页读取，即使路由只监听回环也没用。
+- **把 `connection` 当硬依赖**：拿不到它就做不了凭据认证，快照路由索性不挂载。
+  宁可面板拿不到数据，也不把账本暴露在无认证的只读接口上。
+- **判断不了就拒绝**：认证链路自身抛错时同样返回 403，不因「拿不到结论」而放行。
+
+面板是**同源**读取（与路由同属宿主 Web 服务），显式带 `credentials: 'same-origin'`，
+因此不需要、也不应该有任何 CORS 放宽。
 
 ## 刷新策略
 
@@ -175,7 +194,9 @@ release CDN 都通；只有一条路径会让这类用户直接失败。同理�
 `fetch()` 收到响应头就该撤掉「等响应头」的超时——否则 89MB 的 body
 会在读了一半时被掐断（这个坑真踩过）。
 
-拿到 sha256 就校验，拿不到只降级为不校验、**不阻断**。
+**校验 fail closed**：`sha256` 取不到就**拒绝安装**，绝不静默装一个没校验过的可执行文件。
+两条路径都拿不到校验和时给出明确原因与三条自救路径，而不是「凑合装上」。
+校验和不匹配同样拒绝（疑似篡改或截断）。
 
 下载失败**不静默**：`binaryStatus` 转 `failed`，面板顶栏红字显示原因，
 并提示三条自救路径（手动放到缓存路径 / 配 `binaryPath` / 关 `autoDownload`）。

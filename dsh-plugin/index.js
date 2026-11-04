@@ -109,17 +109,48 @@ export function isLoopbackRequest(request) {
   }
 }
 
-/** 输出 JSON 响应。 */
+/**
+ * 输出 JSON 响应。
+ *
+ * **刻意不声明任何 CORS 头**。快照是同源读取的（面板与路由同属宿主 Web 服务），
+ * 一旦写上 `access-control-allow-origin: *`，浏览器里**任意网页**都能
+ * `fetch('http://127.0.0.1:<port>/api/lot-trader/snapshot')` 读到你的持仓与账本——
+ * 因为那些请求同样来自 127.0.0.1，loopback 判断根本挡不住。
+ * 收紧跨域是这一层的第一道闸。
+ */
 export function writeJson(response, status, payload) {
   const body = payload === null ? '' : JSON.stringify(payload)
   response.writeHead?.(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
-    'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
-    'access-control-allow-headers': 'content-type, accept',
+    'x-content-type-options': 'nosniff',
   })
   response.end?.(body)
+}
+
+/**
+ * 快照路由的准入判断，返回 401 / 403 / null（null = 放行）。
+ *
+ * 两道闸，缺一不可：
+ *   1. 物理层：只接受回环 socket（挡住同网段的直接连接）。
+ *   2. 身份层：把请求交给 Connection 做 **Host / Origin 检查 + 浏览器凭据认证**。
+ *      只做第 1 道是不够的——浏览器里任意页面发起的 fetch 也来自回环，
+ *      必须靠 Connection 的 Origin 与凭据校验才拦得住。
+ *
+ * Connection 缺席时 **fail closed**：宁可面板不工作，也不把持仓开放出去。
+ */
+export function authorizeRequest(ctx, request) {
+  if (!isLoopbackRequest(request)) return 403
+
+  const connection = typeof ctx?.get === 'function' ? ctx.get('connection') : undefined
+  if (!connection || typeof connection.requestRejection !== 'function') return 403
+
+  try {
+    return connection.requestRejection({ headers: request?.headers ?? {} }) ?? null
+  } catch {
+    // 认证链路自身异常 → 同样拒绝，不因为「判断不了」而放行
+    return 403
+  }
 }
 
 /** 把过大的批次数组截断，并如实标注截断。 */
@@ -342,15 +373,19 @@ export function apply(ctx, config) {
   })
 
   // ── 4. 看板快照路由 ───────────────────────────────────────
-  ctx.inject(['webServer'], (scope) => {
+  //
+  // `connection` 是**硬依赖**：没有它就做不了浏览器凭据认证，快照路由索性不挂载。
+  // 宁可面板拿不到数据，也不把持仓暴露在一个无认证的只读接口上。
+  ctx.inject(['webServer', 'connection'], (scope) => {
     scope.effect(
       () =>
         scope.webServer.register({
           kind: 'exact',
           path: SNAPSHOT_PATH,
           handler: (request, response) => {
-            if (!isLoopbackRequest(request)) {
-              writeJson(response, 403, { ok: false, error: 'loopback requests only' })
+            const rejection = authorizeRequest(scope, request)
+            if (rejection) {
+              writeJson(response, rejection, { ok: false, error: 'unauthorized' })
               return
             }
             if (request.method === 'OPTIONS') {
@@ -380,8 +415,9 @@ export function apply(ctx, config) {
           kind: 'exact',
           path: REFRESH_PATH,
           handler: async (request, response) => {
-            if (!isLoopbackRequest(request)) {
-              writeJson(response, 403, { ok: false, error: 'loopback requests only' })
+            const rejection = authorizeRequest(scope, request)
+            if (rejection) {
+              writeJson(response, rejection, { ok: false, error: 'unauthorized' })
               return
             }
             if (request.method === 'OPTIONS') {

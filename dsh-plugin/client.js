@@ -436,7 +436,13 @@ window.__ModuleLoader__.load({
 
       const load = useCallback(async () => {
         try {
-          const response = await fetch(SNAPSHOT_PATH, { headers: { accept: 'application/json' } })
+          // 显式声明同源凭据：Host 侧的路由已接入 Connection 做浏览器凭据认证，
+          // 不带凭据会被自己的准入闸拦成 401。同源请求本就会带 cookie，
+          // 这里写明白是为了让「必须凭据」这件事在代码里可见。
+          const response = await fetch(SNAPSHOT_PATH, {
+            credentials: 'same-origin',
+            headers: { accept: 'application/json' },
+          })
           const body = await response.json()
           if (!alive.current) return
           if (body?.ok) {
@@ -463,7 +469,11 @@ window.__ModuleLoader__.load({
       const recompute = useCallback(async () => {
         setBusy(true)
         try {
-          const response = await fetch(REFRESH_PATH, { method: 'POST', headers: { accept: 'application/json' } })
+          const response = await fetch(REFRESH_PATH, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { accept: 'application/json' },
+          })
           const body = await response.json()
           if (alive.current && body?.ok) {
             setSnapshot(body.value)

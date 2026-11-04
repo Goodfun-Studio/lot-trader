@@ -319,8 +319,14 @@ export async function downloadBinary(options = {}) {
     }
   }
 
-  /** 校验和：拿不到就跳过校验（降级而不是阻断）。 */
-  async function fetchChecksum(binarySlot) {
+  /**
+   * 取 sha256 校验和。两条路都试；**取不到由调用方拒绝安装**。
+   *
+   * 这里刻意不做「拿不到就跳过校验」的降级：一个可执行的 85MB 二进制
+   * 一旦落盘就会被当作引擎运行，跳过完整性校验等于把「下载是否可信」
+   * 交给网络运气。宁可让用户手动放一份，也不静默装一个没校验过的可执行文件。
+   */
+  async function fetchChecksum() {
     const candidates = [`${directUrl}.sha256`]
     try {
       const assets = await resolveApiAssets(10_000)
@@ -353,14 +359,20 @@ export async function downloadBinary(options = {}) {
       throw new Error('下载到的文件明显小于 trade 二进制（疑似重定向到了 HTML 错误页）')
     }
 
+    // fail closed：没有校验和就不装
     const expectedSha256 = await fetchChecksum()
-    if (expectedSha256) {
-      const actual = createHash('sha256').update(buffer).digest('hex')
-      if (actual !== expectedSha256) {
-        throw new Error(
-          `sha256 不匹配：期望 ${expectedSha256.slice(0, 16)}… 实际 ${actual.slice(0, 16)}…（疑似下载被篡改或截断）`,
-        )
-      }
+    if (!expectedSha256) {
+      throw new Error(
+        `拿不到 ${target} 的 sha256 校验文件，拒绝安装未经完整性校验的可执行文件。` +
+          `可以手动下载 ${target} 与其 .sha256 核对后放到 ${CACHE_BIN}，` +
+          `或在 config 里用 binaryPath 指过去`,
+      )
+    }
+    const actual = createHash('sha256').update(buffer).digest('hex')
+    if (actual !== expectedSha256) {
+      throw new Error(
+        `sha256 不匹配：期望 ${expectedSha256.slice(0, 16)}… 实际 ${actual.slice(0, 16)}…（疑似下载被篡改或截断）`,
+      )
     }
 
     mkdirSync(CACHE_BIN_DIR, { recursive: true })

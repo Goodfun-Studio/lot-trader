@@ -12,7 +12,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -36,7 +36,7 @@ import {
   stripLots,
 } from '../tools.js'
 
-import { describeWrite, isLoopbackRequest, renderDiscipline } from '../index.js'
+import { authorizeRequest, describeWrite, isLoopbackRequest, renderDiscipline, writeJson } from '../index.js'
 
 /** 造一个可执行的 shell 脚本，用来当受控的假 CLI。 */
 function fakeBinary(body) {
@@ -529,4 +529,114 @@ test('createCliRunner 仍接受普通字符串 binary（向后兼容）', async 
   const result = await run(['stats'])
   assert.equal(result.ok, true)
   assert.equal(result.data.ok, 1)
+})
+
+// ─────────────────────────────────────────────── 快照路由准入（安全）
+
+/** 造一个假的 Node 请求对象。 */
+function fakeRequest(remoteAddress, headers = {}) {
+  return { socket: { remoteAddress }, headers }
+}
+
+/** 造一个假的响应对象，记录 writeHead 收到的头。 */
+function fakeResponse() {
+  const captured = { status: null, headers: null, body: null }
+  return {
+    captured,
+    writeHead(status, headers) {
+      captured.status = status
+      captured.headers = headers
+    },
+    end(body) {
+      captured.body = body
+    },
+  }
+}
+
+test('authorizeRequest：Connection 缺席时 fail closed，绝不放行', () => {
+  const loopback = fakeRequest('127.0.0.1', { host: '127.0.0.1:8080' })
+
+  assert.equal(authorizeRequest({}, loopback), 403, '没有 ctx.get 必须拒绝')
+  assert.equal(authorizeRequest({ get: () => undefined }, loopback), 403, '拿不到 connection 必须拒绝')
+  assert.equal(authorizeRequest({ get: () => ({}) }, loopback), 403, 'connection 没有 requestRejection 必须拒绝')
+  assert.equal(
+    authorizeRequest({ get: () => ({ requestRejection: 'nope' }) }, loopback),
+    403,
+    'requestRejection 不是函数必须拒绝',
+  )
+})
+
+test('authorizeRequest：物理层先拦非回环，Connection 无权越过', () => {
+  // 一个「什么都放行」的 Connection —— 也不该让同网段请求读到账本
+  const permissive = { get: () => ({ requestRejection: () => undefined }) }
+
+  assert.equal(authorizeRequest(permissive, fakeRequest('192.168.1.9', { host: '192.168.1.9:8080' })), 403)
+  assert.equal(authorizeRequest(permissive, fakeRequest('10.0.0.3', { host: '127.0.0.1:8080' })), 403)
+  // Host 头指向外部域名，即便 socket 是回环也拒
+  assert.equal(authorizeRequest(permissive, fakeRequest('127.0.0.1', { host: 'evil.example.com' })), 403)
+})
+
+test('authorizeRequest：把 Connection 的 401/403 原样透出', () => {
+  const loopback = () => fakeRequest('127.0.0.1', { host: '127.0.0.1:8080' })
+
+  assert.equal(authorizeRequest({ get: () => ({ requestRejection: () => undefined }) }, loopback()), null)
+  assert.equal(authorizeRequest({ get: () => ({ requestRejection: () => 401 }) }, loopback()), 401)
+  assert.equal(authorizeRequest({ get: () => ({ requestRejection: () => 403 }) }, loopback()), 403)
+})
+
+test('authorizeRequest：认证链路自身抛错也拒绝，不因「判断不了」而放行', () => {
+  const ctx = {
+    get: () => ({
+      requestRejection: () => {
+        throw new Error('connection exploded')
+      },
+    }),
+  }
+  assert.equal(authorizeRequest(ctx, fakeRequest('127.0.0.1', { host: '127.0.0.1:8080' })), 403)
+})
+
+test('authorizeRequest：请求头必须原样交给 Connection（Origin 检查靠它）', () => {
+  let seen = null
+  const ctx = {
+    get: () => ({
+      requestRejection: (req) => {
+        seen = req
+        return undefined
+      },
+    }),
+  }
+  const headers = { host: '127.0.0.1:8080', origin: 'https://evil.example.com' }
+  authorizeRequest(ctx, fakeRequest('127.0.0.1', headers))
+
+  assert.ok(seen && seen.headers, '必须把 headers 交给 Connection')
+  assert.deepEqual(seen.headers, headers, 'headers 不能被过滤或改写，否则 Origin 检查失效')
+})
+
+test('writeJson 不得声明任何 CORS 头（负向防误杀）', () => {
+  const res = fakeResponse()
+  writeJson(res, 200, { ok: true, value: { secret: '持仓' } })
+
+  const headers = res.captured.headers ?? {}
+  for (const key of Object.keys(headers)) {
+    assert.ok(
+      !key.toLowerCase().startsWith('access-control-'),
+      `一旦出现 CORS 头（${key}），任意网页都能读到账本快照`,
+    )
+  }
+  // 正向：正常写了 JSON 与内容类型
+  assert.equal(headers['content-type'], 'application/json; charset=utf-8')
+  assert.equal(JSON.parse(res.captured.body).ok, true)
+})
+
+test('下载校验必须 fail closed：拿不到 sha256 就拒绝安装（回归守卫）', () => {
+  const source = readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+
+  // 正向：拒绝分支必须在
+  assert.match(source, /拿不到[\s\S]{0,60}sha256 校验文件[\s\S]{0,40}拒绝安装/, '必须保留 fail-closed 拒绝分支')
+
+  // 负向：不得退回「有校验和才校验、没有就静默放过」的旧写法
+  assert.ok(
+    !/if \(expectedSha256\) \{\s*\n\s*const actual/.test(source),
+    '不得退回 fail-open：校验和取不到时不能继续安装',
+  )
 })
