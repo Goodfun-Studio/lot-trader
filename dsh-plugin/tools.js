@@ -17,7 +17,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -98,17 +98,35 @@ export function expandHome(value) {
 }
 
 /**
+ * 判断候选路径是否真的是一个**可执行**文件。
+ *
+ * 只用 `existsSync` 不够：下载中途被杀会留下半截文件，它「存在」但执行不了；
+ * 一旦被选中，此后每次调用都以 EACCES 失败且不再回退到后续探针。
+ * 所以这里要求「存在 + 可执行位」。
+ */
+export function isExecutableFile(candidate) {
+  if (!candidate) return false
+  try {
+    accessSync(candidate, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * 定位 trade 可执行文件。
  * 顺序：config.binaryPath → bundle 同级仓库二进制 → ~/.local/bin/trade
  *       → 自动下载缓存 (~/.lot-trader/bin/trade) → PATH。
  * 最后一项无法同步验真，交给 execFile 以 ENOENT 暴露，绝不假装找得到。
+ * 候选项必须**可执行**才算命中（见 {@link isExecutableFile}）。
  */
 export function resolveBinary(configuredPath) {
   const configured = expandHome(configuredPath)
   const tried = []
   if (configured) {
     tried.push(configured)
-    if (existsSync(configured)) return { path: configured, source: 'config.binaryPath', tried }
+    if (isExecutableFile(configured)) return { path: configured, source: 'config.binaryPath', tried }
   }
   for (const [candidate, source] of [
     [REPO_BINARY, 'bundle 同级仓库二进制'],
@@ -116,7 +134,7 @@ export function resolveBinary(configuredPath) {
     [CACHE_BIN, '自动下载缓存'],
   ]) {
     tried.push(candidate)
-    if (existsSync(candidate)) return { path: candidate, source, tried }
+    if (isExecutableFile(candidate)) return { path: candidate, source, tried }
   }
   tried.push('PATH 上的 trade')
   return { path: 'trade', source: 'PATH', tried }
@@ -139,25 +157,27 @@ export function resolveDbPath(configuredPath) {
 // ───────────────────────────────────────────── 自动下载二进制
 
 /**
- * 把当前运行时映射到 release asset 名。
+ * 把运行时平台映射到 release asset 名。
  *
- * 产物名与仓库 `dist/` 里的既有文件名保持一致（`trade-<os>-<arch>`），
- * 这样本地构建产物和 CI 构建产物可以直接互换。
- * 未预编译的平台返回 null —— 绝不编一个不存在的名字去 404。
+ * **只返回发布矩阵里真实存在的产物名**。仓库当前只构建
+ * `trade-{linux,darwin}-{x64,arm64}` 四个产物（见
+ * `.github/workflows/release-binaries.yml`），所以 Windows 返回 `null` ——
+ * 与「绝不编一个不存在的名字去 404」这条自我约束保持一致：
+ * Windows 用户会立刻拿到「未预编译平台」，而不是走完整条下载流程（含 15~20s 超时）
+ * 最后收到一个网络类错误。
+ *
+ * 参数可注入，好让测试覆盖所有平台，而不必真的换机器跑。
  */
-export function platformTarget() {
-  const p = process.platform
-  const a = process.arch
-  if (p === 'darwin') return a === 'arm64' ? 'trade-darwin-arm64' : 'trade-darwin-x64'
-  if (p === 'linux') return a === 'arm64' ? 'trade-linux-arm64' : 'trade-linux-x64'
-  if (p === 'win32') return a === 'arm64' ? 'trade-windows-arm64.exe' : 'trade-windows-x64.exe'
+export function platformTarget(platformName = process.platform, archName = process.arch) {
+  if (platformName === 'darwin') return archName === 'arm64' ? 'trade-darwin-arm64' : 'trade-darwin-x64'
+  if (platformName === 'linux') return archName === 'arm64' ? 'trade-linux-arm64' : 'trade-linux-x64'
   return null
 }
 
-/** 平台映射到 Bun 的编译 target（CI 用）。 */
-export function bunBuildTarget(platform = process.platform, arch = process.arch) {
-  const os = platform === 'win32' ? 'windows' : platform
-  return `bun-${os}-${arch}`
+/** 平台映射到 Bun 的编译 target（CI 用）。Windows 已预置，等发布矩阵真正产出时启用。 */
+export function bunBuildTarget(platformName = process.platform, archName = process.arch) {
+  const os = platformName === 'win32' ? 'windows' : platformName
+  return `bun-${os}-${archName}`
 }
 
 /** 把网络异常翻成一句人话，避免把 `UND_ERR_CONNECT_TIMEOUT` 直接甩给用户。 */
@@ -196,6 +216,17 @@ export async function downloadBinary(options = {}) {
   const version = options.version || 'latest'
   const repository = options.repository || 'Goodfun-Studio/lot-trader'
   const callerSignal = options.signal
+  /**
+   * 可注入的 fetch，默认用全局实现。
+   * 注入点是为了让测试覆盖「校验和不匹配 / 无校验和 / 竞速赢家 / body 停滞」这些
+   * 只在异常网络下才出现的分支 —— 否则它们只能靠读源码正则「守」，防不住逻辑回归。
+   */
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch
+  /** 缓存落盘位置。可注入，好让测试不碰用户真实的 ~/.lot-trader/bin。 */
+  const cacheBin = options.cachePath ?? CACHE_BIN
+  const cacheBinDir = dirname(cacheBin)
+  /** body 传输的停滞看门狗：这么久没有收到任何数据块就判定卡死。 */
+  const stallMs = Number.isFinite(options.stallMs) ? options.stallMs : 120_000
 
   /** 标准直链。 */
   const directUrl = version === 'latest'
@@ -245,7 +276,7 @@ export async function downloadBinary(options = {}) {
   async function resolveApiAssets(ms) {
     const a = attempt(ms)
     try {
-      const response = await fetch(releaseApiUrl, {
+      const response = await fetchImpl(releaseApiUrl, {
         signal: a.signal,
         headers: { accept: 'application/vnd.github+json' },
       })
@@ -279,7 +310,7 @@ export async function downloadBinary(options = {}) {
     let apiSlot = null
 
     const direct = (async () => {
-      const response = await fetch(directUrl, { signal: directSlot.signal, redirect: 'follow' })
+      const response = await fetchImpl(directUrl, { signal: directSlot.signal, redirect: 'follow' })
       if (!response.ok) throw new Error(`直链 HTTP ${response.status}`)
       return { via: 'direct', slot: directSlot, response }
     })()
@@ -288,7 +319,7 @@ export async function downloadBinary(options = {}) {
       const assets = await resolveApiAssets(15_000)
       if (!assets.binary) throw new Error(`Release ${assets.tag ?? version} 里没有 ${target}`)
       apiSlot = attempt(20_000)
-      const response = await fetch(assets.binary.url, {
+      const response = await fetchImpl(assets.binary.url, {
         signal: apiSlot.signal,
         redirect: 'follow',
         headers: assets.binary.headers,
@@ -313,7 +344,7 @@ export async function downloadBinary(options = {}) {
       for (const error of errors) failures.push(describeNetError(error))
       throw new Error(
         `两条下载路径都失败（${failures.join(' / ')}）。可能原因：本机到 GitHub 不通，` +
-          `或该 Release 尚未发布 ${target}。可以手动下载后放到 ${CACHE_BIN}，` +
+          `或该 Release 尚未发布 ${target}。可以手动下载后放到 ${cacheBin}，` +
           `或在 config 里用 binaryPath 指过去，或设置 autoDownload: false`,
       )
     }
@@ -337,7 +368,7 @@ export async function downloadBinary(options = {}) {
     for (const url of candidates) {
       const a = attempt(10_000)
       try {
-        const response = await fetch(url, { signal: a.signal, redirect: 'follow' })
+        const response = await fetchImpl(url, { signal: a.signal, redirect: 'follow' })
         if (!response.ok) continue
         const hash = (await response.text()).trim().split(/\s+/)[0]
         if (/^[a-f0-9]{64}$/i.test(hash)) return hash
@@ -351,10 +382,13 @@ export async function downloadBinary(options = {}) {
   }
 
   const { response, slot } = await fetchBinary()
-  // 读 body 不设短超时：~90MB 在慢链路（实测 95KB/s ≈ 15 分钟）要慢慢传，
-  // 只保留调用方中止能力。真正的看门狗是上层工具的 timeoutMs。
   try {
-    const buffer = Buffer.from(await response.arrayBuffer())
+    // 读 body 用**停滞看门狗**而不是总时长上限：
+    // 慢链路（README 记录过 95KB/s ≈ 15 分钟）必须允许慢慢传完，但「一个字节都不来」
+    // 必须被判定为卡死。曾经这里没有任何上界，注释还声称「看门狗是上层 timeoutMs」——
+    // 而唯一调用点根本没传 signal，于是网络在 body 阶段静默挂住时插件会永久停在
+    // `binary_status: "downloading"` 且不再自愈。
+    const buffer = await readBodyWithStallWatchdog(response, { stallMs, callerSignal })
     if (buffer.length < 1024) {
       throw new Error('下载到的文件明显小于 trade 二进制（疑似重定向到了 HTML 错误页）')
     }
@@ -364,7 +398,7 @@ export async function downloadBinary(options = {}) {
     if (!expectedSha256) {
       throw new Error(
         `拿不到 ${target} 的 sha256 校验文件，拒绝安装未经完整性校验的可执行文件。` +
-          `可以手动下载 ${target} 与其 .sha256 核对后放到 ${CACHE_BIN}，` +
+          `可以手动下载 ${target} 与其 .sha256 核对后放到 ${cacheBin}，` +
           `或在 config 里用 binaryPath 指过去`,
       )
     }
@@ -375,21 +409,158 @@ export async function downloadBinary(options = {}) {
       )
     }
 
-    mkdirSync(CACHE_BIN_DIR, { recursive: true })
-    writeFileSync(CACHE_BIN, buffer)
-    chmodSync(CACHE_BIN, 0o755)
-    return CACHE_BIN
+    // 原子落盘：先写临时文件再 rename。
+    // 直接 writeFileSync 到 cacheBin 时若进程被杀，会留下半截文件；
+    // 而 resolveBinary 只判 existsSync，于是之后会永久拿到一个坏二进制且不再自愈。
+    mkdirSync(cacheBinDir, { recursive: true })
+    const tmpPath = `${cacheBin}.tmp-${process.pid}`
+    try {
+      writeFileSync(tmpPath, buffer)
+      chmodSync(tmpPath, 0o755)
+      renameSync(tmpPath, cacheBin)
+    } catch (error) {
+      try {
+        unlinkSync(tmpPath)
+      } catch {
+        // 临时文件清理失败不该掩盖原始错误
+      }
+      throw error
+    }
+    return cacheBin
   } finally {
     slot.done()
   }
 }
 
-/** 把 config 补齐成完整形状；缺项一律给安全默认值。 */
+/**
+ * 读完整 body，带「停滞」看门狗：每收到一个数据块就重置计时。
+ *
+ * 与「总时长上限」的区别：慢但持续的下载不该被杀，完全不动的连接必须被杀。
+ * 调用方 signal 仍然生效（可外部中止）。
+ *
+ * @returns {Promise<Buffer>}
+ */
+export async function readBodyWithStallWatchdog(response, { stallMs = 120_000, callerSignal } = {}) {
+  const body = response?.body
+  // 运行时没有流式 body（测试替身或老实现）→ 退化为整体读，此时中止只能靠 callerSignal
+  if (!body || typeof body.getReader !== 'function') {
+    return Buffer.from(await response.arrayBuffer())
+  }
+
+  const reader = body.getReader()
+  const chunks = []
+
+  // 调用方中止必须**变成拒绝**，而不是静默收尾。
+  //
+  // 只做 reader.cancel() 是不够的：cancel 会让挂起的 read() 正常返回
+  // `{done:true}`，循环于是「正常」结束并返回一个空 buffer —— 中止信号被吞掉，
+  // 上游会以为下载成功。所以这里额外造一个 reject 的 promise 参与竞速。
+  let abortReject = null
+  const aborted = new Promise((_, reject) => {
+    abortReject = reject
+    const fire = () => {
+      // **先 reject 再 cancel**，顺序不能反。
+      // cancel 会让挂起的 read() 立刻以 `{done:true}` 正常结算；若先 cancel，
+      // 那个「正常结束」会赢下竞速，中止信号就被吞掉，上游拿到一个长度为 0 的「成功」。
+      reject(callerSignal?.reason ?? new Error('下载已被中止'))
+      reader.cancel(callerSignal?.reason).catch(() => {})
+    }
+    if (callerSignal?.aborted) fire()
+    else callerSignal?.addEventListener('abort', fire, { once: true })
+  })
+  // 没人竞速时它可能一直挂着，别让未处理的拒绝冒泡
+  aborted.catch(() => {})
+
+  try {
+    for (;;) {
+      if (callerSignal?.aborted) throw callerSignal.reason ?? new Error('下载已被中止')
+      let timer = null
+      const stalled = new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`下载停滞超过 ${Math.round(stallMs / 1000)}s（未收到任何数据）`)),
+          stallMs,
+        )
+      })
+      let result
+      try {
+        result = await Promise.race([reader.read(), stalled, aborted])
+      } catch (error) {
+        await reader.cancel(error).catch(() => {})
+        throw error
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+      if (result.done) {
+        // 流「正常结束」也可能是 cancel 引起的；中止过就以中止为准
+        if (callerSignal?.aborted) throw callerSignal.reason ?? new Error('下载已被中止')
+        break
+      }
+      if (result.value) chunks.push(Buffer.from(result.value))
+    }
+    return Buffer.concat(chunks)
+  } finally {
+    abortReject = null
+  }
+}
+
+/**
+ * 宽容地把「数字或数字字符串」读成正数。
+ *
+ * 为什么要容错：YAML 里给 `cap: "300000"` 加引号、或经环境变量注入时值必然是字符串。
+ * 原来的 `Number.isFinite` 只认 number，会把它们静默当成 0（= 沿用引擎默认 50000），
+ * 而 README 明确强调「必须自己设 cap，否则 30% 硬顶告警失去意义」——
+ * 用户以为设了，实际没设，且没有任何提示。
+ *
+ * @returns {number|undefined} 合法正数，或 undefined（表示「没给 / 给得不合法」）
+ */
+export function toPositiveNumber(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const n = typeof value === 'string' ? Number(value.trim()) : value
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+/** 值是否「给过」（用来区分「没配」和「配错了」）。 */
+function isProvided(value) {
+  return value !== undefined && value !== null && value !== ''
+}
+
+/**
+ * 值是否「被有意给了一个需要解析的内容」。
+ *
+ * 与 {@link isProvided} 的区别：数字 0（以及字符串 '0'）是 cap 的**合法取值**
+ * ——它表示「不干预，沿用引擎解析链」。若把它也算作「配错了」而告警，
+ * 每次用默认配置启动都会刷一条无意义警告。
+ */
+function isMeaningfullyProvided(value) {
+  if (!isProvided(value)) return false
+  if (value === 0 || value === '0') return false
+  return true
+}
+
 export function normalizeConfig(config = {}) {
   const raw = config && typeof config === 'object' ? config : {}
-  const pollSeconds = Number.isFinite(raw.pollSeconds) ? raw.pollSeconds : 45
-  const cap = Number.isFinite(raw.cap) && raw.cap > 0 ? raw.cap : 0
-  const disciplineOrder = Number.isFinite(raw.disciplineOrder) ? raw.disciplineOrder : 170
+  const warnings = []
+
+  // cap：0 表示「不干预，沿用引擎解析链」，这是合法的默认值；
+  // 但「给了一个解析不出正数的值」必须留痕，否则用户以为设了其实没设。
+  const cap = toPositiveNumber(raw.cap) ?? 0
+  if (isMeaningfullyProvided(raw.cap) && cap === 0) {
+    warnings.push(`cap 配置值 ${JSON.stringify(raw.cap)} 不是正数，已按 0 处理（沿用引擎的满仓额度解析链）`)
+  }
+
+  const pollSeconds = toPositiveNumber(raw.pollSeconds) ?? 45
+  if (isMeaningfullyProvided(raw.pollSeconds) && toPositiveNumber(raw.pollSeconds) === undefined) {
+    warnings.push(`pollSeconds 配置值 ${JSON.stringify(raw.pollSeconds)} 不是正数，已回退到 45 秒`)
+  }
+
+  const disciplineOrderRaw = toPositiveNumber(raw.disciplineOrder)
+  const disciplineOrder = typeof raw.disciplineOrder === 'number' && Number.isFinite(raw.disciplineOrder)
+    ? raw.disciplineOrder
+    : (disciplineOrderRaw ?? 170)
+  if (isMeaningfullyProvided(raw.disciplineOrder) && !Number.isFinite(disciplineOrder)) {
+    warnings.push(`disciplineOrder 配置值 ${JSON.stringify(raw.disciplineOrder)} 不是数字，已回退到 170`)
+  }
+
   return {
     binaryPath: typeof raw.binaryPath === 'string' ? raw.binaryPath : '',
     dbPath: typeof raw.dbPath === 'string' ? raw.dbPath : '',
@@ -398,6 +569,8 @@ export function normalizeConfig(config = {}) {
     requireApprovalForWrites: raw.requireApprovalForWrites !== false,
     disciplineOrder,
     autoDownload: raw.autoDownload !== false,
+    /** 配置解析过程中的可疑之处；由 index.js 打到日志，不静默吞掉。 */
+    warnings,
   }
 }
 
@@ -500,15 +673,57 @@ export function createCliRunner({ binary, dbPath, timeoutMs = CLI_TIMEOUT_MS } =
   }
 
   /**
+   * 同一账本上的调用串行化。
+   *
+   * 插件自己就是并发调用者（`collect()` 里 `Promise.all([position, stats])` 同时起两个
+   * `trade` 进程）。串行化从源头减少自造锁竞争，也避免「A 正在写、B 拿到 busy」的伪恢复态。
+   * 只按 dbPath 排队，不同账本互不阻塞。
+   */
+  let queue = Promise.resolve()
+  function serialize(task) {
+    const next = queue.then(task, task)
+    // 无论成败都要让队列继续，否则一次失败会永久堵住后续调用
+    queue = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    return next
+  }
+
+  /** SQLITE_BUSY_RECOVERY 的自愈方式：**短退避后原样重试**，绝不改动账本目录。 */
+  const RECOVERY_RETRY_DELAY_MS = 250
+
+  /**
    * @param {string[]} args 子命令及其参数，例如 `['lot','buy','--symbol','518880.SH', …]`
    * @returns {Promise<{ok: boolean, data?: unknown, envelope?: unknown, message?: string, code?: string, raw?: string, argv: string[]}>}
    */
-  return async function run(args) {
-    const first = await callOnce(args)
-    if (!isRecoveryLock(first)) return first
-    try { unlinkSync(dbPath + '-wal') } catch {}
-    try { unlinkSync(dbPath + '-shm') } catch {}
-    return callOnce(args)
+  return function run(args) {
+    return serialize(async () => {
+      const first = await callOnce(args)
+      if (!isRecoveryLock(first)) return first
+
+      // 退避一次再试。
+      //
+      // 这里**刻意不删 `-wal` / `-shm`**。曾经的做法是命中即删两个文件再重试，这有三个问题：
+      //   1. `-wal` 里可能有**已提交但尚未 checkpoint** 的事务，删掉就是丢数据；
+      //      SQLite 语义里只有 `-shm` 是崩溃后可安全重建的，`-wal` 不是。
+      //   2. 只读路径（position / stats）同样会走到这个分支 —— 读操作不该改动账本目录。
+      //   3. 插件自身并发调用，可能出现「A 正在用库、B 拿到 busy 就删文件」。
+      // 真正的陈旧 WAL 恢复应当交给 SQLite 自身的恢复逻辑，或作为**显式的人工步骤**，
+      // 而不是一个自动副作用。
+      await new Promise((resolve) => setTimeout(resolve, RECOVERY_RETRY_DELAY_MS))
+      const second = await callOnce(args)
+      if (second.ok || !isRecoveryLock(second)) return second
+
+      // 退避后仍拿不到 —— 如实上报，并说明该由人处理，而不是继续自动折腾账本文件。
+      return {
+        ...second,
+        message:
+          `${second.message}（已退避重试一次仍失败。若确认账本 WAL 陈旧，` +
+          `请手动用 sqlite3 检查/恢复；插件不会自动删除账本附属文件，以免丢失已提交事务）`,
+        code: 'CLI_BUSY_RECOVERY_PERSISTENT',
+      }
+    })
   }
 }
 
@@ -550,6 +765,9 @@ export const RETURN_BUCKETS = Object.freeze([
   { id: 'peak', label: '高位浮盈梯队 (≥ +20%)', test: (r) => r >= 0.2 },
 ])
 
+/** 收益率拿不到时的归属桶。它**不是**任何一个盈亏档，前端须单独呈现。 */
+export const UNKNOWN_BUCKET_ID = 'unknown'
+
 function bucketFor(rate) {
   for (const bucket of RETURN_BUCKETS) if (bucket.test(rate)) return bucket.id
   return 'flat'
@@ -558,6 +776,18 @@ function bucketFor(rate) {
 function numeric(value, fallback = 0) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
+}
+
+/**
+ * 把值读成有限数字，**读不出来就返回 null**（而不是 0）。
+ *
+ * 必须先挡住 null/undefined/''：`Number(null)` 是 0，于是「现价取不到」会被
+ * 算成「市值为 0」。数值展示层的 `isUnknown` 是同一个道理。
+ */
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
 /**
@@ -575,30 +805,74 @@ export function deriveBoard(position, stats) {
   const lots = []
   for (const target of targets) {
     for (const lot of Array.isArray(target?.lots) ? target.lots : []) {
-      const rate = numeric(lot.return_rate)
+      // 收益率**未知就保持未知**。
+      //
+      // 曾经用 numeric(lot.return_rate) 把它归零，于是「现价取不到、收益率算不出」
+      // 的批次会被塞进「成本线附近 (0 ~ +10%)」这一桶 —— 看板上看起来是「不赚不亏」，
+      // 而事实是「不知道」。这与插件自己声明的「数据诚实」原则直接冲突。
+      const rawRate = Number(lot.return_rate)
+      const rateKnown = Number.isFinite(rawRate)
+      const rate = rateKnown ? rawRate : null
+
+      // 市值优先取引擎给的口径；引擎没给才算，且算不出来就保持 null，不假装是 0。
+      const engineMarketValue = finiteOrNull(lot.market_value)
+      const price = finiteOrNull(lot.current_price)
+      const qty = finiteOrNull(lot.remaining_quantity)
+      const marketValue = engineMarketValue !== null
+        ? engineMarketValue
+        : price !== null && qty !== null
+          ? Math.round(price * qty * 100) / 100
+          : null
+
       lots.push({
         ...lot,
         return_rate: rate,
-        floating_pnl: numeric(lot.floating_pnl),
-        market_value: Math.round(numeric(lot.current_price) * numeric(lot.remaining_quantity) * 100) / 100,
+        rate_known: rateKnown,
+        floating_pnl: finiteOrNull(lot.floating_pnl),
+        market_value: marketValue,
         symbol_name: lot.symbol_name ?? target?.name ?? lot.symbol,
         asset_class: target?.asset_class ?? '',
         portfolio_weight: numeric(target?.portfolio_weight),
-        bucket: bucketFor(rate),
+        bucket: rateKnown ? bucketFor(rate) : UNKNOWN_BUCKET_ID,
       })
     }
   }
 
   const lotsByTime = [...lots].sort((a, b) => String(b.buy_time ?? '').localeCompare(String(a.buy_time ?? '')))
-  const lotsByReturn = [...lots].sort((a, b) => b.return_rate - a.return_rate)
+  // 未知收益率排到最后（不能当 0 参与排序，否则会插到「不赚不亏」中间）
+  const lotsByReturn = [...lots].sort((a, b) => {
+    if (a.return_rate === null && b.return_rate === null) return 0
+    if (a.return_rate === null) return 1
+    if (b.return_rate === null) return -1
+    return b.return_rate - a.return_rate
+  })
 
-  const bucketCounts = RETURN_BUCKETS.map((bucket) => ({
-    id: bucket.id,
-    label: bucket.label,
-    count: lots.filter((l) => l.bucket === bucket.id).length,
-    floating_pnl:
-      Math.round(lots.filter((l) => l.bucket === bucket.id).reduce((sum, l) => sum + l.floating_pnl, 0) * 100) / 100,
-  }))
+  const knownLots = lots.filter((l) => l.rate_known)
+  const unknownCount = lots.length - knownLots.length
+
+  const asBucket = (bucket) => {
+    const rows = lots.filter((l) => l.bucket === bucket.id)
+    const pnlKnown = rows.filter((l) => Number.isFinite(l.floating_pnl))
+    return {
+      id: bucket.id,
+      label: bucket.label,
+      count: rows.length,
+      floating_pnl: Math.round(pnlKnown.reduce((sum, l) => sum + l.floating_pnl, 0) * 100) / 100,
+      // 桶内有没有「金额也拿不到」的批次，前端据此决定是否标注而不谎报合计
+      pnl_unknown_count: rows.length - pnlKnown.length,
+    }
+  }
+
+  const bucketCounts = [
+    ...RETURN_BUCKETS.map(asBucket),
+    {
+      id: UNKNOWN_BUCKET_ID,
+      label: '收益率不可用',
+      count: unknownCount,
+      floating_pnl: 0,
+      pnl_unknown_count: unknownCount,
+    },
+  ]
 
   return {
     portfolio,
@@ -607,6 +881,7 @@ export function deriveBoard(position, stats) {
     lotsByTime,
     lotsByReturn,
     bucketCounts,
+    rate_unknown_count: unknownCount,
     stats: stats ?? null,
   }
 }
@@ -779,7 +1054,11 @@ export function createTradeTools({ run, getCap, onMutate } = {}) {
       async execute(args) {
         const argv = ['lot', 'list']
         const status = typeof args?.status === 'string' && args.status.trim() ? args.status.trim().toUpperCase() : 'ACTIVE'
-        if (status !== 'ALL') push(argv, '--status', status)
+        // **无条件透传**。引擎的 `--status` 声明默认值就是 ACTIVE，所以「不带 flag」
+        // 等价于「只取 ACTIVE」——曾经在 ALL 时刻意不带 flag，结果 ALL 静默返回
+        // ACTIVE-only，模型/用户会拿到错误的完整性结论。引擎确实接受 ALL
+        // （实测 `lot list --status ALL` 返回 ACTIVE+CLOSED 全量）。
+        push(argv, '--status', status)
         push(argv, '--symbol', args?.symbol)
         push(argv, '--account', args?.account)
         const data = await call(argv, 'trade lot list')

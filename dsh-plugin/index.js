@@ -44,6 +44,15 @@ export const DISCIPLINE_SECTION = 'lot-trader-discipline'
 const MAX_INLINE_LOTS = 500
 
 /**
+ * 自动下载的总时长上限。
+ *
+ * 取 45 分钟是有意的宽松：README 记录过实测 95KB/s，85MB 约需 15 分钟，
+ * 留三倍余量给更慢的链路。它只兜「一直有零星数据但永远传不完」的病态情形；
+ * 「完全停滞」由 downloadBinary 内部的停滞看门狗更快地判死。
+ */
+const DOWNLOAD_TOTAL_TIMEOUT_MS = 45 * 60_000
+
+/**
  * 渲染操盘纪律切片。
  *
  * 这些规则**不是**本插件发明的新政策，而是编译引擎里已经硬编码的执行事实——
@@ -71,33 +80,94 @@ export function renderDiscipline({ binary, db, cap }) {
   ].join('\n')
 }
 
-/** 把一次写操作压成一句人话，放进审批提示里——用户得看得见自己要批的是什么。 */
+/**
+ * 审批闸门的判定逻辑，抽成**纯函数**以便单测覆盖。
+ *
+ * 关键在最后那条分支：宿主 payload 形状漂移（`exec.name` 取不到）时，
+ * `WRITE_TOOLS.includes(undefined)` 是 false —— 直接 return next() 就等于**放行**。
+ * 而同一份代码在 HTTP 层的原则是「判断不了就拒绝」。所以这里 fail closed：
+ * 认不出工具名就当成写操作，要求审批，并让调用方打一条 Warn。
+ *
+ * @param {{name?: unknown, arguments?: unknown}} exec
+ * @param {{requireApprovalForWrites?: boolean}} settings
+ * @returns {{decision: 'ask'|'next', name: string, args: object, failClosed?: boolean}}
+ */
+export function decideApproval(exec, settings = {}) {
+  const name = typeof exec?.name === 'string' ? exec.name : ''
+  const args = exec?.arguments && typeof exec.arguments === 'object' ? exec.arguments : {}
+
+  if (settings.requireApprovalForWrites === false) {
+    return { decision: 'next', name, args }
+  }
+  if (!name) {
+    return { decision: 'ask', name, args, failClosed: true }
+  }
+  if (WRITE_TOOLS.includes(name)) {
+    return { decision: 'ask', name, args }
+  }
+  return { decision: 'next', name, args }
+}
+
+/**
+ * 把一次写操作压成一句人话，放进审批提示里——用户得看得见自己要批的是什么。
+ *
+ * **不允许把关键字段悄悄降级成 `?`**：用户可能因此批准一笔自己没看清的订单。
+ * 字段缺失时改为附上截断后的原始入参，让「这笔单到底要干什么」始终可见。
+ */
 export function describeWrite(name, args) {
   const a = args && typeof args === 'object' ? args : {}
   const acct = a.account ? ` [${a.account}]` : ''
-  switch (name) {
-    case TOOL_NAMES.lotBuy:
-      return `买入 ${a.symbol ?? '?'} ${a.qty ?? '?'} 股 @ ${a.price ?? '?'}${acct}`
-    case TOOL_NAMES.lotAdd:
-      return `加仓 ${a.parent_lot_id ?? '?'} @ ${a.price ?? '?'}${a.amount ? ` 投入 ${a.amount} 元` : ''}${acct}`
-    case TOOL_NAMES.lotClose:
-      return `平仓 ${a.lot_id ?? '?'} @ ${a.price ?? '?'}${a.qty ? ` ${a.qty} 股` : ' 全额'}${a.substitute_core ? '（底仓代冲）' : ''}`
-    case TOOL_NAMES.dividendAdd:
-      return `录入分红 ${a.symbol ?? '?'} ${a.amount ?? '?'} 元${acct}`
-    case TOOL_NAMES.accountAdd:
-      return `登记账户 ${a.account_id ?? '?'}`
-    default:
-      return name
+  const summary = (() => {
+    switch (name) {
+      case TOOL_NAMES.lotBuy:
+        return `买入 ${a.symbol ?? '?'} ${a.qty ?? '?'} 股 @ ${a.price ?? '?'}${acct}`
+      case TOOL_NAMES.lotAdd:
+        return `加仓 ${a.parent_lot_id ?? '?'} @ ${a.price ?? '?'}${a.amount ? ` 投入 ${a.amount} 元` : ''}${acct}`
+      case TOOL_NAMES.lotClose:
+        return `平仓 ${a.lot_id ?? '?'} @ ${a.price ?? '?'}${a.qty ? ` ${a.qty} 股` : ' 全额'}${a.substitute_core ? '（底仓代冲）' : ''}`
+      case TOOL_NAMES.dividendAdd:
+        return `录入分红 ${a.symbol ?? '?'} ${a.amount ?? '?'} 元${acct}`
+      case TOOL_NAMES.accountAdd:
+        return `登记账户 ${a.account_id ?? '?'}`
+      default:
+        return ''
+    }
+  })()
+
+  // 认不出工具，或摘要里有没填上的字段 → 补上原始入参，别让用户对着 `?` 点头
+  if (!summary || summary.includes('?')) {
+    const raw = truncateForPrompt(args)
+    const label = summary || `未知写操作 ${name || '(无工具名)'}`
+    return `${label}（摘要不完整，原始入参：${raw}）`
   }
+  return summary
+}
+
+/** 把入参压成一段有上界的文本，供审批提示展示。 */
+export function truncateForPrompt(value, max = 300) {
+  let text
+  try {
+    text = JSON.stringify(value)
+  } catch {
+    text = String(value)
+  }
+  if (typeof text !== 'string') text = String(text)
+  return text.length > max ? `${text.slice(0, max)}…（已截断）` : text
 }
 
 // ───────────────────────────────────────────────────────── 路由小工具
 
-/** 只服务本机回环请求，避免把账本快照暴露给同网段。 */
+/**
+ * 只服务本机回环请求。
+ *
+ * `remoteAddress` 缺失时**拒绝**。以前这里把 undefined 当放行，与「两道闸缺一不可」
+ * 的表述不一致：真实浏览器请求一定会带 socket 地址，取不到地址说明这条请求
+ * 不是走正常 TCP 回环进来的，保守起见交给第二道 Connection 闸处理（它会 401/403）。
+ */
 export function isLoopbackRequest(request) {
   const address = request?.socket?.remoteAddress
   const okAddress =
-    address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1' || address === undefined
+    address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
   if (!okAddress) return false
   const host = request?.headers?.host
   if (typeof host !== 'string') return true
@@ -182,6 +252,10 @@ export function apply(ctx, config) {
   const db = resolveDbPath(settings.dbPath)
   const log = (...args) => ctx.logger?.info?.('[lot-trader]', ...args)
   const warn = (...args) => ctx.logger?.warn?.('[lot-trader]', ...args)
+
+  // 配置里可疑的地方不静默吞掉：例如 `cap: "300000"`（带引号）会被容错成数字，
+  // 但 `cap: "abc"` 只能回退到 0，用户以为设了其实没设。
+  for (const warning of settings.warnings ?? []) warn(warning)
 
   // ── 可变的二进制状态 ────────────────────────────────────────
   // 自动下载完成前先落到 PATH 兜底；下载完成后原地更新，runner 每次调用都读最新的。
@@ -310,7 +384,11 @@ export function apply(ctx, config) {
       log(`本机没有 trade 二进制，正在从 GitHub Releases 自动下载 ${target} …`)
       void (async () => {
         try {
-          const downloaded = await downloadBinary()
+          // 双层看门狗：
+          //   - 内层是 downloadBinary 的「停滞」检测（每收到数据块就重置），
+          //     慢链路（实测 95KB/s）能传完，一个字节都不来才判死；
+          //   - 这里是外层总时长上限，兜住「一直有零星数据但永远传不完」这种病态情形。
+          const downloaded = await downloadBinary({ signal: AbortSignal.timeout(DOWNLOAD_TOTAL_TIMEOUT_MS) })
           binaryPath = downloaded
           binarySource = '自动下载'
           binaryStatus = 'ready'
@@ -346,11 +424,17 @@ export function apply(ctx, config) {
   // 用 waterfall 的 `ask` 而不是 `ctx.tools.guard()`：guard 是同步的、只能 deny，
   // 而这里要的是「挂起等人点头」。非本插件的工具一律 `next()` 让行，
   // 绝不吞掉别人的决策。
+  //
+  // 判定逻辑抽到 {@link decideApproval}，因为它有一条**必须 fail closed** 的分支：
+  // 宿主 payload 形状漂移、取不到工具名时，不能当成「不是写工具」而放行。
   ctx.on('tools/pre-execute', async (exec, next) => {
-    if (!settings.requireApprovalForWrites) return next()
-    const name = exec?.name
-    if (!WRITE_TOOLS.includes(name)) return next()
-    const summary = describeWrite(name, exec?.arguments)
+    const verdict = decideApproval(exec, settings)
+    if (verdict.failClosed) {
+      warn(`审批闸门拿到无法识别的工具名（${JSON.stringify(exec?.name ?? null)}），按写操作处理并要求审批`)
+    }
+    if (verdict.decision === 'next') return next()
+
+    const summary = describeWrite(verdict.name, verdict.args)
     return {
       kind: 'ask',
       reason: `lot-trader 即将写入操盘账本：${summary}`,

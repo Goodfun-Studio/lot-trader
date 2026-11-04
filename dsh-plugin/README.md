@@ -215,18 +215,33 @@ release CDN 都通；只有一条路径会让这类用户直接失败。同理�
 ## 开发
 
 ```bash
-# 纯逻辑契约测试（真打进程，不 mock CLI）
+# 全量：51 条契约测试 + 6 条端到端（端到端在本机没有 trade 二进制时自动跳过）
 node --test test/*.test.js
 
-# 端到端：拿真实账本副本 + 真实二进制跑通整条 Host 管线
-node .lt-verify/e2e.mjs
+# 只跑契约（纯逻辑 + 真打进程，零网络）
+node --test test/helpers.test.js
+
+# 只跑端到端：起真账本、跑真引擎、断言最终结果集
+node --test test/e2e.test.js
 ```
 
-测试覆盖的是插件自己的代码路径（`resolveBinary` → `createCliRunner` →
-`createTradeTools` → `deriveBoard`），不是另写一套等价调用骗过自己。
-负向断言包括：CLI 非零退出必须判 `ok:false` 而不是空数据成功、
+### 两类测试的分工
+
+**契约测试**（`test/helpers.test.js`）打的是插件自己的代码路径
+（`resolveBinary` → `createCliRunner` → `createTradeTools` → `deriveBoard`），
+不 mock CLI、不碰网络。负向断言覆盖：CLI 非零退出必须判 `ok:false` 而不是空数据成功、
 非 JSON 输出判 `CLI_NO_JSON`、二进制不存在判 `CLI_NOT_FOUND`、
-非回环请求必须 403。
+响应头不得含任何 CORS、Connection 缺席/非回环/认证抛错一律 403、
+BUSY_RECOVERY 重试**不得删除**账本 `-wal`、body 停滞必须判死。
+
+**端到端**（`test/e2e.test.js`）用**真实引擎**建临时账本，断言引擎实际返回了什么。
+它存在的理由是一条教训：契约测试只锁 argv 形状（「有没有传 `--status`」），
+而曾经 `status:"ALL"` 按设计不带 flag、引擎默认又是 ACTIVE，
+于是 ALL 静默返回 ACTIVE-only —— **只锁 argv 的测试永远发现不了这种错**。
+所以端到端直接对照「插件结果 vs 引擎直调结果」。
+
+端到端还会验证：只读调用不得删除账本的 `-wal`/`-shm`、
+单标的 30% 硬顶真的会拦截、非整百股数必须被拒、T+1 当日平仓会被拦。
 
 ## 已知情况
 
@@ -242,6 +257,20 @@ node .lt-verify/e2e.mjs
 - **`trade_position` 默认不内联逐笔批次**（只给 `lots_count`），
   否则上百笔明细会一次性灌进上下文。需要明细用 `include_lots: true`，
   或改用 `trade_lot_list` 分页。
+- **只支持 macOS 与 Linux**。Windows 上 `platformTarget()` 返回 `null`，
+  会立刻报「没有预编译的 trade 二进制」，而不是走完整条下载流程再收到网络类错误
+  —— 因为发布矩阵里确实没有 Windows 产物。要加 Windows 得先在
+  `.github/workflows/release-binaries.yml` 的矩阵里补上并验证交叉编译。
+- **无法回显引擎版本**。引擎没有 `--version`（执行会打印 usage），
+  所以 `engine` 信息里只能给二进制路径与来源（`config.binaryPath` / 仓库同级 /
+  `~/.local/bin` / 自动下载缓存 / PATH），给不出「插件 X + 引擎 Y」的版本对照。
+  排版本不匹配时请以路径 + 文件时间/大小为据。
+- **收益率拿不到时不会当成 0**。现价取不到的批次会落在「收益率不可用」桶，
+  表格显示 `—`，排序时排在最后。这是刻意的：把「不知道」显示成「不赚不亏」
+  比留空更有害。若你看到 `—`，说明那一笔的现价没取到。
+- **配置值解析失败会打日志，但不中断**。例如 `cap: "很多钱"` 会回退到 0
+  （沿用引擎解析链）并在日志里 Warn；`cap: "300000"` 这种带引号的数字字符串
+  是**能用**的（会被读成 300000），不必去掉引号。
 
 ## 发布与发行（维护者）
 
@@ -249,10 +278,10 @@ node .lt-verify/e2e.mjs
 它们定时抓 npm 包的 `dsh` 字段、`engines.dsh`、`repository`、下载量与 GitHub stars。
 没有人工提交入口，所以「发布」= 发 npm + 挂一个公开 GitHub 仓库。
 
-### 1. 让仓库公开
+### 1. 仓库需公开
 
 市场页的 Source 链接与 stars 都读 GitHub，插件自动下载也走 Releases。
-`Goodfun-Studio/lot-trader` 目前是私有仓库，公开之后这一步才算完成。
+`Goodfun-Studio/lot-trader` 已公开（MIT）。
 
 ### 2. 发一个带二进制的 Release
 

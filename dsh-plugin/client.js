@@ -201,22 +201,34 @@ window.__ModuleLoader__.load({
       const n = Number(v)
       return Number.isFinite(n) ? n : fallback
     }
+    /**
+     * 值是否**明确不可用**。
+     *
+     * 必须先判 null/undefined 再走 Number()：`Number(null)` 是 0，
+     * 于是「收益率拿不到」会被渲染成「0.00%」——把「不知道」说成「不赚不亏」，
+     * 正是这个插件反对的粉饰。空串同理。
+     */
+    const isUnknown = (v) => v === null || v === undefined || v === ''
     function money(v, digits = 2) {
+      if (isUnknown(v)) return '—'
       const n = Number(v)
       if (!Number.isFinite(n)) return '—'
       return n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
     }
     function pct(v, digits = 2) {
+      if (isUnknown(v)) return '—'
       const n = Number(v)
       if (!Number.isFinite(n)) return '—'
       return `${(n * 100).toFixed(digits)}%`
     }
     function signedMoney(v, digits = 2) {
+      if (isUnknown(v)) return '—'
       const n = Number(v)
       if (!Number.isFinite(n)) return '—'
       return `${n > 0 ? '+' : ''}${money(n, digits)}`
     }
     function pnlColor(v) {
+      if (isUnknown(v)) return LABEL2
       const n = Number(v)
       if (!Number.isFinite(n) || n === 0) return LABEL2
       return n > 0 ? GREEN : RED
@@ -459,10 +471,21 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         alive.current = true
         void load()
-        const handle = setInterval(() => void load(), POLL_MS)
+        // 页面隐藏时跳过这一轮轮询。宿主侧已经「最近有人读才刷新」，
+        // 这里再省一层：没人看的标签页不该继续拉行情（position 要打全市场行情与历史 K 线）。
+        const handle = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          void load()
+        }, POLL_MS)
+        // 从后台切回前台时立刻补一次，避免回来看到过期快照
+        const onVisible = () => {
+          if (typeof document !== 'undefined' && !document.hidden) void load()
+        }
+        if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
         return () => {
           alive.current = false
           clearInterval(handle)
+          if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
         }
       }, [load])
 
@@ -642,6 +665,8 @@ window.__ModuleLoader__.load({
       if (id === 'pullback') return IDLE
       if (id === 'flat') return LABEL2
       if (id === 'take-profit') return GREEN
+      // 收益率不可用既不是红也不是绿，单独一个中性色，避免被读成某个盈亏档
+      if (id === 'unknown') return LABEL2
       return BRAND
     }
 
@@ -908,7 +933,18 @@ window.__ModuleLoader__.load({
                     h(Dot, { tone: bucketTone(bucket.id) }),
                     h('span', { style: { color: LABEL2 } }, bucket.label),
                     h('span', { style: { color: LABEL, fontVariantNumeric: 'tabular-nums' } }, `${bucket.count}`),
-                    h('span', { style: { color: pnlColor(bucket.floating_pnl), fontVariantNumeric: 'tabular-nums' } }, signedMoney(bucket.floating_pnl)),
+                    // 桶内金额全不可得时显示「—」，不用 +0.00 假装是零
+                    bucket.pnl_unknown_count === bucket.count && bucket.count > 0
+                      ? h(
+                          'span',
+                          { style: { color: LABEL2 }, title: `该桶 ${bucket.count} 笔的浮动盈亏均不可得` },
+                          '金额 —',
+                        )
+                      : h(
+                          'span',
+                          { style: { color: pnlColor(bucket.floating_pnl), fontVariantNumeric: 'tabular-nums' } },
+                          signedMoney(bucket.floating_pnl),
+                        ),
                   ),
                 ),
               ),

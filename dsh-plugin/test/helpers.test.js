@@ -12,7 +12,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -20,6 +21,7 @@ import {
   RETURN_BUCKETS,
   TOOL_NAMES,
   TradeCliError,
+  UNKNOWN_BUCKET_ID,
   WRITE_TOOLS,
   bunBuildTarget,
   createCliRunner,
@@ -27,16 +29,26 @@ import {
   deriveBoard,
   downloadBinary,
   expandHome,
+  isExecutableFile,
   normalizeConfig,
   parseJsonLoose,
   platformTarget,
+  readBodyWithStallWatchdog,
   resolveBinary,
   resolveDbPath,
   runOrThrow,
   stripLots,
+  toPositiveNumber,
 } from '../tools.js'
 
-import { authorizeRequest, describeWrite, isLoopbackRequest, renderDiscipline, writeJson } from '../index.js'
+import {
+  authorizeRequest,
+  decideApproval,
+  describeWrite,
+  isLoopbackRequest,
+  renderDiscipline,
+  writeJson,
+} from '../index.js'
 
 /** 造一个可执行的 shell 脚本，用来当受控的假 CLI。 */
 function fakeBinary(body) {
@@ -274,7 +286,7 @@ test('trade_position 默认剥掉逐笔批次，include_lots 才内联', async (
   assert.equal(full.targets[0].lots.length, 2)
 })
 
-test('trade_lot_list 在插件侧排序与分页，且 --status ALL 不传 flag', async () => {
+test('trade_lot_list 在插件侧排序与分页，且 status 无条件透传', async () => {
   const rows = [
     { lot_id: 'A', buy_time: '2026-01-01T00:00:00Z', return_rate: 0.05 },
     { lot_id: 'B', buy_time: '2026-03-01T00:00:00Z', return_rate: -0.2 },
@@ -287,11 +299,11 @@ test('trade_lot_list 在插件侧排序与分页，且 --status ALL 不传 flag'
   }
   const tools = createTradeTools({ run, getCap: () => 0 })
   const list = tools.find((tool) => tool.name === TOOL_NAMES.lotList)
+  const statusOf = (argv) => (argv.includes('--status') ? argv[argv.indexOf('--status') + 1] : null)
 
   const byTime = await list.execute({})
   assert.deepEqual(byTime.rows.map((row) => row.lot_id), ['B', 'C', 'A'], '默认按买入时间倒序')
-  assert.equal(seen[0].includes('--status'), true)
-  assert.equal(seen[0][seen[0].indexOf('--status') + 1], 'ACTIVE')
+  assert.equal(statusOf(seen[0]), 'ACTIVE', '不传时明确落到 ACTIVE')
 
   const byReturn = await list.execute({ sort_by: 'return_rate', limit: 2 })
   assert.deepEqual(byReturn.rows.map((row) => row.lot_id), ['C', 'A'])
@@ -301,9 +313,16 @@ test('trade_lot_list 在插件侧排序与分页，且 --status ALL 不传 flag'
   const paged = await list.execute({ sort_by: 'return_rate', limit: 1, offset: 2 })
   assert.deepEqual(paged.rows.map((row) => row.lot_id), ['B'])
 
+  // 引擎的 `--status` 声明默认值就是 ACTIVE，所以「不带 flag」= 只取 ACTIVE。
+  // 曾经在 ALL 时刻意不带 flag，导致 `status:'ALL'` 静默返回 ACTIVE-only ——
+  // 模型会拿到错误的完整性结论。这里锁的是「ALL 必须真的传到引擎」。
   const all = await list.execute({ status: 'ALL' })
   assert.equal(all.total, 3)
-  assert.equal(seen.at(-1).includes('--status'), false, 'ALL 不该把 --status ALL 传给引擎')
+  assert.equal(statusOf(seen.at(-1)), 'ALL', 'ALL 必须透传给引擎，否则等于只查 ACTIVE')
+
+  const closed = await list.execute({ status: 'CLOSED' })
+  assert.equal(closed.total, 3)
+  assert.equal(statusOf(seen.at(-1)), 'CLOSED')
 })
 
 test('写工具成功后触发 onMutate，读工具不触发', async () => {
@@ -401,8 +420,8 @@ test('deriveBoard：两个批次视图是独立数组，各自真的排好序', 
   assert.equal(b.symbol_name, '黄金ETF华安')
   assert.equal(b.asset_class, 'ETF')
 
-  // 分层透视覆盖全部批次，且与 RETURN_BUCKETS 同构
-  assert.equal(board.bucketCounts.length, RETURN_BUCKETS.length)
+  // 分层透视：RETURN_BUCKETS 六个盈亏档 + 一个「收益率不可用」桶
+  assert.equal(board.bucketCounts.length, RETURN_BUCKETS.length + 1)
   assert.equal(board.bucketCounts.reduce((sum, bucket) => sum + bucket.count, 0), 4)
   const bucketOf = (id) => board.bucketCounts.find((bucket) => bucket.id === id).count
   assert.equal(bucketOf('deep-value'), 1, 'B 的 -25% 必须落进深度击球区')
@@ -411,24 +430,54 @@ test('deriveBoard：两个批次视图是独立数组，各自真的排好序', 
   assert.equal(bucketOf('peak'), 1, 'C 的 +31% 必须落进高位浮盈梯队')
   assert.equal(bucketOf('dip'), 0)
   assert.equal(bucketOf('pullback'), 0)
+  assert.equal(bucketOf(UNKNOWN_BUCKET_ID), 0, '本组数据收益率都可得')
+  assert.equal(board.rate_unknown_count, 0)
   assert.equal(board.stats.total_trades, 7)
 })
 
-test('deriveBoard：空账本与脏数据不产生 NaN', () => {
+test('deriveBoard：收益率未知时保持未知，绝不当成 0（数据诚实）', () => {
+  // 现价取不到 → 引擎给的 return_rate 会缺失/非法。曾经 numeric() 把它归零，
+  // 于是这批会被塞进「成本线附近 (0 ~ +10%)」——看板上看起来「不赚不亏」，
+  // 而事实是「不知道」。这条锁住「未知就该显示为未知」。
+  const board = deriveBoard(
+    {
+      targets: [
+        {
+          symbol: 'X',
+          lots: [
+            { lot_id: 'UNKNOWN', buy_time: '2026-01-01T00:00:00Z', return_rate: 'n/a', current_price: null, remaining_quantity: 100 },
+            { lot_id: 'KNOWN', buy_time: '2026-01-02T00:00:00Z', return_rate: 0.05, current_price: 10, remaining_quantity: 100 },
+          ],
+        },
+      ],
+    },
+    null,
+  )
+
+  const unknown = board.lotsByReturn.find((l) => l.lot_id === 'UNKNOWN')
+  assert.equal(unknown.return_rate, null, '收益率必须保持 null，不能变成 0')
+  assert.equal(unknown.rate_known, false)
+  assert.equal(unknown.bucket, UNKNOWN_BUCKET_ID, '必须落到「收益率不可用」桶，而不是成本线附近')
+  assert.equal(unknown.market_value, null, '市值算不出就保持 null，不假装是 0')
+
+  // 未知值排到最后，不能插进「不赚不亏」的位置
+  assert.deepEqual(board.lotsByReturn.map((l) => l.lot_id), ['KNOWN', 'UNKNOWN'])
+
+  const bucketOf = (id) => board.bucketCounts.find((bucket) => bucket.id === id).count
+  assert.equal(bucketOf('flat'), 1, '只有真正 +5% 的那笔进成本线附近')
+  assert.equal(bucketOf(UNKNOWN_BUCKET_ID), 1)
+  assert.equal(board.rate_unknown_count, 1)
+
+  const unknownBucket = board.bucketCounts.find((b) => b.id === UNKNOWN_BUCKET_ID)
+  assert.equal(unknownBucket.pnl_unknown_count, 1, '桶内金额不可得的笔数要如实报出')
+})
+
+test('deriveBoard：空账本不产生 NaN', () => {
   const empty = deriveBoard(undefined, undefined)
   assert.equal(empty.lots_count, 0)
   assert.deepEqual(empty.lotsByTime, [])
   assert.equal(empty.portfolio, null)
-
-  const dirty = deriveBoard(
-    { targets: [{ symbol: 'X', lots: [{ lot_id: 'A', return_rate: 'not-a-number', current_price: null, remaining_quantity: undefined }] }] },
-    null,
-  )
-  const lot = dirty.lotsByTime[0]
-  assert.equal(Number.isFinite(lot.return_rate), true)
-  assert.equal(Number.isFinite(lot.floating_pnl), true)
-  assert.equal(Number.isFinite(lot.market_value), true)
-  assert.equal(lot.bucket, 'flat')
+  assert.equal(empty.rate_unknown_count, 0)
 })
 
 // ─────────────────────────────────────────────── 纪律与审批
@@ -449,39 +498,57 @@ test('describeWrite 把写操作压成看得懂的一句话', () => {
   )
   assert.match(describeWrite(TOOL_NAMES.lotClose, { lot_id: 'LOT-1', price: 7.05, substitute_core: true }), /平仓 LOT-1 .*底仓代冲/)
   assert.match(describeWrite(TOOL_NAMES.accountAdd, { account_id: 'CMB_MAIN' }), /登记账户 CMB_MAIN/)
-  assert.equal(describeWrite('something_else', {}), 'something_else')
 })
 
-test('isLoopbackRequest 只放回环，拒绝同网段', () => {
+test('describeWrite 字段缺失时附上原始入参，不让用户对着 ? 点头', () => {
+  // 关键字段缺失时摘要里必然出现 '?'。曾经就到此为止（`买入 ? ? 股 @ ?`），
+  // 用户可能因此批准一笔自己没看清的订单 —— 审批提示必须始终说明「要干什么」。
+  const partial = describeWrite(TOOL_NAMES.lotBuy, { symbol: '518880.SH' })
+  assert.match(partial, /\?/, '摘要本身仍会暴露缺失字段')
+  assert.match(partial, /原始入参/, '必须补上原始入参')
+  assert.match(partial, /518880\.SH/, '原始入参里要能看见模型实际传了什么')
+
+  // 认不出工具名时也要有用，而不是把工具名原样丢回给用户
+  const unknown = describeWrite('something_else', { foo: 1 })
+  assert.match(unknown, /未知写操作 something_else/)
+  assert.match(unknown, /foo/, '原始入参要在')
+})
+
+test('isLoopbackRequest 只放回环，拒绝同网段，且拿不到地址时拒绝', () => {
   const req = (remoteAddress, host) => ({ socket: { remoteAddress }, headers: host ? { host } : {} })
 
   assert.equal(isLoopbackRequest(req('127.0.0.1', '127.0.0.1:8080')), true)
   assert.equal(isLoopbackRequest(req('::1', 'localhost:8080')), true)
   assert.equal(isLoopbackRequest(req('::ffff:127.0.0.1', '[::1]:8080')), true)
-  assert.equal(isLoopbackRequest(req(undefined, '127.0.0.1:8080')), true)
 
   // 负向防误杀：非回环一律拒
   assert.equal(isLoopbackRequest(req('192.168.1.9', '192.168.1.9:8080')), false)
   assert.equal(isLoopbackRequest(req('10.0.0.3', undefined)), false)
   assert.equal(isLoopbackRequest(req('127.0.0.1', 'evil.example.com')), false)
+
+  // 拿不到 socket 地址时也拒绝：真实浏览器请求一定带地址，
+  // 取不到说明不是走正常 TCP 回环进来的。曾经这里放行，与「两道闸缺一不可」矛盾。
+  assert.equal(isLoopbackRequest(req(undefined, '127.0.0.1:8080')), false, '地址缺失必须拒绝')
+  assert.equal(isLoopbackRequest({ headers: { host: '127.0.0.1:8080' } }), false, '没有 socket 必须拒绝')
 })
 
 // ─────────────────────────────────────────────── 自动下载与平台映射
 
-test('platformTarget 按 os×arch 映射到 release asset 名', () => {
-  const t = platformTarget()
-  // 断言形状而不是硬编码本机值，这样在任何 CI 机器上都成立
-  if (process.platform === 'darwin') {
-    assert.match(t, /^trade-darwin-(x64|arm64)$/)
-    assert.equal(t, process.arch === 'arm64' ? 'trade-darwin-arm64' : 'trade-darwin-x64')
-  } else if (process.platform === 'linux') {
-    assert.match(t, /^trade-linux-(x64|arm64)$/)
-    assert.equal(t, process.arch === 'arm64' ? 'trade-linux-arm64' : 'trade-linux-x64')
-  } else if (process.platform === 'win32') {
-    assert.match(t, /^trade-windows-(x64|arm64)\.exe$/)
-  } else {
-    assert.equal(t, null, '未预编译的平台必须返回 null，而不是编一个不存在的名字')
-  }
+test('platformTarget 按平台映射，且只返回发布矩阵里真实存在的产物', () => {
+  // 显式传平台，覆盖所有分支而不必换机器
+  assert.equal(platformTarget('darwin', 'arm64'), 'trade-darwin-arm64')
+  assert.equal(platformTarget('darwin', 'x64'), 'trade-darwin-x64')
+  assert.equal(platformTarget('linux', 'x64'), 'trade-linux-x64')
+  assert.equal(platformTarget('linux', 'arm64'), 'trade-linux-arm64')
+
+  // Windows 没有发布产物 → 必须返回 null，让调用方立刻报「未预编译平台」，
+  // 而不是编一个不存在的名字走完整条下载流程再收到网络类错误。
+  assert.equal(platformTarget('win32', 'x64'), null, 'Windows 无产物必须返回 null')
+  assert.equal(platformTarget('win32', 'arm64'), null)
+  assert.equal(platformTarget('freebsd', 'x64'), null)
+
+  // 默认参数取当前运行时
+  assert.equal(platformTarget(), platformTarget(process.platform, process.arch))
 })
 
 test('bunBuildTarget 生成合法的 Bun 编译 target', () => {
@@ -639,4 +706,291 @@ test('下载校验必须 fail closed：拿不到 sha256 就拒绝安装（回归
     !/if \(expectedSha256\) \{\s*\n\s*const actual/.test(source),
     '不得退回 fail-open：校验和取不到时不能继续安装',
   )
+})
+
+// ─────────────────────────────────────────────── 审批闸门（纯函数）
+
+test('decideApproval：写工具要审批、读工具放行、关掉审批则全放行', () => {
+  const on = { requireApprovalForWrites: true }
+  // 写工具 → ask
+  for (const name of WRITE_TOOLS) {
+    const v = decideApproval({ name, arguments: {} }, on)
+    assert.equal(v.decision, 'ask', `${name} 必须走审批`)
+    assert.ok(!v.failClosed)
+  }
+  // 读工具 → next（不能被闸门误伤）
+  for (const name of [TOOL_NAMES.position, TOOL_NAMES.lotList, TOOL_NAMES.scan, TOOL_NAMES.stats, TOOL_NAMES.physics, TOOL_NAMES.dividendList]) {
+    assert.equal(decideApproval({ name, arguments: {} }, on).decision, 'next', `${name} 不该被拦`)
+  }
+  // 别人的工具 → next（绝不吞掉别的插件的决策）
+  assert.equal(decideApproval({ name: 'read_file', arguments: {} }, on).decision, 'next')
+  // 显式关掉 → 全放行
+  assert.equal(decideApproval({ name: TOOL_NAMES.lotBuy }, { requireApprovalForWrites: false }).decision, 'next')
+})
+
+test('decideApproval：取不到工具名时 fail closed（这是曾经的放行缺口）', () => {
+  // 原实现是 `if (!WRITE_TOOLS.includes(exec?.name)) return next()` ——
+  // payload 形状漂移（name 取不到）时 includes(undefined) 为 false，于是**放行**。
+  // HTTP 层同期的原则却是「判断不了就拒绝」，前后不一致。
+  const on = { requireApprovalForWrites: true }
+  for (const bad of [{}, { name: undefined }, { name: null }, { name: 123 }, { name: '' }, null]) {
+    const v = decideApproval(bad, on)
+    assert.equal(v.decision, 'ask', `${JSON.stringify(bad)} 必须按写操作处理`)
+    assert.equal(v.failClosed, true, '要标记为 fail-closed，好让调用方打 Warn')
+  }
+})
+
+// ─────────────────────────────────────────────── 配置容错
+
+test('toPositiveNumber 接受数字字符串，拒绝垃圾', () => {
+  assert.equal(toPositiveNumber(300000), 300000)
+  assert.equal(toPositiveNumber('300000'), 300000, 'YAML 里加引号的 cap 必须能用')
+  assert.equal(toPositiveNumber(' 300000 '), 300000)
+  assert.equal(toPositiveNumber(0), undefined, '0 不是「正数」')
+  assert.equal(toPositiveNumber(-1), undefined)
+  assert.equal(toPositiveNumber('abc'), undefined)
+  assert.equal(toPositiveNumber(''), undefined)
+  assert.equal(toPositiveNumber(null), undefined)
+  assert.equal(toPositiveNumber(undefined), undefined)
+  assert.equal(toPositiveNumber(NaN), undefined)
+  assert.equal(toPositiveNumber(Infinity), undefined)
+})
+
+test('normalizeConfig：字符串 cap 生效，非法值回退并留 Warn', () => {
+  // 关键回归：`cap: "300000"` 曾经被静默当成 0（= 沿用引擎默认 50000），
+  // 而 README 又强调「必须自己设 cap」，用户以为设了其实没设。
+  const quoted = normalizeConfig({ cap: '300000' })
+  assert.equal(quoted.cap, 300000)
+  assert.deepEqual(quoted.warnings, [])
+
+  const bad = normalizeConfig({ cap: '很多钱' })
+  assert.equal(bad.cap, 0)
+  assert.equal(bad.warnings.length, 1, '解析不出正数必须留痕，不能静默')
+  assert.match(bad.warnings[0], /cap/)
+
+  assert.equal(normalizeConfig({ pollSeconds: '60' }).pollMs, 60_000)
+  assert.equal(normalizeConfig({ pollSeconds: 'abc' }).pollMs, 45_000)
+  assert.equal(normalizeConfig({ pollSeconds: 'abc' }).warnings.length, 1)
+
+  // 没配就不该有告警（「没配」和「配错了」要分得清）
+  assert.deepEqual(normalizeConfig({}).warnings, [])
+  assert.deepEqual(normalizeConfig({ cap: 0 }).warnings, [])
+})
+
+// ─────────────────────────────────────────────── 二进制探测与落盘
+
+test('isExecutableFile：只认「存在且有可执行位」', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-exec-'))
+  const exec = join(dir, 'exec')
+  const plain = join(dir, 'plain')
+  writeFileSync(exec, '#!/bin/sh\nexit 0\n')
+  chmodSync(exec, 0o755)
+  writeFileSync(plain, 'not executable')
+  chmodSync(plain, 0o644)
+
+  assert.equal(isExecutableFile(exec), true)
+  assert.equal(isExecutableFile(plain), false, '存在但不可执行不算命中（半截下载文件就长这样）')
+  assert.equal(isExecutableFile(join(dir, 'missing')), false)
+  assert.equal(isExecutableFile(''), false)
+  assert.equal(isExecutableFile(undefined), false)
+})
+
+test('resolveBinary：半截的缓存文件不会被当成可用二进制', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-half-'))
+  const half = join(dir, 'trade')
+  writeFileSync(half, 'partial')  // 存在，但没有可执行位
+  chmodSync(half, 0o644)
+
+  const hit = resolveBinary(half)
+  assert.notEqual(hit.path, half, '存在但不可执行的文件不该被选中，否则此后永久 EACCES 且不回退')
+  assert.ok(hit.tried.includes(half))
+})
+
+// ─────────────────────────────────────────────── body 停滞看门狗
+
+test('readBodyWithStallWatchdog：正常流读出完整内容', async () => {
+  const payload = Buffer.from('x'.repeat(4096))
+  const response = new Response(payload)
+  const out = await readBodyWithStallWatchdog(response, { stallMs: 5_000 })
+  assert.equal(out.length, 4096)
+  assert.equal(out.toString(), payload.toString())
+})
+
+test('readBodyWithStallWatchdog：完全停滞必须报错，不能永久挂住', async () => {
+  // 只发响应头、body 永不产出 —— 这正是「下载卡在 downloading 状态」的成因
+  const stalling = new Response(new ReadableStream({ start() { /* 永不 enqueue */ } }))
+  const t0 = Date.now()
+  await assert.rejects(
+    () => readBodyWithStallWatchdog(stalling, { stallMs: 120 }),
+    /下载停滞/,
+  )
+  assert.ok(Date.now() - t0 < 3_000, '必须在停滞阈值附近就判死，而不是一直等')
+})
+
+test('readBodyWithStallWatchdog：能响应调用方 signal 中止', async () => {
+  const stalling = new Response(new ReadableStream({ start() { /* 永不 enqueue */ } }))
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(new Error('caller abort')), 60)
+  await assert.rejects(() => readBodyWithStallWatchdog(stalling, { stallMs: 30_000, callerSignal: controller.signal }))
+})
+
+// ─────────────────────────────────────────────── 下载：校验与原子落盘
+
+/** 造一个按 URL 分派的假 fetch。 */
+function fakeFetch(routes) {
+  return async (url, init) => {
+    for (const [needle, handler] of routes) {
+      if (String(url).includes(needle)) return handler(url, init)
+    }
+    return new Response('nope', { status: 404, statusText: 'Not Found' })
+  }
+}
+
+function releaseJson(target, { withChecksumAsset = true } = {}) {
+  const assets = [{ name: target, id: 11, url: 'https://api.github.com/assets/11' }]
+  if (withChecksumAsset) assets.push({ name: `${target}.sha256`, id: 12, url: 'https://api.github.com/assets/12' })
+  return { tag_name: 'v9.9.9', assets }
+}
+
+test('downloadBinary：拿不到 sha256 时拒绝安装（fail closed）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-dl-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return // 当前平台无产物，跳过
+
+  const fetchImpl = fakeFetch([
+    ['/releases/assets/11', async () => new Response(Buffer.alloc(4096, 7), { status: 200 })],
+    ['api.github.com/repos', async () => new Response(JSON.stringify(releaseJson(target)), { status: 200, headers: { 'content-type': 'application/json' } })],
+    // 校验和两条路都 404
+  ])
+
+  await assert.rejects(
+    () => downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 }),
+    /拒绝安装未经完整性校验/,
+  )
+  assert.equal(existsSync(cachePath), false, '校验缺失时必须什么都没落盘')
+})
+
+test('downloadBinary：sha256 不匹配时拒绝，且不留半截文件', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-dl2-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const wrongHash = 'f'.repeat(64)
+  const fetchImpl = fakeFetch([
+    ['/releases/assets/11', async () => new Response(Buffer.alloc(4096, 7), { status: 200 })],
+    ['api.github.com/repos', async () => new Response(JSON.stringify(releaseJson(target)), { status: 200, headers: { 'content-type': 'application/json' } })],
+    ['.sha256', async () => new Response(`${wrongHash}  ${target}\n`, { status: 200 })],
+  ])
+
+  await assert.rejects(() => downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 }), /sha256 不匹配/)
+  assert.equal(existsSync(cachePath), false, '校验失败不得留下任何文件')
+  // 也不该留下临时文件
+  const binDir = join(dir, 'bin')
+  const leftovers = (existsSync(binDir) ? readdirSync(binDir) : []).filter((f) => f.includes('.tmp'))
+  assert.deepEqual(leftovers, [], '临时文件必须被清理')
+})
+
+test('downloadBinary：校验通过时原子落盘并置可执行位', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-dl3-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 9)
+  const goodHash = createHash('sha256').update(payload).digest('hex')
+  const fetchImpl = fakeFetch([
+    ['/releases/assets/11', async () => new Response(payload, { status: 200 })],
+    ['api.github.com/repos', async () => new Response(JSON.stringify(releaseJson(target)), { status: 200, headers: { 'content-type': 'application/json' } })],
+    ['.sha256', async () => new Response(`${goodHash}  ${target}\n`, { status: 200 })],
+  ])
+
+  const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
+  assert.equal(out, cachePath)
+  assert.equal(existsSync(cachePath), true)
+  assert.equal(isExecutableFile(cachePath), true, '必须置上可执行位')
+  assert.equal(readFileSync(cachePath).length, 4096)
+  const binDir = join(dir, 'bin')
+  const leftovers = (existsSync(binDir) ? readdirSync(binDir) : []).filter((f) => f.includes('.tmp'))
+  assert.deepEqual(leftovers, [], 'rename 之后不该残留临时文件')
+})
+
+// ─────────────────────────────────────────────── 账本安全：不删 WAL
+
+test('createCliRunner：BUSY_RECOVERY 只退避重试，绝不删除账本 -wal/-shm', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-busy-'))
+  const dbPath = join(dir, 'ledger.db')
+  writeFileSync(dbPath, 'db')
+  const walPath = `${dbPath}-wal`
+  const shmPath = `${dbPath}-shm`
+  const walContent = 'committed-but-not-checkpointed'
+  writeFileSync(walPath, walContent)
+  writeFileSync(shmPath, 'shm')
+
+  const counter = join(dir, 'called')
+  const bin = fakeBinary(
+    `if [ -f "${counter}" ]; then\n` +
+      `  echo '{"code":0,"msg":"success","data":{"attempt":2}}'\n` +
+      `else\n` +
+      `  touch "${counter}"\n` +
+      `  echo "SQLiteError: database is locked SQLITE_BUSY_RECOVERY" 1>&2\n` +
+      `  exit 1\n` +
+      `fi`,
+  )
+
+  const run = createCliRunner({ binary: bin, dbPath })
+  const result = await run(['position'])
+  assert.equal(result.ok, true, '退避后应重试成功')
+  assert.equal(result.data.attempt, 2)
+
+  // 核心负向断言：账本附属文件必须原样还在。
+  // 旧实现命中 BUSY_RECOVERY 就 unlink -wal/-shm —— 只读调用也会删，
+  // 而 -wal 可能含已提交未 checkpoint 的事务，删掉就是丢数据。
+  assert.equal(existsSync(walPath), true, '-wal 不得被删除')
+  assert.equal(existsSync(shmPath), true, '-shm 不得被删除')
+  assert.equal(readFileSync(walPath, 'utf8'), walContent, '-wal 内容必须原封不动')
+})
+
+test('createCliRunner：持续 BUSY_RECOVERY 时如实上报，并说明该人工处理', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-busy2-'))
+  const dbPath = join(dir, 'ledger.db')
+  writeFileSync(dbPath, 'db')
+  const walPath = `${dbPath}-wal`
+  writeFileSync(walPath, 'wal')
+
+  const bin = fakeBinary(
+    `echo "SQLiteError: database is locked SQLITE_BUSY_RECOVERY" 1>&2\n exit 1`,
+  )
+  const run = createCliRunner({ binary: bin, dbPath })
+  const result = await run(['position'])
+  assert.equal(result.ok, false)
+  assert.equal(result.code, 'CLI_BUSY_RECOVERY_PERSISTENT')
+  assert.match(result.message, /手动/)
+  assert.equal(existsSync(walPath), true, '失败路径同样不得删除 -wal')
+})
+
+test('createCliRunner：同一账本上的调用被串行化（不自己制造锁竞争）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-serial-'))
+  const dbPath = join(dir, 'ledger.db')
+  const markDir = join(dir, 'marks')
+  mkdirSync(markDir)
+
+  // 假 CLI：进入时落一个标记、退出时删掉，再数标记数。
+  // 串行时前后两次各自只看到自己那 1 个；并发时会同时看到 2 个。
+  const bin = fakeBinary(
+    `mark="${markDir}/$$"\n` +
+      `touch "$mark"\n` +
+      `sleep 0.15\n` +
+      `n=$(ls "${markDir}" | wc -l | tr -d ' ')\n` +
+      `rm -f "$mark"\n` +
+      `echo "{\\"code\\":0,\\"msg\\":\\"success\\",\\"data\\":{\\"concurrent\\":$n}}"`,
+  )
+  const run = createCliRunner({ binary: bin, dbPath })
+  const [a, b] = await Promise.all([run(['position']), run(['stats'])])
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, true)
+  // 若并发执行，第二个进程会看到 2 个标记
+  assert.equal(a.data.concurrent, 1, '两次调用必须串行，不能同时持有账本')
+  assert.equal(b.data.concurrent, 1)
 })
