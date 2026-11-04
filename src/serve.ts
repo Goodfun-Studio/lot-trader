@@ -31,6 +31,7 @@ import { AccountRepository, DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { PriceSource } from "./models.ts";
 
 export const TOOL_VERSION: string = (pkg as { version?: string }).version || "0.0.0";
 
@@ -108,8 +109,6 @@ export interface ApiLot {
   close_avg_price: number | null;
   realized_pnl: number;
 }
-
-export type PriceSource = "live" | "cost_basis";
 
 export interface ApiSymbolSummary {
   symbol: string;

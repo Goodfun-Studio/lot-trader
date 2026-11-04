@@ -3,13 +3,12 @@
  * Deeply aligned with InvestmentTracker hierarchical portfolio profit & loss architecture.
  */
 import { Database } from "bun:sqlite";
-import { LotStatus } from "./models.ts";
+import { LotStatus, PriceSource } from "./models.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
-import type { PriceSource } from "./serve.ts";
 
 export interface LotListItem {
   lot_id: string;
