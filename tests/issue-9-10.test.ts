@@ -22,7 +22,6 @@ describe("Issue #10: confidence_level 边界", () => {
       low: 9,
       close: 10,
       volume: 1000,
-      amount: 10000,
     };
     const result = computePhysicsRadar("518880.SH", "黄金ETF", [bar]);
     expect(result.confidence_level).toBe("NONE");
@@ -37,7 +36,6 @@ describe("Issue #10: confidence_level 边界", () => {
       low: 9,
       close: 10 + i * 0.1,
       volume: 1000,
-      amount: 10000,
     }));
     const result = computePhysicsRadar("518880.SH", "黄金ETF", bars);
     expect(result.confidence_level).toBe("NONE");
@@ -52,7 +50,6 @@ describe("Issue #10: confidence_level 边界", () => {
       low: 9,
       close: 10 + i * 0.1,
       volume: 1000,
-      amount: 10000,
     }));
     const result = computePhysicsRadar("518880.SH", "黄金ETF", bars);
     expect(result.confidence_level).not.toBe("NONE");
@@ -71,14 +68,18 @@ describe("Issue #10: confidence_level 边界", () => {
   });
 });
 
-describe("Issue #9: price_source 类型一致性", () => {
+describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
   test("实际验证 position 返回正确的 price_source 值", async () => {
     // 真实行为断言：使用 TraderEngine 创建批次，验证 PositionAggregator 返回的 price_source
     const { AppDatabase } = await import("../src/db.ts");
     const { TraderEngine } = await import("../src/engine.ts");
+    const { QuoteProvider } = await import("../src/quotes.ts");
     
     const db = new AppDatabase(":memory:");
-    const engine = new TraderEngine(db.getConnection());
+    // 使用 fake QuoteProvider（离线化，避免真实网络请求）
+    const fakeQuotes = new QuoteProvider();
+    fakeQuotes.getQuote = async () => null; // 强制 fallback 到 cost_basis
+    const engine = new TraderEngine(db.getConnection(), fakeQuotes);
     
     // 使用引擎初始化数据库并创建账户
     engine.addAccount("TEST", { name: "Test Account" });
@@ -108,6 +109,49 @@ describe("Issue #9: price_source 类型一致性", () => {
     // 对于不存在的标的，应该是 cost_basis
     expect(target.price_source).toBe("cost_basis");
     expect(target.lots[0].price_source).toBe("cost_basis");
+    
+    db.getConnection().close();
+  });
+
+  test("验证 \"live\" 分支：有真实行情时返回 live", async () => {
+    const { AppDatabase } = await import("../src/db.ts");
+    const { TraderEngine } = await import("../src/engine.ts");
+    const { QuoteProvider } = await import("../src/quotes.ts");
+    
+    const db = new AppDatabase(":memory:");
+    // fake QuoteProvider 返回模拟行情
+    const fakeQuotes = new QuoteProvider();
+    fakeQuotes.getQuote = async () => ({
+      symbol: "518880.SH",
+      name: "黄金ETF",
+      current_price: 5.0,
+      change_percent: 1.5,
+      volume: 1000000,
+      timestamp: new Date().toISOString(),
+    });
+    const engine = new TraderEngine(db.getConnection(), fakeQuotes);
+    
+    engine.addAccount("TEST", { name: "Test Account" });
+    
+    // 买入一个有行情的标的
+    engine.buyLot(
+      "518880.SH",
+      4.5,
+      100,
+      undefined,
+      new Date("2024-01-01T10:00:00Z"),
+      undefined,
+      false,
+      "TEST"
+    );
+    
+    const view = await engine.getHierarchicalPositionView();
+    expect(view.targets.length).toBeGreaterThan(0);
+    const target = view.targets[0];
+    
+    // 有真实行情时，应该是 live
+    expect(target.price_source).toBe("live");
+    expect(target.lots[0].price_source).toBe("live");
     
     db.getConnection().close();
   });
