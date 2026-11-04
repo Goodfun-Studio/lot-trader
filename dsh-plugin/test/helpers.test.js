@@ -40,6 +40,7 @@ import {
   resolveDbPath,
   runOrThrow,
   stripLots,
+  toFiniteNumber,
   toPositiveNumber,
 } from '../tools.js'
 
@@ -955,7 +956,7 @@ test('downloadBinary：校验通过时原子落盘并置可执行位', async () 
 
   const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
   assert.equal(out.path, cachePath)
-  assert.equal(out.version, 'v9.9.9', '必须回传解析到的 release tag（引擎自身没有 --version）')
+  assert.equal(out.version, 'v9.9.9', '走 API 分支时必须回传 Release 元数据里的 tag')
   assert.equal(existsSync(cachePath), true)
   assert.equal(isExecutableFile(cachePath), true, '必须置上可执行位')
   assert.equal(readFileSync(cachePath).length, 4096)
@@ -1221,4 +1222,139 @@ test('downloadBinary：钉住版本时请求的是那个 tag，而不是 latest'
     !requested.some((u) => u.includes('/releases/latest')),
     '钉住版本后不得再请求 latest（否则锁等于没锁）',
   )
+})
+
+// ─────────────────────────────────────────────── #7：engine_version 不能是占位符
+
+/** 造一个能带 `url` 的假 Response（真 Response 的 url 是只读 getter，改不了）。 */
+function fakeFetchResponse(body, { url = '', status = 200 } = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    url,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(body))
+        controller.close()
+      },
+    }),
+    async arrayBuffer() {
+      return body.buffer ?? body
+    },
+    async text() {
+      return Buffer.from(body).toString('utf8')
+    },
+  }
+}
+
+/** 装配一个「只有直链可用」的环境，返回 { fetchImpl, calls }。 */
+function directOnlyFetch(target, payload, hash, finalUrl) {
+  const directUrl = `https://github.com/Goodfun-Studio/lot-trader/releases/latest/download/${target}`
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    const u = String(url)
+    calls.push(u)
+    if (u.endsWith('.sha256')) return fakeFetchResponse(Buffer.from(`${hash}  ${target}\n`))
+    if (u === directUrl) return fakeFetchResponse(payload, { url: finalUrl(u) })
+    // API 分支永远挂住 → 直链必然胜出
+    return new Promise((_, reject) => {
+      init?.signal?.addEventListener?.('abort', () => reject(new Error('aborted')))
+    })
+  }
+  return { fetchImpl, calls, directUrl }
+}
+
+test('#7 直链胜出时从最终响应地址解析 tag，而不是退回占位符 "latest"', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-tag-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 5)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  // GitHub 会把 …/releases/latest/download/<asset> 重定向成带 tag 的地址
+  const { fetchImpl } = directOnlyFetch(target, payload, hash, (u) => u.replace('/latest/download/', '/download/v9.9.9/'))
+
+  const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
+  assert.equal(out.version, 'v9.9.9', '直链胜出时必须从 response.url 解析出真实 tag')
+  assert.notEqual(out.version, 'latest', '绝不退回占位符')
+})
+
+test('#7 直链胜出但解析不到 tag 时返回 null，不编占位符', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-tag2-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 6)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  // 真实世界里 redirect 的终点可能是 CDN 签名地址，路径里没有 /releases/download/<tag>/
+  const { fetchImpl } = directOnlyFetch(target, payload, hash, () => 'https://release-assets.githubusercontent.com/signed/opaque-token')
+
+  const out = await downloadBinary({ fetchImpl, cachePath, stallMs: 5_000 })
+  assert.equal(out.version, null, '解析不到就如实返回 null（与「手动放置的二进制保持 null」一致）')
+  assert.notEqual(out.version, 'latest', '拿不到就说不知道，不能伪造一个像版本号的字符串')
+})
+
+test('#7 钉住版本时直链请求 URL 本身就带 tag，无需依赖 response.url', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lot-trader-tag3-'))
+  const cachePath = join(dir, 'bin', 'trade')
+  const target = platformTarget()
+  if (!target) return
+
+  const payload = Buffer.alloc(4096, 8)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  const pinned = 'v0.1.0'
+  const pinnedUrl = `https://github.com/Goodfun-Studio/lot-trader/releases/download/${pinned}/${target}`
+  const fetchImpl = async (url, init) => {
+    const u = String(url)
+    if (u.endsWith('.sha256')) return fakeFetchResponse(Buffer.from(`${hash}  ${target}\n`))
+    if (u === pinnedUrl) return fakeFetchResponse(payload, { url: 'https://objects.githubusercontent.com/opaque' })
+    return new Promise((_, reject) => {
+      init?.signal?.addEventListener?.('abort', () => reject(new Error('aborted')))
+    })
+  }
+
+  const out = await downloadBinary({ fetchImpl, cachePath, version: pinned, stallMs: 5_000 })
+  assert.equal(out.version, pinned, '即使 response.url 里没有 tag，钉住的版本也应能从请求 URL 得到')
+})
+
+// ─────────────────────────────────────────────── disciplineOrder：负号与告警
+
+test('toFiniteNumber 接受负数与数字字符串（toPositiveNumber 不适用于顺序类配置）', () => {
+  assert.equal(toFiniteNumber(-100), -100)
+  assert.equal(toFiniteNumber('-100'), -100, '字符串形态也要保住符号')
+  assert.equal(toFiniteNumber(' -100 '), -100)
+  assert.equal(toFiniteNumber(0), 0, '0 是合法顺序值（部署人格）')
+  assert.equal(toFiniteNumber('0'), 0)
+  assert.equal(toFiniteNumber(170), 170)
+  assert.equal(toFiniteNumber('abc'), undefined)
+  assert.equal(toFiniteNumber(''), undefined)
+  assert.equal(toFiniteNumber(null), undefined)
+  assert.equal(toFiniteNumber(NaN), undefined)
+  assert.equal(toFiniteNumber(Infinity), undefined)
+  // 对比：正数版会吃掉负号 —— 这正是不能复用它解析 disciplineOrder 的原因
+  assert.equal(toPositiveNumber('-100'), undefined, 'toPositiveNumber 本就不接受负数')
+})
+
+test('normalizeConfig：disciplineOrder 保住负号，非法值真的要告警（不再是死代码）', () => {
+  // 修复前：这条告警的条件恒为假（disciplineOrder 必是有限数），
+  // 于是 "abc" 静默回退 170、"−100" 连值带符号一起丢，都没有任何提示。
+  assert.equal(normalizeConfig({ disciplineOrder: -100 }).disciplineOrder, -100)
+  assert.equal(normalizeConfig({ disciplineOrder: '-100' }).disciplineOrder, -100, '字符串负号不能丢')
+  assert.deepEqual(normalizeConfig({ disciplineOrder: '-100' }).warnings, [])
+  assert.equal(normalizeConfig({ disciplineOrder: '0' }).disciplineOrder, 0)
+  assert.equal(normalizeConfig({ disciplineOrder: 200 }).disciplineOrder, 200)
+  assert.equal(normalizeConfig({ disciplineOrder: '170' }).disciplineOrder, 170)
+
+  // 负向：非法值必须留痕
+  const bad = normalizeConfig({ disciplineOrder: 'abc' })
+  assert.equal(bad.disciplineOrder, 170, '回退到默认')
+  assert.equal(bad.warnings.length, 1, '必须告警 —— 修复前这里是静默的')
+  assert.match(bad.warnings[0], /disciplineOrder/)
+
+  // 没配 / 空串不算「配错了」，不该刷告警
+  assert.deepEqual(normalizeConfig({}).warnings, [])
+  assert.deepEqual(normalizeConfig({ disciplineOrder: '' }).warnings, [])
+  assert.deepEqual(normalizeConfig({ disciplineOrder: null }).warnings, [])
 })

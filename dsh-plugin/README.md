@@ -281,13 +281,17 @@ BUSY_RECOVERY 重试**不得删除**账本 `-wal`、body 停滞必须判死。
   会立刻报「没有预编译的 trade 二进制」，而不是走完整条下载流程再收到网络类错误
   —— 因为发布矩阵里确实没有 Windows 产物。要加 Windows 得先在
   `.github/workflows/release-binaries.yml` 的矩阵里补上并验证交叉编译。
-- **引擎版本的可得性分两种**。引擎自身没有 `--version`（执行会打印 usage），
-  所以：
-  - **自动下载**的：快照里 `engine_version` 是下载时 Release 元数据里的 `tag_name`，
-    可信；
+- **引擎版本的可得性分三种**。引擎自身没有 `--version`（执行会打印 usage），
+  所以 `engine_version` 能给到什么程度取决于二进制怎么来的：
+  - **自动下载、走 API 元数据**：Release 的 `tag_name`，可信；
+  - **自动下载、直链先胜出**：从重定向后的最终响应地址里解析 tag；
+    GitHub 通常会把 `…/releases/latest/download/<asset>` 换成带 tag 的地址，
+    但若 redirect 终点是 CDN 签名地址（路径里没有 tag），就**返回 `null`**；
   - **手动放置**的（`config.binaryPath` / 仓库同级 / `~/.local/bin` / PATH）：
-    `engine_version` 为 `null` —— 无从得知，**不编**。排版本不匹配时以路径 +
-    文件时间/大小为据。
+    一律 `null`。
+
+  三种情况里拿不到就一律 `null` —— **不编**。`null` 的含义是「不知道」，
+  排版本不匹配时以路径 + 文件时间/大小为据，别把它读成「没有版本」。
   想锁住引擎版本就设 `binaryVersion`（见配置说明），
   `binary_version_pinned` 会显示当前是否钉住。
 - **收益率拿不到时不会当成 0**。现价取不到的批次会落在「收益率不可用」桶，

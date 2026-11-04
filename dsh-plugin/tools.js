@@ -233,6 +233,23 @@ export async function downloadBinary(options = {}) {
    * 至少让「插件版本 × 引擎版本」可对照。
    */
   let resolvedTag = null
+
+  /**
+   * 从 Release 下载 URL 里抠出 tag。
+   *
+   * 形如 `https://github.com/<o>/<r>/releases/download/<tag>/<asset>`。
+   * 直链是 `…/releases/latest/download/<asset>` —— 请求 URL 里没有 tag，
+   * 但 `redirect: 'follow'` 之后 `response.url` 是最终地址，GitHub 会把它
+   * 换成带 tag 的形式。
+   *
+   * 拿不到就返回 null。**绝不退回 'latest' 这种占位符** ——
+   * 那会让「插件 X × 引擎 Y」的对照显示一个看起来像版本号、实际毫无意义的字符串。
+   */
+  const tagFromUrl = (url) => {
+    const match = /\/releases\/download\/([^/?#]+)\//.exec(String(url ?? ''))
+    return match ? match[1] : null
+  }
+
   /** body 传输的停滞看门狗：这么久没有收到任何数据块就判定卡死。 */
   const stallMs = Number.isFinite(options.stallMs) ? options.stallMs : 120_000
 
@@ -244,6 +261,9 @@ export async function downloadBinary(options = {}) {
   const releaseApiUrl = version === 'latest'
     ? `https://api.github.com/repos/${repository}/releases/latest`
     : `https://api.github.com/repos/${repository}/releases/tags/${version}`
+
+  // 钉住版本时请求 URL 本身就带 tag，先取到；latest 则只能靠 response.url（见直链分支）
+  resolvedTag = tagFromUrl(directUrl)
 
   /**
    * 造一个「单次尝试」的 controller。
@@ -333,6 +353,9 @@ export async function downloadBinary(options = {}) {
     const direct = (async () => {
       const response = await fetchImpl(directUrl, { signal: directSlot.signal, redirect: 'follow' })
       if (!response.ok) throw new Error(`直链 HTTP ${response.status}`)
+      // 直链胜出时 API 元数据没被解析过，tag 只能从最终响应地址里取。
+      // 取不到就保持 null（CDN 的最终地址未必带 tag），宁可说「不知道」。
+      resolvedTag = resolvedTag ?? tagFromUrl(response.url)
       return { via: 'direct', slot: directSlot, response }
     })()
 
@@ -453,7 +476,7 @@ export async function downloadBinary(options = {}) {
       }
       throw error
     }
-    return { path: cacheBin, version: resolvedTag ?? version }
+    return { path: cacheBin, version: resolvedTag ?? null }
   } finally {
     slot.done()
   }
@@ -551,6 +574,20 @@ export function toPositiveNumber(value) {
   return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined
 }
 
+/**
+ * 宽容地把值读成**有限数字**（正负皆可）。
+ *
+ * 与 {@link toPositiveNumber} 的区别：这里不排斥负数与 0 ——
+ * 顺序/权重类配置（如 `disciplineOrder`）合法值本来就跨正负。
+ *
+ * @returns {number|undefined} 读不出就是 undefined，交给调用方决定是回退还是告警
+ */
+export function toFiniteNumber(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const n = typeof value === 'string' ? Number(value.trim()) : value
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined
+}
+
 /** 值是否「给过」（用来区分「没配」和「配错了」）。 */
 function isProvided(value) {
   return value !== undefined && value !== null && value !== ''
@@ -585,12 +622,14 @@ export function normalizeConfig(config = {}) {
     warnings.push(`pollSeconds 配置值 ${JSON.stringify(raw.pollSeconds)} 不是正数，已回退到 45 秒`)
   }
 
-  const disciplineOrderRaw = toPositiveNumber(raw.disciplineOrder)
-  const disciplineOrder = typeof raw.disciplineOrder === 'number' && Number.isFinite(raw.disciplineOrder)
-    ? raw.disciplineOrder
-    : (disciplineOrderRaw ?? 170)
-  if (isMeaningfullyProvided(raw.disciplineOrder) && !Number.isFinite(disciplineOrder)) {
-    warnings.push(`disciplineOrder 配置值 ${JSON.stringify(raw.disciplineOrder)} 不是数字，已回退到 170`)
+  // disciplineOrder **可以是负数**（约定里 0 是部署人格、-100 是 harness 身份），
+  // 所以不能复用只认正数的 toPositiveNumber —— 那会把 "-100" 变成 undefined，
+  // 然后静默回退 170，连符号一起丢掉。
+  const disciplineOrder = toFiniteNumber(raw.disciplineOrder)
+  if (disciplineOrder === undefined) {
+    if (isMeaningfullyProvided(raw.disciplineOrder)) {
+      warnings.push(`disciplineOrder 配置值 ${JSON.stringify(raw.disciplineOrder)} 不是有限数字，已回退到 170`)
+    }
   }
 
   return {
@@ -603,7 +642,7 @@ export function normalizeConfig(config = {}) {
     cap,
     pollMs: Math.max(15, pollSeconds) * 1000,
     requireApprovalForWrites: raw.requireApprovalForWrites !== false,
-    disciplineOrder,
+    disciplineOrder: disciplineOrder ?? 170,
     autoDownload: raw.autoDownload !== false,
     /** 配置解析过程中的可疑之处；由 index.js 打到日志，不静默吞掉。 */
     warnings,
