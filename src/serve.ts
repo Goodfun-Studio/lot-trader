@@ -287,13 +287,17 @@ export function resolveServeDbPath(raw?: string | null): string {
 }
 
 export function resolveFullPositionCap(raw?: string | number | null): number {
-  const fromEnv = process.env.LOT_TRADER_FULL_POSITION_CAP;
-  const candidate = raw ?? fromEnv;
-  if (candidate === undefined || candidate === null || candidate === "") {
-    return DEFAULT_FULL_POSITION_CAP;
+  // Priority: raw param > config file > env var > default
+  const { getFullPositionCap } = require("./config.ts");
+  
+  if (raw !== undefined && raw !== null && raw !== "") {
+    const value = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (Number.isFinite(value) && value > 0) {
+      return value;
+    }
   }
-  const value = typeof candidate === "number" ? candidate : Number(String(candidate).trim());
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_FULL_POSITION_CAP;
+  
+  return getFullPositionCap();
 }
 
 function isPortInUseError(err: unknown): boolean {

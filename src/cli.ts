@@ -642,12 +642,12 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend} ...
+  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend,config} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,account,position,scan,stats,physics,dashboard,serve,dividend}  Available subcommands
+  {lot,account,position,scan,stats,physics,dashboard,serve,dividend,config}  Available subcommands
     lot             Lot operations (buy, add, list, close, edit)
     account         Broker account registry (add, list)
     position        Position / Holding aggregated view
@@ -657,6 +657,7 @@ positional arguments:
     dashboard       Render the global interactive HTML dashboard
     serve           Start the local read-only HTTP engine (loopback only)
     dividend        Cash dividend management (add, list)
+    config          Configuration management (get, set, list)
 
 options:
   --db PATH         SQLite database path, honoured by EVERY subcommand (global option).
@@ -2356,6 +2357,122 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
   }
 }
 
+function printConfigHelp(): void {
+  console.log(`usage: trade config [-h] {get,set,list} ...
+
+Configuration Management
+
+positional arguments:
+  {get,set,list}    Config actions
+    get             Get a configuration value
+    set             Set a configuration value
+    list            List all configuration settings
+
+options:
+  -h, --help        show this help message and exit
+
+Examples:
+  trade config list
+  trade config get full_position_cap
+  trade config set full_position_cap 100000
+`);
+}
+
+function handleConfig(args: string[]): void {
+  const subAction = args[0];
+  const restArgs = args.slice(1);
+
+  if (!subAction || subAction === "-h" || subAction === "--help") {
+    printConfigHelp();
+    return;
+  }
+
+  if (subAction === "list") {
+    const { loadConfig, getConfigSchema } = require("./config.ts");
+    const config = loadConfig();
+    const schema = getConfigSchema();
+    
+    console.log("=".repeat(80));
+    console.log("配置文件: ~/.lot-trader/config.json");
+    console.log("=".repeat(80));
+    
+    for (const [key, description] of Object.entries(schema)) {
+      const value = config[key as keyof typeof config];
+      const displayValue = value !== undefined ? String(value) : "<未设置>";
+      console.log(`${key}:`);
+      console.log(`  值: ${displayValue}`);
+      console.log(`  说明: ${description}`);
+      console.log();
+    }
+    
+  } else if (subAction === "get") {
+    const key = restArgs[0];
+    if (!key) {
+      console.error("❗ 错误: 请指定要查询的配置项");
+      console.error("示例: trade config get full_position_cap");
+      process.exit(1);
+    }
+    
+    const { getConfigValue, getConfigSchema } = require("./config.ts");
+    const schema = getConfigSchema();
+    
+    if (!(key in schema)) {
+      console.error(`❗ 错误: 未知的配置项 '${key}'`);
+      console.error("可用的配置项:");
+      for (const k of Object.keys(schema)) {
+        console.error(`  - ${k}`);
+      }
+      process.exit(1);
+    }
+    
+    const value = getConfigValue(key);
+    if (value !== undefined) {
+      console.log(value);
+    } else {
+      console.log("<未设置>");
+    }
+    
+  } else if (subAction === "set") {
+    const key = restArgs[0];
+    const value = restArgs[1];
+    
+    if (!key || value === undefined) {
+      console.error("❗ 错误: 请指定要设置的配置项和值");
+      console.error("示例: trade config set full_position_cap 100000");
+      process.exit(1);
+    }
+    
+    const { setConfigValue, getConfigSchema } = require("./config.ts");
+    const schema = getConfigSchema();
+    
+    if (!(key in schema)) {
+      console.error(`❗ 错误: 未知的配置项 '${key}'`);
+      console.error("可用的配置项:");
+      for (const k of Object.keys(schema)) {
+        console.error(`  - ${k}`);
+      }
+      process.exit(1);
+    }
+    
+    // Parse value based on key type
+    let parsedValue: any = value;
+    if (key === "full_position_cap" || key === "fee_rate") {
+      parsedValue = parseFloat(value);
+      if (isNaN(parsedValue) || parsedValue <= 0) {
+        console.error(`❗ 错误: ${key} 必须是一个正数`);
+        process.exit(1);
+      }
+    }
+    
+    setConfigValue(key, parsedValue);
+    console.log(`✅ 配置已保存: ${key} = ${parsedValue}`);
+    
+  } else {
+    printConfigHelp();
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
 
@@ -2514,6 +2631,12 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await handleDividend(getEngine(), restArgs);
+  } else if (command === "config") {
+    if (hasHelpFlag(restArgs)) {
+      printConfigHelp();
+      process.exit(0);
+    }
+    handleConfig(restArgs);
   } else {
     printHelp();
     process.exit(1);

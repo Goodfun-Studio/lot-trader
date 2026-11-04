@@ -93,11 +93,9 @@ export class PositionAggregator {
     this.quoteProvider = quoteProvider || new QuoteProvider();
     this.arbitrator = new SettlementArbitrator(dbConn);
 
-    let cap = fullPositionCap;
-    if (cap === undefined && process.env.LOT_TRADER_FULL_POSITION_CAP) {
-      cap = parseFloat(process.env.LOT_TRADER_FULL_POSITION_CAP);
-    }
-    this.fullPositionCap = cap && cap > 0 ? cap : 50000;
+    // Priority: runtime override > config file > env var > default
+    const { getFullPositionCap } = require("./config.ts");
+    this.fullPositionCap = getFullPositionCap(fullPositionCap);
   }
 
   public getFullPositionCap(): number {
