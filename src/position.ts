@@ -9,6 +9,7 @@ import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
+import type { PriceSource } from "./serve.ts";
 
 export interface LotListItem {
   lot_id: string;
@@ -22,7 +23,7 @@ export interface LotListItem {
   remaining_quantity: number;
   cost_basis_unit: number;
   current_price: number;
-  price_source: "quote" | "fallback";  // Issue #9: 标记价格来源
+  price_source: PriceSource;  // Issue #9: 标记价格来源 ("live" = 真实行情, "cost_basis" = 回落到买入价)
   floating_pnl: number;
   return_rate: number;
   status: string;
@@ -52,7 +53,7 @@ export interface TargetHoldingView {
   asset_class: string;
   settlement_mode: string;
   current_price: number;
-  price_source: "quote" | "fallback";  // Issue #9: 标记价格来源
+  price_source: PriceSource;  // Issue #9: 标记价格来源 ("live" = 真实行情, "cost_basis" = 回落到买入价)
   total_quantity: number;
   available_core_qty: number;
   total_cost_basis: number;
@@ -202,7 +203,7 @@ export class PositionAggregator {
       // Current price falls back to last lot buy_price if quote is 0 or unavailable
       const fallbackPrice = Number(lots[lots.length - 1].buy_price);
       const currentPrice = q && q.current_price > 0 ? q.current_price : fallbackPrice;
-      const priceSource: "quote" | "fallback" = q && q.current_price > 0 ? "quote" : "fallback";
+      const priceSource: PriceSource = q && q.current_price > 0 ? "live" : "cost_basis";
 
       // Available core quantity
       let availableCoreQty = 0;

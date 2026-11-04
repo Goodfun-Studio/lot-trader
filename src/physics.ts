@@ -240,8 +240,9 @@ export function computePhysicsRadar(
     // 数据不足时 F = 0，有效合力必为 0；置信度仅作为数据质量旁注安全提供
     const guardConf = computeConfidenceWeight(turnoverRate, 0);
     
-    // Issue #10 修复: 数据完全缺失时 confidence_level 应为 "NONE"
-    const confidenceLevel = (!bars || bars.length === 0) ? "NONE" : guardConf.confidence_level;
+    // Issue #10 修复: 数据不足 5 根时 confidence_level 应为 "NONE"
+    // 与守卫边界对齐，而不是只判 length === 0
+    const confidenceLevel = "NONE";
     
     return {
       symbol,
