@@ -1,5 +1,7 @@
 # lot-trader × DSH 插件（`@goodfun-studio/dsh-lot-trader`）
 
+[![开放插件市场](https://img.shields.io/endpoint?url=https%3A%2F%2Fdshopen.org%2Fbadge%2F%2540goodfun-studio%2Fdsh-lot-trader.json%3Flang%3Dzh)](https://dshopen.org/plugins/@goodfun-studio/lot-trader/)
+
 把 lot-trader 操盘引擎接进 DeepSeek Harness 的**原生壳**。
 
 引擎一行没动：所有账本语义仍住在编译好的 `trade` 二进制里。这个包只负责
