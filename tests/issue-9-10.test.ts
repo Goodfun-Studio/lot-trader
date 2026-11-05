@@ -79,6 +79,7 @@ describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
     // 使用 fake QuoteProvider（离线化，避免真实网络请求）
     const fakeQuotes = new QuoteProvider();
     fakeQuotes.getQuotes = async () => ({}); // 返回空对象，强制 fallback 到 cost_basis
+    fakeQuotes.setMockBars("999999.SH", []); // 设置空 K 线数据，避免网络请求
     const engine = new TraderEngine(db.getConnection(), fakeQuotes);
     
     // 使用引擎初始化数据库并创建账户
@@ -123,11 +124,17 @@ describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
         symbol: "518880.SH",
         name: "黄金ETF",
         current_price: 5.0,
-        change_percent: 1.5,
+        yesterday_close: 4.8,
+        open_price: 4.9,
+        high_price: 5.1,
+        low_price: 4.85,
         volume: 1000000,
-        timestamp: new Date().toISOString(),
+        amount: 5000000,
+        time_str: new Date().toISOString(),
       },
     });
+    // 设置 mock K 线数据，避免网络请求
+    fakeQuotes.setMockBars("518880.SH", []);
     const engine = new TraderEngine(db.getConnection(), fakeQuotes);
     
     engine.addAccount("TEST", { name: "Test Account" });
