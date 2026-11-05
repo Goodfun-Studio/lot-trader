@@ -28,7 +28,7 @@ export interface PhysicsRadarResult {
   // 4.1 博弈参与度与合力置信度加权 (Confidence-Weighted Effective Force)
   turnover_rate: number;     // τ 当日真实换手率 (%)，0 表示不可用/缺失
   confidence_weight: number; // W_conf 置信度加权系数，钳制于 [0.10, 2.00]
-  confidence_level: "LOW" | "MEDIUM" | "HIGH"; // 参与度置信等级
+  confidence_level: "NONE" | "LOW" | "MEDIUM" | "HIGH"; // 参与度置信等级
   effective_force: number;   // F_eff = F × W_conf (有效置信合力)
   // 5. 流体阻尼系数 μ
   mu: number;          // Vol_today / (Max(High - Low, 0.001) / Close_today)
@@ -115,7 +115,7 @@ export function interpolateAnchors(
 export interface ConfidenceWeightResult {
   turnover_rate: number;
   confidence_weight: number;
-  confidence_level: "LOW" | "MEDIUM" | "HIGH";
+  confidence_level: "NONE" | "LOW" | "MEDIUM" | "HIGH";
   /** 相对活跃倍数 γ (换手率缺失时退化为成交量倍数 m) */
   relative_activity: number;
   /** 换手率绝对规模是否为有效证据 */
@@ -160,8 +160,8 @@ export function computeConfidenceWeight(
     weight = Math.min(weight, MISSING_TURNOVER_WEIGHT_CAP);
   }
 
-  // 等级：LOW < 0.80 ≤ MEDIUM；HIGH 需 W_conf ≥ 1.20 **且**具备绝对换手率证据
-  let level: "LOW" | "MEDIUM" | "HIGH" = "MEDIUM";
+  // 等级：NONE 表示无数据；LOW < 0.80 ≤ MEDIUM；HIGH 需 W_conf ≥ 1.20 **且**具备绝对换手率证据
+  let level: "NONE" | "LOW" | "MEDIUM" | "HIGH" = "MEDIUM";
   if (weight < CONFIDENCE_LEVEL_LOW_MAX) level = "LOW";
   else if (tauAvailable && weight >= CONFIDENCE_LEVEL_HIGH_MIN) level = "HIGH";
 
@@ -239,6 +239,11 @@ export function computePhysicsRadar(
     const p = currentPriceOverride || (bars && bars.length > 0 ? bars[bars.length - 1].close : 0);
     // 数据不足时 F = 0，有效合力必为 0；置信度仅作为数据质量旁注安全提供
     const guardConf = computeConfidenceWeight(turnoverRate, 0);
+    
+    // Issue #10 修复: 数据不足 5 根时 confidence_level 应为 "NONE"
+    // 与守卫边界对齐，而不是只判 length === 0
+    const confidenceLevel = "NONE";
+    
     return {
       symbol,
       name,
@@ -253,7 +258,7 @@ export function computePhysicsRadar(
       force_status: "NEUTRAL",
       turnover_rate: guardConf.turnover_rate,
       confidence_weight: guardConf.confidence_weight,
-      confidence_level: guardConf.confidence_level,
+      confidence_level: confidenceLevel,
       effective_force: 0,
       mu: 0,
       pct_rank_60: 0,

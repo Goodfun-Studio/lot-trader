@@ -1,5 +1,7 @@
 # lot-trader
 
+[![开放插件市场](https://img.shields.io/endpoint?url=https%3A%2F%2Fdshopen.org%2Fbadge%2F%2540goodfun-studio%2Fdsh-lot-trader.json%3Flang%3Dzh)](https://dshopen.org/plugins/@goodfun-studio/lot-trader/)
+
 单笔批次独立盈亏监控与加仓止盈操盘核心引擎 (TypeScript + Bun 单二进制架构)。
 
 ## 架构特性
@@ -36,6 +38,28 @@
   - `trade stats` 提供按标的明细、按操盘类型（普通波段、天然 T+0、底仓代冲做 T）的多维战绩归因。
 - **`--db` 全局参数全链路隔离**：`--db <path>` 在 CLI 最顶层统一提取并贯穿**全部子命令**（`lot` / `account` / `position` / `scan` / `stats` / `physics` / `dividend` / `dashboard` / `serve`），优先级 `--db` > `$LOT_TRADER_DB` > `$TRADE_DB_PATH` > `~/.trade/trade.db`；支持位置穿插与 `--db=PATH` 写法，不再有「传了 `--db` 但被静默忽略、实际仍读写默认库」的假隔离。
 - **`--help` 零写库守卫**：顶级与全部一级/二级子命令（含 `trade scan --help`、`trade lot buy --help`、`trade dividend add --help`）在执行任何参数解析之前短路 `-h/--help`，打印用法后以退出码 `0` 退出，绝不实例化数据库、绝不建库/迁移/写入（`trade scan --help` 不再扫描、不再写 `signals`）。
+
+## 作为 DSH 插件使用（可选）
+
+本仓库同时提供一个把引擎接进 **DeepSeek Harness (DSH)** 的原生壳
+（[`dsh-plugin/`](./dsh-plugin)）：读命令变成模型可直接调用的工具，写命令挂上宿主审批闸门，
+操盘纪律注入 systemPrompt，持仓看板长在 Web GUI 侧边栏里。
+
+安装：
+
+```bash
+dsh plugin add @goodfun-studio/dsh-lot-trader
+```
+
+也可以从[开放插件市场](https://dshopen.org/plugins/@goodfun-studio/dsh-lot-trader/)安装。
+
+**首次使用不需要手工准备引擎**：插件发现本机没有 `trade` 时，会自动从
+[GitHub Releases](https://github.com/Goodfun-Studio/lot-trader/releases) 拉取
+对应平台的二进制到 `~/.lot-trader/bin/`，并校验 sha256 后才安装。
+账本（`~/.trade/trade.db`）在第一次写操作时由引擎自己创建。
+
+支持平台：macOS（x64 / arm64）与 Linux（x64 / arm64）。
+完整说明见 [`dsh-plugin/README.md`](./dsh-plugin/README.md)。
 
 ## 快速使用
 

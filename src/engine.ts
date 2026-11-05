@@ -705,7 +705,8 @@ export class TraderEngine {
       const lot = this.getLot(r.lot_id);
       if (!lot) continue;
       const q = quotes[lot.symbol];
-      if (!q) continue;
+      // Issue #9 同源缺口: 防止 0 价行情产生假信号
+      if (!q || !(q.current_price > 0)) continue;
 
       const sig = this.scanner.scanLot(lot, q, customThresholds, asOfTime);
       if (sig) {
