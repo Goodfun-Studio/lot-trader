@@ -19,6 +19,17 @@ export enum LotStatus {
   CLOSED = "CLOSED",
 }
 
+/**
+ * Price source for lot/position current_price field.
+ * - "live": Real-time quote from market data provider
+ * - "cost_basis": Fallback price when quote unavailable
+ * 
+ * Note: The fallback algorithm differs by context:
+ * - position.ts: Uses last lot buy_price (most recent purchase)
+ * - serve.ts: Uses average cost_basis_unit (weighted average)
+ */
+export type PriceSource = "live" | "cost_basis";
+
 export enum SignalType {
   NONE = "NONE",
   TAKE_PROFIT_ALERT = "TAKE_PROFIT_ALERT",

@@ -45,3 +45,15 @@ jobs:
       # 而开发机上两种都有人跑。两边都绿才算绿。
       - name: Node test runner parity
         run: node --test dsh-plugin/test/*.test.js
+
+      # TypeScript 类型检查：bun test 不做类型检查，这类问题只能靠 tsc 抓。
+      # 只检查 src/ 目录（生产代码必须类型干净），tests/ 和 docs/ 以后再收。
+      - name: Type check
+        run: |
+          cat > tsconfig.ci.json << 'EOF'
+          {
+            "extends": "./tsconfig.json",
+            "include": ["src/**/*"]
+          }
+          EOF
+          bunx tsc --noEmit --project tsconfig.ci.json

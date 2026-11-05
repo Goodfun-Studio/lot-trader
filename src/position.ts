@@ -3,7 +3,7 @@
  * Deeply aligned with InvestmentTracker hierarchical portfolio profit & loss architecture.
  */
 import { Database } from "bun:sqlite";
-import { LotStatus } from "./models.ts";
+import { LotStatus, PriceSource } from "./models.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
@@ -22,6 +22,7 @@ export interface LotListItem {
   remaining_quantity: number;
   cost_basis_unit: number;
   current_price: number;
+  price_source: PriceSource;  // Issue #9: 标记价格来源 ("live" = 真实行情, "cost_basis" = 回落到买入价)
   floating_pnl: number;
   return_rate: number;
   status: string;
@@ -51,6 +52,7 @@ export interface TargetHoldingView {
   asset_class: string;
   settlement_mode: string;
   current_price: number;
+  price_source: PriceSource;  // Issue #9: 标记价格来源 ("live" = 真实行情, "cost_basis" = 回落到买入价)
   total_quantity: number;
   available_core_qty: number;
   total_cost_basis: number;
@@ -196,9 +198,11 @@ export class PositionAggregator {
       const nestedLots: LotListItem[] = [];
 
       const q = quotes[sym];
+      // Issue #9 修复: 记录价格来源
       // Current price falls back to last lot buy_price if quote is 0 or unavailable
       const fallbackPrice = Number(lots[lots.length - 1].buy_price);
       const currentPrice = q && q.current_price > 0 ? q.current_price : fallbackPrice;
+      const priceSource: PriceSource = q && q.current_price > 0 ? "live" : "cost_basis";
 
       // Available core quantity
       let availableCoreQty = 0;
@@ -246,6 +250,7 @@ export class PositionAggregator {
           remaining_quantity: remQty,
           cost_basis_unit: unitCost,
           current_price: currentPrice,
+          price_source: priceSource,  // Issue #9: 每个 lot 都标记价格来源
           floating_pnl: lotFloatPnl,
           return_rate: lotRetRate,
           status: lot.status,
@@ -309,6 +314,7 @@ export class PositionAggregator {
         asset_class: assetClass,
         settlement_mode: settlementMode,
         current_price: currentPrice,
+        price_source: priceSource,  // Issue #9: target 级也标记价格来源
         total_quantity: totalQty,
         available_core_qty: availableCoreQty,
         total_cost_basis: round(totalCostBasis, 2),
