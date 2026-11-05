@@ -6,7 +6,7 @@ import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
-import { loadConfig, getConfigValue, setConfigValue, getConfigSchema, getFullPositionCap } from "./config.ts";
+import { loadConfig, getConfigValue, setConfigValue, getConfigSchema, getConfigPath, type Config } from "./config.ts";
 import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
@@ -219,6 +219,15 @@ export const CLI_FLAG_SPECS: Record<string, Record<string, CliFlagSpec>> = {
     account: { type: "string" },
     json: { type: "boolean", default: false },
   },
+  "config list": {
+    json: { type: "boolean", default: false },
+  },
+  "config get": {
+    json: { type: "boolean", default: false },
+  },
+  "config set": {
+    json: { type: "boolean", default: false },
+  },
 };
 
 /** The threshold keys `SignalScanner` actually reads (see src/scanner.ts). */
@@ -235,7 +244,7 @@ export function resolveCommandPath(argv: string[]): string | undefined {
   const command = argv[0];
   if (!command) return undefined;
   const top = command === "radar" ? "physics" : command;
-  if (top === "lot" || top === "account" || top === "dividend") {
+  if (top === "lot" || top === "account" || top === "dividend" || top === "config") {
     return argv[1] ? `${top} ${argv[1]}` : top;
   }
   return top;
@@ -2381,110 +2390,80 @@ Examples:
 
 function handleConfig(args: string[]): void {
   const subAction = args[0];
-  const restArgs = args.slice(1);
-
-  if (!subAction || subAction === "-h" || subAction === "--help") {
+  if (!subAction || isHelpToken(subAction)) {
     printConfigHelp();
     return;
   }
+  if (subAction !== "list" && subAction !== "get" && subAction !== "set") {
+    printConfigHelp();
+    process.exit(1);
+  }
+
+  const { values, positionals } = parseArgs({
+    args: args.slice(1),
+    options: flagsFor(`config ${subAction}`),
+    allowPositionals: true,
+    strict: false,
+  });
+  const isJson = Boolean(values.json);
+  const schema = getConfigSchema();
+  const ok = (data: unknown) =>
+    console.log(JSON.stringify({ code: 0, msg: "success", data }, null, 2));
+  const requireKnownKey = (key: string | undefined, usage: string): keyof Config => {
+    if (!key) reportCliError(isJson, `缺少配置项名称。示例: ${usage}`);
+    if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+      reportCliError(isJson, `未知的配置项 '${key}'。可用的配置项: ${Object.keys(schema).join(", ")}`);
+    }
+    return key as keyof Config;
+  };
 
   if (subAction === "list") {
     const config = loadConfig();
-    const schema = getConfigSchema();
-    
-    const hasJson = restArgs.includes("--json");
-    
-    if (hasJson) {
-      // JSON output
-      const output: Record<string, any> = {};
-      for (const key of Object.keys(schema)) {
-        output[key] = config[key as keyof typeof config] ?? null;
-      }
-      console.log(JSON.stringify(output, null, 2));
-    } else {
-      // Human-readable output
-      console.log("=".repeat(80));
-      console.log("配置文件: ~/.lot-trader/config.json");
-      console.log("=".repeat(80));
-      
-      for (const [key, description] of Object.entries(schema)) {
-        const value = config[key as keyof typeof config];
-        const displayValue = value !== undefined ? String(value) : "<未设置>";
-        console.log(`${key}:`);
-        console.log(`  值: ${displayValue}`);
-        console.log(`  说明: ${description}`);
-        console.log();
-      }
+    if (isJson) {
+      const data: Record<string, unknown> = {};
+      for (const key of Object.keys(schema)) data[key] = config[key as keyof Config] ?? null;
+      ok({ path: getConfigPath(), values: data });
+      return;
     }
-    
-  } else if (subAction === "get") {
-    const key = restArgs[0];
-    if (!key) {
-      console.error("❗ 错误: 请指定要查询的配置项");
-      console.error("示例: trade config get full_position_cap");
-      process.exit(1);
+    console.log("=".repeat(80));
+    console.log(`配置文件: ${getConfigPath()}`);
+    console.log("=".repeat(80));
+    for (const [key, description] of Object.entries(schema)) {
+      const value = config[key as keyof Config];
+      console.log(`${key}:`);
+      console.log(`  值: ${value !== undefined ? String(value) : "<未设置>"}`);
+      console.log(`  说明: ${description}`);
+      console.log();
     }
-    
-    const schema = getConfigSchema();
-    
-    if (!(key in schema)) {
-      console.error(`❗ 错误: 未知的配置项 '${key}'`);
-      console.error("可用的配置项:");
-      for (const k of Object.keys(schema)) {
-        console.error(`  - ${k}`);
-      }
-      process.exit(1);
-    }
-    
+    return;
+  }
+
+  if (subAction === "get") {
+    const key = requireKnownKey(positionals[0], "trade config get full_position_cap");
     const value = getConfigValue(key);
-    if (value !== undefined) {
-      console.log(value);
+    if (isJson) {
+      ok({ key, value: value ?? null });
     } else {
-      console.log("<未设置>");
+      console.log(value !== undefined ? String(value) : "<未设置>");
     }
-    
-  } else if (subAction === "set") {
-    const key = restArgs[0];
-    const value = restArgs[1];
-    
-    if (!key || value === undefined) {
-      console.error("❗ 错误: 请指定要设置的配置项和值");
-      console.error("示例: trade config set full_position_cap 100000");
-      process.exit(1);
-    }
-    
-    const schema = getConfigSchema();
-    
-    if (!(key in schema)) {
-      console.error(`❗ 错误: 未知的配置项 '${key}'`);
-      console.error("可用的配置项:");
-      for (const k of Object.keys(schema)) {
-        console.error(`  - ${k}`);
-      }
-      process.exit(1);
-    }
-    
-    // Parse value based on key type
-    let parsedValue: any = value;
-    if (key === "full_position_cap") {
-      parsedValue = parseFloat(value);
-      if (isNaN(parsedValue)) {
-        console.error(`❗ 错误: ${key} 必须是一个有效的数字`);
-        process.exit(1);
-      }
-    }
-    
-    try {
-      setConfigValue(key, parsedValue);
-      console.log(`✅ 配置已保存: ${key} = ${parsedValue}`);
-    } catch (err) {
-      console.error(`❗ 错误: ${(err as Error).message}`);
-      process.exit(1);
-    }
-    
+    return;
+  }
+
+  // set
+  const key = requireKnownKey(positionals[0], "trade config set full_position_cap 100000");
+  const raw = positionals[1];
+  if (raw === undefined) reportCliError(isJson, `缺少配置值。示例: trade config set ${key} 100000`);
+  // Number() is strict: "100abc" -> NaN (parseFloat would silently accept 100).
+  const parsed = raw.trim() === "" ? NaN : Number(raw);
+  try {
+    setConfigValue(key, parsed);
+  } catch (err) {
+    reportCliError(isJson, (err as Error).message);
+  }
+  if (isJson) {
+    ok({ key, value: parsed, path: getConfigPath() });
   } else {
-    printConfigHelp();
-    process.exit(1);
+    console.log(`✅ 配置已保存: ${key} = ${parsed}`);
   }
 }
 

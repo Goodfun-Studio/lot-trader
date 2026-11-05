@@ -1,6 +1,7 @@
 /**
  * Configuration management for lot-trader
  * Persists user settings to ~/.lot-trader/config.json
+ * (override the directory with $LOT_TRADER_CONFIG_DIR, e.g. for tests).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { homedir } from "os";
@@ -10,21 +11,35 @@ export interface Config {
   full_position_cap?: number;
 }
 
-const CONFIG_DIR = join(homedir(), ".lot-trader");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+/** Resolved per call so tests (and users) can redirect it via $LOT_TRADER_CONFIG_DIR. */
+export function getConfigDir(): string {
+  return process.env.LOT_TRADER_CONFIG_DIR || join(homedir(), ".lot-trader");
+}
+
+export function getConfigPath(): string {
+  return join(getConfigDir(), "config.json");
+}
 
 /**
- * Load config from file, return empty object if file doesn't exist
+ * Load config from file, return empty object if file doesn't exist.
+ * A corrupt file falls back to defaults but says how to fix it.
  */
 export function loadConfig(): Config {
+  const file = getConfigPath();
   try {
-    if (!existsSync(CONFIG_FILE)) {
+    if (!existsSync(file)) {
       return {};
     }
-    const content = readFileSync(CONFIG_FILE, "utf-8");
-    return JSON.parse(content);
+    const parsed = JSON.parse(readFileSync(file, "utf-8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("top-level value is not a JSON object");
+    }
+    return parsed;
   } catch (err) {
-    console.error(`Warning: Failed to load config from ${CONFIG_FILE}: ${(err as Error).message}`);
+    console.error(
+      `Warning: 配置文件 ${file} 无法解析（${(err as Error).message}），本次按默认值运行。` +
+        `修复方法：删除该文件，或用 'trade config set <key> <value>' 重新写入。`,
+    );
     return {};
   }
 }
@@ -33,21 +48,19 @@ export function loadConfig(): Config {
  * Save config to file, creating directory if needed
  */
 export function saveConfig(config: Config): void {
+  const dir = getConfigDir();
+  const file = getConfigPath();
   try {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
     }
-    
-    const content = JSON.stringify(config, null, 2);
-    const tmpFile = CONFIG_FILE + ".tmp";
-    
-    // Write to temporary file first
-    writeFileSync(tmpFile, content, "utf-8");
-    
-    // Atomic rename
-    renameSync(tmpFile, CONFIG_FILE);
+
+    // Write to a temp file, then rename: a crash mid-write never leaves a truncated config.
+    const tmpFile = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o644 });
+    renameSync(tmpFile, file);
   } catch (err) {
-    throw new Error(`Failed to save config to ${CONFIG_FILE}: ${(err as Error).message}`);
+    throw new Error(`Failed to save config to ${file}: ${(err as Error).message}`);
   }
 }
 
@@ -97,7 +110,7 @@ export function getFullPositionCap(runtimeOverride?: number): number {
   }
   
   const configValue = getConfigValue("full_position_cap");
-  if (configValue !== undefined && configValue > 0) {
+  if (typeof configValue === "number" && isFinite(configValue) && configValue > 0) {
     return configValue;
   }
   

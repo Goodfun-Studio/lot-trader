@@ -94,7 +94,7 @@ export class PositionAggregator {
     this.quoteProvider = quoteProvider || new QuoteProvider();
     this.arbitrator = new SettlementArbitrator(dbConn);
 
-    // Priority: runtime override > config file > env var > default
+    // Priority: runtime override > env var > config file > default (see config.ts)
     this.fullPositionCap = getFullPositionCap(fullPositionCap);
   }
 

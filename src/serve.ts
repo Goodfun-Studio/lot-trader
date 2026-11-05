@@ -288,7 +288,7 @@ export function resolveServeDbPath(raw?: string | null): string {
 }
 
 export function resolveFullPositionCap(raw?: string | number | null): number {
-  // Priority: raw param > config file > env var > default
+  // Priority: raw param > env var > config file > default (see config.ts)
   
   if (raw !== undefined && raw !== null && raw !== "") {
     const value = typeof raw === "number" ? raw : Number(String(raw).trim());
