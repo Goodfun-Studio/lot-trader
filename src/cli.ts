@@ -2392,17 +2392,29 @@ function handleConfig(args: string[]): void {
     const config = loadConfig();
     const schema = getConfigSchema();
     
-    console.log("=".repeat(80));
-    console.log("配置文件: ~/.lot-trader/config.json");
-    console.log("=".repeat(80));
+    const hasJson = restArgs.includes("--json");
     
-    for (const [key, description] of Object.entries(schema)) {
-      const value = config[key as keyof typeof config];
-      const displayValue = value !== undefined ? String(value) : "<未设置>";
-      console.log(`${key}:`);
-      console.log(`  值: ${displayValue}`);
-      console.log(`  说明: ${description}`);
-      console.log();
+    if (hasJson) {
+      // JSON output
+      const output: Record<string, any> = {};
+      for (const key of Object.keys(schema)) {
+        output[key] = config[key as keyof typeof config] ?? null;
+      }
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      // Human-readable output
+      console.log("=".repeat(80));
+      console.log("配置文件: ~/.lot-trader/config.json");
+      console.log("=".repeat(80));
+      
+      for (const [key, description] of Object.entries(schema)) {
+        const value = config[key as keyof typeof config];
+        const displayValue = value !== undefined ? String(value) : "<未设置>";
+        console.log(`${key}:`);
+        console.log(`  值: ${displayValue}`);
+        console.log(`  说明: ${description}`);
+        console.log();
+      }
     }
     
   } else if (subAction === "get") {
@@ -2458,14 +2470,19 @@ function handleConfig(args: string[]): void {
     let parsedValue: any = value;
     if (key === "full_position_cap" || key === "fee_rate") {
       parsedValue = parseFloat(value);
-      if (isNaN(parsedValue) || parsedValue <= 0) {
-        console.error(`❗ 错误: ${key} 必须是一个正数`);
+      if (isNaN(parsedValue)) {
+        console.error(`❗ 错误: ${key} 必须是一个有效的数字`);
         process.exit(1);
       }
     }
     
-    setConfigValue(key, parsedValue);
-    console.log(`✅ 配置已保存: ${key} = ${parsedValue}`);
+    try {
+      setConfigValue(key, parsedValue);
+      console.log(`✅ 配置已保存: ${key} = ${parsedValue}`);
+    } catch (err) {
+      console.error(`❗ 错误: ${(err as Error).message}`);
+      process.exit(1);
+    }
     
   } else {
     printConfigHelp();

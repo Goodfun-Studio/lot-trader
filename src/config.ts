@@ -58,6 +58,22 @@ export function getConfigValue(key: keyof Config): any {
  */
 export function setConfigValue(key: keyof Config, value: any): void {
   const config = loadConfig();
+  
+  // Validate value based on key
+  if (key === "full_position_cap") {
+    if (typeof value !== "number" || !isFinite(value) || value <= 0 || value > 1e10) {
+      throw new Error(`${key} 必须是一个正数且不超过 100 亿`);
+    }
+  } else if (key === "fee_rate") {
+    if (typeof value !== "number" || !isFinite(value) || value <= 0 || value > 1) {
+      throw new Error(`${key} 必须是 0 到 1 之间的正数`);
+    }
+  } else if (key === "default_account_id") {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`${key} 必须是非空字符串`);
+    }
+  }
+  
   config[key] = value;
   saveConfig(config);
 }
