@@ -31,6 +31,7 @@ import { AccountRepository, DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { getFullPositionCap } from "./config.ts";
 import { PriceSource } from "./models.ts";
 
 export const TOOL_VERSION: string = (pkg as { version?: string }).version || "0.0.0";
@@ -286,13 +287,16 @@ export function resolveServeDbPath(raw?: string | null): string {
 }
 
 export function resolveFullPositionCap(raw?: string | number | null): number {
-  const fromEnv = process.env.LOT_TRADER_FULL_POSITION_CAP;
-  const candidate = raw ?? fromEnv;
-  if (candidate === undefined || candidate === null || candidate === "") {
-    return DEFAULT_FULL_POSITION_CAP;
+  // Priority: raw param > env var > config file > default (see config.ts)
+  
+  if (raw !== undefined && raw !== null && raw !== "") {
+    const value = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (Number.isFinite(value) && value > 0) {
+      return value;
+    }
   }
-  const value = typeof candidate === "number" ? candidate : Number(String(candidate).trim());
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_FULL_POSITION_CAP;
+  
+  return getFullPositionCap();
 }
 
 function isPortInUseError(err: unknown): boolean {

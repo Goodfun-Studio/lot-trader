@@ -8,6 +8,7 @@ import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
+import { getFullPositionCap } from "./config.ts";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 
 export interface LotListItem {
@@ -95,11 +96,8 @@ export class PositionAggregator {
     this.quoteProvider = quoteProvider || new QuoteProvider();
     this.arbitrator = new SettlementArbitrator(dbConn);
 
-    let cap = fullPositionCap;
-    if (cap === undefined && process.env.LOT_TRADER_FULL_POSITION_CAP) {
-      cap = parseFloat(process.env.LOT_TRADER_FULL_POSITION_CAP);
-    }
-    this.fullPositionCap = cap && cap > 0 ? cap : 50000;
+    // Priority: runtime override > env var > config file > default (see config.ts)
+    this.fullPositionCap = getFullPositionCap(fullPositionCap);
   }
 
   public getFullPositionCap(): number {
