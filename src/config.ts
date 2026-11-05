@@ -8,8 +8,6 @@ import { join } from "path";
 
 export interface Config {
   full_position_cap?: number;
-  default_account_id?: string;
-  fee_rate?: number;
 }
 
 const CONFIG_DIR = join(homedir(), ".lot-trader");
@@ -64,14 +62,6 @@ export function setConfigValue(key: keyof Config, value: any): void {
     if (typeof value !== "number" || !isFinite(value) || value <= 0 || value > 1e10) {
       throw new Error(`${key} 必须是一个正数且不超过 100 亿`);
     }
-  } else if (key === "fee_rate") {
-    if (typeof value !== "number" || !isFinite(value) || value <= 0 || value > 1) {
-      throw new Error(`${key} 必须是 0 到 1 之间的正数`);
-    }
-  } else if (key === "default_account_id") {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      throw new Error(`${key} 必须是非空字符串`);
-    }
   }
   
   config[key] = value;
@@ -112,7 +102,5 @@ export function getFullPositionCap(runtimeOverride?: number): number {
 export function getConfigSchema(): Record<keyof Config, string> {
   return {
     full_position_cap: "单标满仓额度（元），用于计算仓位占比。默认: 50000",
-    default_account_id: "默认账户 ID，用于命令行操作时的默认账户",
-    fee_rate: "交易费率（小数形式），如 0.0003 表示万三。默认: 0.0003",
   };
 }

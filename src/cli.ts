@@ -2468,7 +2468,7 @@ function handleConfig(args: string[]): void {
     
     // Parse value based on key type
     let parsedValue: any = value;
-    if (key === "full_position_cap" || key === "fee_rate") {
+    if (key === "full_position_cap") {
       parsedValue = parseFloat(value);
       if (isNaN(parsedValue)) {
         console.error(`❗ 错误: ${key} 必须是一个有效的数字`);
