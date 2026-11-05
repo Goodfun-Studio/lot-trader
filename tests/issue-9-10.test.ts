@@ -78,7 +78,7 @@ describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
     const db = new AppDatabase(":memory:");
     // 使用 fake QuoteProvider（离线化，避免真实网络请求）
     const fakeQuotes = new QuoteProvider();
-    fakeQuotes.getQuote = async () => null; // 强制 fallback 到 cost_basis
+    fakeQuotes.getQuotes = async () => ({}); // 返回空对象，强制 fallback 到 cost_basis
     const engine = new TraderEngine(db.getConnection(), fakeQuotes);
     
     // 使用引擎初始化数据库并创建账户
@@ -103,9 +103,6 @@ describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
     expect(view.targets.length).toBeGreaterThan(0);
     const target = view.targets[0];
     
-    // 核心断言：price_source 必须是 "live" 或 "cost_basis" 之一
-    expect(["live", "cost_basis"]).toContain(target.price_source);
-    
     // 对于不存在的标的，应该是 cost_basis
     expect(target.price_source).toBe("cost_basis");
     expect(target.lots[0].price_source).toBe("cost_basis");
@@ -121,13 +118,15 @@ describe("Issue #9: price_source 字段：行情回落 vs 真实行情", () => {
     const db = new AppDatabase(":memory:");
     // fake QuoteProvider 返回模拟行情
     const fakeQuotes = new QuoteProvider();
-    fakeQuotes.getQuote = async () => ({
-      symbol: "518880.SH",
-      name: "黄金ETF",
-      current_price: 5.0,
-      change_percent: 1.5,
-      volume: 1000000,
-      timestamp: new Date().toISOString(),
+    fakeQuotes.getQuotes = async () => ({
+      "518880.SH": {
+        symbol: "518880.SH",
+        name: "黄金ETF",
+        current_price: 5.0,
+        change_percent: 1.5,
+        volume: 1000000,
+        timestamp: new Date().toISOString(),
+      },
     });
     const engine = new TraderEngine(db.getConnection(), fakeQuotes);
     
