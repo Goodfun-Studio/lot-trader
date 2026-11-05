@@ -31,6 +31,7 @@ import { AccountRepository, DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
+import { getFullPositionCap } from "./config.ts";
 
 export const TOOL_VERSION: string = (pkg as { version?: string }).version || "0.0.0";
 
@@ -288,7 +289,6 @@ export function resolveServeDbPath(raw?: string | null): string {
 
 export function resolveFullPositionCap(raw?: string | number | null): number {
   // Priority: raw param > config file > env var > default
-  const { getFullPositionCap } = require("./config.ts");
   
   if (raw !== undefined && raw !== null && raw !== "") {
     const value = typeof raw === "number" ? raw : Number(String(raw).trim());

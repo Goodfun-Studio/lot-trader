@@ -6,6 +6,7 @@ import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
+import { loadConfig, getConfigValue, setConfigValue, getConfigSchema, getFullPositionCap } from "./config.ts";
 import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
@@ -2388,7 +2389,6 @@ function handleConfig(args: string[]): void {
   }
 
   if (subAction === "list") {
-    const { loadConfig, getConfigSchema } = require("./config.ts");
     const config = loadConfig();
     const schema = getConfigSchema();
     
@@ -2425,7 +2425,6 @@ function handleConfig(args: string[]): void {
       process.exit(1);
     }
     
-    const { getConfigValue, getConfigSchema } = require("./config.ts");
     const schema = getConfigSchema();
     
     if (!(key in schema)) {
@@ -2454,7 +2453,6 @@ function handleConfig(args: string[]): void {
       process.exit(1);
     }
     
-    const { setConfigValue, getConfigSchema } = require("./config.ts");
     const schema = getConfigSchema();
     
     if (!(key in schema)) {

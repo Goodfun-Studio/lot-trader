@@ -2,7 +2,7 @@
  * Configuration management for lot-trader
  * Persists user settings to ~/.lot-trader/config.json
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -37,7 +37,15 @@ export function saveConfig(config: Config): void {
     if (!existsSync(CONFIG_DIR)) {
       mkdirSync(CONFIG_DIR, { recursive: true });
     }
-    writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+    
+    const content = JSON.stringify(config, null, 2);
+    const tmpFile = CONFIG_FILE + ".tmp";
+    
+    // Write to temporary file first
+    writeFileSync(tmpFile, content, "utf-8");
+    
+    // Atomic rename
+    renameSync(tmpFile, CONFIG_FILE);
   } catch (err) {
     throw new Error(`Failed to save config to ${CONFIG_FILE}: ${(err as Error).message}`);
   }

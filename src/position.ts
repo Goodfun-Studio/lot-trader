@@ -8,6 +8,7 @@ import { computeFloatingPnl, getSellFeeRate, round } from "./calc.ts";
 import { SettlementArbitrator } from "./settlement.ts";
 import { QuoteProvider, normalizeSymbol } from "./quotes.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
+import { getFullPositionCap } from "./config.ts";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.ts";
 
 export interface LotListItem {
@@ -94,7 +95,6 @@ export class PositionAggregator {
     this.arbitrator = new SettlementArbitrator(dbConn);
 
     // Priority: runtime override > config file > env var > default
-    const { getFullPositionCap } = require("./config.ts");
     this.fullPositionCap = getFullPositionCap(fullPositionCap);
   }
 
