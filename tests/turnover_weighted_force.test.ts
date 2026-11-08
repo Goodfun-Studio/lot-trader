@@ -224,7 +224,7 @@ describe("Turnover Participation & Confidence-Weighted Effective Force (F_eff = 
       expect(r.F).toBe(0);
       expect(r.effective_force).toBe(0);
       expect(r.turnover_rate).toBe(0.3);
-      expect(r.confidence_level).toBe("LOW");
+      expect(r.confidence_level).toBe("NONE");
       expect(Number.isFinite(r.confidence_weight)).toBeTrue();
 
       const rBad = computePhysicsRadar("000001.SZ", "平安银行", sparse, undefined, 10, -9);

@@ -6,6 +6,7 @@ import { AppDatabase, DEFAULT_DB_PATH } from "./db.ts";
 import { TraderEngine } from "./engine.ts";
 import { computePhysicsRadar, PhysicsRadarResult } from "./physics.ts";
 import { normalizeSymbol } from "./quotes.ts";
+import { loadConfig, getConfigValue, setConfigValue, getConfigSchema, getConfigPath, type Config } from "./config.ts";
 import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
@@ -218,6 +219,15 @@ export const CLI_FLAG_SPECS: Record<string, Record<string, CliFlagSpec>> = {
     account: { type: "string" },
     json: { type: "boolean", default: false },
   },
+  "config list": {
+    json: { type: "boolean", default: false },
+  },
+  "config get": {
+    json: { type: "boolean", default: false },
+  },
+  "config set": {
+    json: { type: "boolean", default: false },
+  },
 };
 
 /** The threshold keys `SignalScanner` actually reads (see src/scanner.ts). */
@@ -234,7 +244,7 @@ export function resolveCommandPath(argv: string[]): string | undefined {
   const command = argv[0];
   if (!command) return undefined;
   const top = command === "radar" ? "physics" : command;
-  if (top === "lot" || top === "account" || top === "dividend") {
+  if (top === "lot" || top === "account" || top === "dividend" || top === "config") {
     return argv[1] ? `${top} ${argv[1]}` : top;
   }
   return top;
@@ -642,12 +652,12 @@ function formatRate(rate: number): string {
 }
 
 function printHelp(): void {
-  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend} ...
+  console.log(`usage: trade [-h] {lot,account,position,scan,stats,physics,dashboard,serve,dividend,config} ...
 
 Lot Trader Core CLI Engine (Unix Way & Hexagonal Architecture)
 
 positional arguments:
-  {lot,account,position,scan,stats,physics,dashboard,serve,dividend}  Available subcommands
+  {lot,account,position,scan,stats,physics,dashboard,serve,dividend,config}  Available subcommands
     lot             Lot operations (buy, add, list, close, edit)
     account         Broker account registry (add, list)
     position        Position / Holding aggregated view
@@ -657,6 +667,7 @@ positional arguments:
     dashboard       Render the global interactive HTML dashboard
     serve           Start the local read-only HTTP engine (loopback only)
     dividend        Cash dividend management (add, list)
+    config          Configuration management (get, set, list)
 
 options:
   --db PATH         SQLite database path, honoured by EVERY subcommand (global option).
@@ -2356,6 +2367,106 @@ async function handleDividend(engine: TraderEngine, args: string[]): Promise<voi
   }
 }
 
+function printConfigHelp(): void {
+  console.log(`usage: trade config [-h] {get,set,list} ...
+
+Configuration Management
+
+positional arguments:
+  {get,set,list}    Config actions
+    get             Get a configuration value
+    set             Set a configuration value
+    list            List all configuration settings
+
+options:
+  -h, --help        show this help message and exit
+
+Examples:
+  trade config list
+  trade config get full_position_cap
+  trade config set full_position_cap 100000
+`);
+}
+
+function handleConfig(args: string[]): void {
+  const subAction = args[0];
+  if (!subAction || isHelpToken(subAction)) {
+    printConfigHelp();
+    return;
+  }
+  if (subAction !== "list" && subAction !== "get" && subAction !== "set") {
+    printConfigHelp();
+    process.exit(1);
+  }
+
+  const { values, positionals } = parseArgs({
+    args: args.slice(1),
+    options: flagsFor(`config ${subAction}`),
+    allowPositionals: true,
+    strict: false,
+  });
+  const isJson = Boolean(values.json);
+  const schema = getConfigSchema();
+  const ok = (data: unknown) =>
+    console.log(JSON.stringify({ code: 0, msg: "success", data }, null, 2));
+  const requireKnownKey = (key: string | undefined, usage: string): keyof Config => {
+    if (!key) reportCliError(isJson, `缺少配置项名称。示例: ${usage}`);
+    if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+      reportCliError(isJson, `未知的配置项 '${key}'。可用的配置项: ${Object.keys(schema).join(", ")}`);
+    }
+    return key as keyof Config;
+  };
+
+  if (subAction === "list") {
+    const config = loadConfig();
+    if (isJson) {
+      const data: Record<string, unknown> = {};
+      for (const key of Object.keys(schema)) data[key] = config[key as keyof Config] ?? null;
+      ok({ path: getConfigPath(), values: data });
+      return;
+    }
+    console.log("=".repeat(80));
+    console.log(`配置文件: ${getConfigPath()}`);
+    console.log("=".repeat(80));
+    for (const [key, description] of Object.entries(schema)) {
+      const value = config[key as keyof Config];
+      console.log(`${key}:`);
+      console.log(`  值: ${value !== undefined ? String(value) : "<未设置>"}`);
+      console.log(`  说明: ${description}`);
+      console.log();
+    }
+    return;
+  }
+
+  if (subAction === "get") {
+    const key = requireKnownKey(positionals[0], "trade config get full_position_cap");
+    const value = getConfigValue(key);
+    if (isJson) {
+      ok({ key, value: value ?? null });
+    } else {
+      console.log(value !== undefined ? String(value) : "<未设置>");
+    }
+    return;
+  }
+
+  // set
+  const key = requireKnownKey(positionals[0], "trade config set full_position_cap 100000");
+  const raw = positionals[1];
+  if (raw === undefined) reportCliError(isJson, `缺少配置值。示例: trade config set ${key} 100000`);
+  // Number() is strict: "100abc" -> NaN (parseFloat would silently accept 100).
+  const parsed = raw.trim() === "" ? NaN : Number(raw);
+  try {
+    setConfigValue(key, parsed);
+  } catch (err) {
+    reportCliError(isJson, (err as Error).message);
+  }
+  if (isJson) {
+    ok({ key, value: parsed, path: getConfigPath() });
+  } else {
+    console.log(`✅ 配置已保存: ${key} = ${parsed}`);
+  }
+}
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
 
@@ -2514,6 +2625,12 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await handleDividend(getEngine(), restArgs);
+  } else if (command === "config") {
+    if (hasHelpFlag(restArgs)) {
+      printConfigHelp();
+      process.exit(0);
+    }
+    handleConfig(restArgs);
   } else {
     printHelp();
     process.exit(1);
