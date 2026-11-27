@@ -64,18 +64,18 @@ dsh plugin add @goodfun-studio/dsh-lot-trader
 ## 作为 Cindy 插件使用（可选）
 
 本仓库同时提供一个把引擎接进 **Cindy**（[makecindy/cindy](https://github.com/makecindy/cindy)）的插件
-（[`cindy-plugin/`](./cindy-plugin)）：11 个原生工具（读命令免审批、写命令每次确认），
+（[`plugins/cindy-plugin/`](./plugins/cindy-plugin)）：11 个原生工具（读命令免审批、写命令每次确认），
 外加一个右侧栏常驻持仓看板；插件详情页的设置区可检测引擎，并可从 Releases
 下载对应平台的 `trade`、校验 sha256 后安装。
 
-安装：用 Cindy 把 [`cindy-plugin/`](./cindy-plugin) 打包成 `.cindy` 后导入，
+安装：用 Cindy 把 [`plugins/cindy-plugin/`](./plugins/cindy-plugin) 打包成 `.cindy` 后导入，
 或直接把生成的 `.cindy` 文件拖进 Cindy。
 
 **引擎依赖**：与 DSH 插件不同，Cindy 插件**不随包引擎二进制**——引擎需先存在于用户本机。
 可在插件设置页点「一键下载安装引擎」自动完成，或按 README 手动安装。
 
 支持平台：macOS（x64 / arm64）与 Linux（x64 / arm64）。
-完整说明见 [`cindy-plugin/README.md`](./cindy-plugin/README.md)。
+完整说明见 [`plugins/cindy-plugin/README.md`](./plugins/cindy-plugin/README.md)。
 
 ## 快速使用
 

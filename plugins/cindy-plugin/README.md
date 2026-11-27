@@ -70,7 +70,7 @@ chmod 755 ~/.local/bin/trade
 `node/worker.cjs`（随包 Node 工作进程，负责拼 `trade` argv）、`panel.*`（右侧栏看板）、
 `settings.*`（设置页）、`manual/install/MANUAL.md`（给 Agent 的安装引导）。
 
-- 打包与安装由 **Cindy** 完成：在 Cindy 里对 `cindy-plugin/` 调用 `ghost_forge_pack` 生成 `.cindy`，
+- 打包与安装由 **Cindy** 完成：在 Cindy 里对 `plugins/cindy-plugin/` 调用 `ghost_forge_pack` 生成 `.cindy`，
   再用 `ghost_forge_install` 安装；或把生成的 `.cindy` 文件拖进 Cindy。
 - `*.cindy` 是构建产物，已在仓库 `.gitignore` 中忽略。
 - 插件自身版本见 `ghost.json` 的 `version`；一键安装锁定的引擎发行版本见 `main.js` 的 `ENGINE_ASSETS`
