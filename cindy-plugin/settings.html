@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Lot Trader 设置</title>
+<link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+  <section class="row">
+    <div class="label">引擎状态</div>
+    <div class="value">
+      <span id="status-badge" class="badge badge-wait">检测中…</span>
+      <span id="status-path" class="path"></span>
+    </div>
+  </section>
+
+  <section class="row">
+    <div class="label">引擎路径</div>
+    <div class="value">
+      <input id="binary-path" class="input" type="text" spellcheck="false"
+             placeholder="留空 = 自动探测（~/.local/bin/trade 等）">
+    </div>
+  </section>
+
+  <section class="actions">
+    <button id="btn-save" class="btn">保存路径</button>
+    <button id="btn-recheck" class="btn">重新检测</button>
+    <button id="btn-install" class="btn btn-primary">一键下载安装引擎</button>
+  </section>
+
+  <div id="progress-wrap" class="progress-wrap hidden">
+    <div class="progress-line"><span id="progress-phase">准备中…</span><span id="progress-pct"></span></div>
+    <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+  </div>
+
+  <p id="msg" class="msg"></p>
+
+  <p class="note">
+    一键安装会从 GitHub Releases 固定版本（v0.1.0）下载官方引擎二进制，校验 sha256 后装到
+    <code>~/.local/bin/trade</code>（chmod 755）。仅支持 macOS / Linux 的 arm64、x64。
+    也可以手动安装：
+    <a href="https://github.com/Goodfun-Studio/lot-trader/releases">前往下载页 ↗</a>
+  </p>
+
+  <script src="/settings.js"></script>
+</body>
+</html>

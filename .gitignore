@@ -38,5 +38,8 @@ trade
 # Generated dashboard output (full rebuild on every run — diff noise)
 lot-trader-global-dashboard.html
 
+# Cindy plugin packaged artifacts
+*.cindy
+
 # tsc incremental build info
 tsconfig.tsbuildinfo
