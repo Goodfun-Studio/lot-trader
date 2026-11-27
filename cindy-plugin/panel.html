@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lot Trader</title>
+
+<link rel="stylesheet" href="/panel.css">
+</head>
+<body>
+  <header class="hd">
+    <span class="hd-title">操盘看板</span>
+    <span class="hd-meta" id="meta">—</span>
+    <button class="btn" id="refresh">刷新</button>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+  <section class="portfolio" id="portfolio"></section>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="symbols">标的全景</button>
+    <button class="tab" data-view="time">批次·时间</button>
+    <button class="tab" data-view="rate">批次·盈亏率</button>
+    <button class="tab" data-view="stats">历史战绩</button>
+  </nav>
+  <main class="view" id="view"><div class="empty">加载中…</div></main>
+
+
+<script src="/panel.js"></script>
+</body>
+</html>
